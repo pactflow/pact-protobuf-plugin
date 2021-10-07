@@ -1,2 +1,2 @@
 # pact-protobuf-plugin
-Pact plugin for Protobugs and gRPC
+Pact plugin for Protobufs and gRPC

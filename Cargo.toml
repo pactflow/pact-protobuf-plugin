@@ -1,0 +1,36 @@
+[package]
+name = "pact-protobuf-plugin"
+version = "0.0.0"
+edition = "2018"
+authors = ["Ronald Holshausen <ronald.holshausen@gmail.com>"]
+description = "Pact plugin for Protobufs and gRPC"
+homepage = "http://www.pactflow.io"
+repository = "https://github.com/pactflow/pact-protobuf-plugin"
+keywords = ["testing", "pact", "cdc"]
+license = "MIT"
+exclude = [
+    "*.iml"
+]
+
+[dependencies]
+tonic = "0.5.0"
+prost = "0.8.0"
+prost-types = "0.8.0"
+tokio = { version = "1.0", features = ["full"] }
+uuid = { version = "0.8", features = ["v4"] }
+log = "0.4"
+env_logger = "0.8"
+maplit = "1.0.2"
+pact_matching = "0.11.0-beta.1"
+pact_models = "0.2.0-beta.3"
+pact-plugin-driver = "0.0.3"
+anyhow = "1.0.42"
+futures = "0.3"
+
+[dev-dependencies]
+expectest = "0.12.0"
+env_logger = "0.8"
+pact_consumer = "0.8.0-beta.0"
+
+[build-dependencies]
+tonic-build = "0.5"
