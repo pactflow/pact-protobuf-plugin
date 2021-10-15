@@ -8,15 +8,12 @@ use std::pin::Pin;
 use env_logger::Env;
 use futures::Stream;
 use futures::task::{Context, Poll};
+use pact_plugin_driver::proto::pact_plugin_server::PactPluginServer;
 use tokio::net::{TcpListener, TcpStream};
 use tonic::transport::Server;
 use uuid::Uuid;
 
-use crate::proto::pact_plugin_server::PactPluginServer;
-use crate::server::ProtobufPactPlugin;
-
-mod proto;
-mod server;
+use pact_protobuf_plugin::server::ProtobufPactPlugin;
 
 /// This struct is required, because we want to get the port of the running server to display
 /// to standard out. This maps a TcpListener (which we use to get the port) to a futures Stream
