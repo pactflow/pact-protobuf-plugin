@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("{{\"port\":{}, \"serverKey\":\"{}\"}}", address.port(), server_key);
 
     // Create the gRPC server listening on the previously created TCP listener
-    let plugin = ProtobufPactPlugin::default();
+    let plugin = ProtobufPactPlugin::new();
     Server::builder()
       .add_service(PactPluginServer::new(plugin))
       .serve_with_incoming(TcpIncoming { inner: listener }).await?;

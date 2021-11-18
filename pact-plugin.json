@@ -4,5 +4,9 @@
   "name": "protobuf",
   "version": "0.0.0",
   "executableType": "exec",
-  "entryPoint": "pact-protobuf-plugin"
+  "entryPoint": "pact-protobuf-plugin",
+  "pluginConfig": {
+    "protocVersion": "3.19.1",
+    "downloadUrl": "https://github.com/protocolbuffers/protobuf/releases/download"
+  }
 }

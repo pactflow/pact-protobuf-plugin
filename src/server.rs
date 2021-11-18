@@ -1,15 +1,40 @@
 //! Module provides the main gRPC server for the plugin process
 
+use std::fs::File;
+use std::io::BufReader;
+
+use anyhow::anyhow;
 use log::{debug, error};
 use maplit::hashmap;
+use pact_plugin_driver::plugin_models::PactPluginManifest;
 use pact_plugin_driver::proto;
 use pact_plugin_driver::proto::catalogue_entry::EntryType;
 use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
 use tonic::Response;
 
+use crate::protoc::setup_protoc;
+
 /// Plugin gRPC server implementation
 #[derive(Debug, Default)]
-pub struct ProtobufPactPlugin {}
+pub struct ProtobufPactPlugin {
+  manifest: PactPluginManifest
+}
+
+impl ProtobufPactPlugin {
+  /// Create a new plugin instance
+  pub fn new() -> Self {
+    let manifest = File::open("./pact-plugin.json")
+      .and_then(|file| {
+        let reader = BufReader::new(file);
+        match serde_json::from_reader::<BufReader<File>, PactPluginManifest>(reader) {
+          Ok(manifest) => Ok(manifest),
+          Err(err) => Err(err.into())
+        }
+      })
+      .unwrap_or_default();
+    ProtobufPactPlugin { manifest }
+  }
+}
 
 #[tonic::async_trait]
 impl PactPlugin for ProtobufPactPlugin {
@@ -86,6 +111,15 @@ impl PactPlugin for ProtobufPactPlugin {
       error!("{}", message);
       return Ok(Response::new(proto::ConfigureInteractionResponse {
         error: message,
+        .. proto::ConfigureInteractionResponse::default()
+      }))
+    }
+
+    // Make sure we can execute the protobuf compiler
+    if let Err(err) = setup_protoc(&self.manifest.plugin_config).await {
+      error!("Failed to invoke protoc: {}", err);
+      return Ok(Response::new(proto::ConfigureInteractionResponse {
+        error: format!("Failed to invoke protoc: {}", err),
         .. proto::ConfigureInteractionResponse::default()
       }))
     }
@@ -211,7 +245,7 @@ mod tests {
 
   #[tokio::test]
   async fn init_plugin_test() {
-    let plugin = ProtobufPactPlugin {};
+    let plugin = ProtobufPactPlugin { manifest: Default::default() };
     let request = proto::InitPluginRequest {
       implementation: "test".to_string(),
       version: "0".to_string()
@@ -234,7 +268,7 @@ mod tests {
 
   #[tokio::test]
   async fn configure_interaction_test__with_no_config() {
-    let plugin = ProtobufPactPlugin {};
+    let plugin = ProtobufPactPlugin { manifest: Default::default() };
     let request = proto::ConfigureInteractionRequest {
       content_type: "text/test".to_string(),
       contents_config: Some(prost_types::Struct {
@@ -250,7 +284,7 @@ mod tests {
 
   #[tokio::test]
   async fn configure_interaction_test__with_missing_message_or_service_name() {
-    let plugin = ProtobufPactPlugin {};
+    let plugin = ProtobufPactPlugin { manifest: Default::default() };
     let request = proto::ConfigureInteractionRequest {
       content_type: "text/test".to_string(),
       contents_config: Some(prost_types::Struct {
