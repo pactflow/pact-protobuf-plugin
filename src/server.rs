@@ -1,18 +1,22 @@
 //! Module provides the main gRPC server for the plugin process
 
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::BufReader;
+use std::path::Path;
 
 use anyhow::anyhow;
+use itertools::Itertools;
 use log::{debug, error};
 use maplit::hashmap;
 use pact_plugin_driver::plugin_models::PactPluginManifest;
 use pact_plugin_driver::proto;
 use pact_plugin_driver::proto::catalogue_entry::EntryType;
 use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
+use pact_plugin_driver::utils::proto_value_to_string;
 use tonic::Response;
 
-use crate::protoc::setup_protoc;
+use crate::protoc::{Protoc, setup_protoc};
 
 /// Plugin gRPC server implementation
 #[derive(Debug, Default)]
@@ -34,106 +38,22 @@ impl ProtobufPactPlugin {
       .unwrap_or_default();
     ProtobufPactPlugin { manifest }
   }
-}
 
-#[tonic::async_trait]
-impl PactPlugin for ProtobufPactPlugin {
-  // Init plugin request. This will be called shortly after the plugin is started.
-  // This will return the catalogue entries for the plugin
-  async fn init_plugin(
-    &self,
-    request: tonic::Request<proto::InitPluginRequest>,
-  ) -> Result<tonic::Response<proto::InitPluginResponse>, tonic::Status> {
-    let message = request.get_ref();
-    debug!("Init request from {}/{}", message.implementation, message.version);
-
-    // Return an entry for a content matcher and content generator for Protobuf messages
-    Ok(Response::new(proto::InitPluginResponse {
-      catalogue: vec![
-        proto::CatalogueEntry {
-          r#type: EntryType::ContentMatcher as i32,
-          key: "prototype".to_string(),
-          values: hashmap! {
-            "content-types".to_string() => "application/protobuf".to_string()
-          }
-        },
-        proto::CatalogueEntry {
-          r#type: EntryType::ContentGenerator as i32,
-          key: "prototype".to_string(),
-          values: hashmap! {
-            "content-types".to_string() => "application/protobuf".to_string()
-          }
-        }
-      ]
-    }))
-  }
-
-  // Request from the plugin driver to update our copy of the plugin catalogue.
-  async fn update_catalogue(
-    &self,
-    _request: tonic::Request<proto::Catalogue>,
-  ) -> Result<tonic::Response<()>, tonic::Status> {
-    debug!("Update catalogue request");
-
-    // currently a no-op
-    Ok(Response::new(()))
-  }
-
-  // Request to compare the contents and return the results of the comparison.
-  async fn compare_contents(
-    &self,
-    request: tonic::Request<proto::CompareContentsRequest>,
-  ) -> Result<tonic::Response<proto::CompareContentsResponse>, tonic::Status> {
-    unimplemented!()
-  }
-
-  // Request to configure the expected interaction for a consumer tests.
-  async fn configure_interaction(
-    &self,
-    request: tonic::Request<proto::ConfigureInteractionRequest>,
-  ) -> Result<tonic::Response<proto::ConfigureInteractionResponse>, tonic::Status> {
-    let message = request.get_ref();
-    debug!("Configure interaction request for content type '{}'", message.content_type);
-
-    // Check for the "pact:proto" key
-    let fields = message.contents_config.as_ref().map(|config| config.fields.clone()).unwrap_or_default();
-    if !fields.contains_key("pact:proto") {
-      error!("Config item with key 'pact:proto' and path to the proto file is required");
-      return Ok(Response::new(proto::ConfigureInteractionResponse {
-        error: "Config item with key 'pact:proto' and path to the proto file is required".to_string(),
-        .. proto::ConfigureInteractionResponse::default()
-      }))
-    }
-
-    // Check for either the message type or proto service
-    if !fields.contains_key("pact:message-type") && !fields.contains_key("pact:proto-service") {
-      let message = "Config item with key 'pact:message-type' and the protobuf message name or 'pact:proto-service' and the service name is required".to_string();
-      error!("{}", message);
-      return Ok(Response::new(proto::ConfigureInteractionResponse {
-        error: message,
-        .. proto::ConfigureInteractionResponse::default()
-      }))
-    }
-
-    // Make sure we can execute the protobuf compiler
-    if let Err(err) = setup_protoc(&self.manifest.plugin_config).await {
-      error!("Failed to invoke protoc: {}", err);
-      return Ok(Response::new(proto::ConfigureInteractionResponse {
-        error: format!("Failed to invoke protoc: {}", err),
-        .. proto::ConfigureInteractionResponse::default()
-      }))
-    }
+  async fn process_proto(&self, proto_file: String, protoc: &Protoc, fields: BTreeMap<String, prost_types::Value>) -> anyhow::Result<()> {
+    debug!("Parsing proto file '{}'", proto_file);
+    let descriptors = protoc.parse_proto_file(Path::new(proto_file.as_str())).await?;
+    debug!("Parsed proto file OK, file descriptors = {:?}", descriptors.file.iter().map(|file| file.name.as_ref()).collect_vec());
 
     /*
-    try {
-        val protoFile = Path.of(config["pact:proto"]!!.stringValue)
-        logger.debug { "Parsing proto file '$protoFile'" }
-        val protoResult = ProtoParser.parseProtoFile(protoFile)
-        val descriptorBytes = protoResult.toByteArray()
+    val descriptorBytes = protoResult.toByteArray()
         logger.debug { "Protobuf file descriptor set is ${descriptorBytes.size} bytes" }
         val digest = MessageDigest.getInstance("MD5")
         digest.update(descriptorBytes)
         val descriptorHash = BaseEncoding.base16().lowerCase().encode(digest.digest());
+     */
+
+    /*
+
 
         logger.debug { "Parsed proto file OK, file descriptors = ${protoResult.fileList.map { it.name }}" }
 
@@ -219,7 +139,116 @@ impl PactPlugin for ProtobufPactPlugin {
         return builder.build()
      */
 
+    Err(anyhow!("todo"))
+  }
+}
+
+#[tonic::async_trait]
+impl PactPlugin for ProtobufPactPlugin {
+  // Init plugin request. This will be called shortly after the plugin is started.
+  // This will return the catalogue entries for the plugin
+  async fn init_plugin(
+    &self,
+    request: tonic::Request<proto::InitPluginRequest>,
+  ) -> Result<tonic::Response<proto::InitPluginResponse>, tonic::Status> {
+    let message = request.get_ref();
+    debug!("Init request from {}/{}", message.implementation, message.version);
+
+    // Return an entry for a content matcher and content generator for Protobuf messages
+    Ok(Response::new(proto::InitPluginResponse {
+      catalogue: vec![
+        proto::CatalogueEntry {
+          r#type: EntryType::ContentMatcher as i32,
+          key: "prototype".to_string(),
+          values: hashmap! {
+            "content-types".to_string() => "application/protobuf".to_string()
+          }
+        },
+        proto::CatalogueEntry {
+          r#type: EntryType::ContentGenerator as i32,
+          key: "prototype".to_string(),
+          values: hashmap! {
+            "content-types".to_string() => "application/protobuf".to_string()
+          }
+        }
+      ]
+    }))
+  }
+
+  // Request from the plugin driver to update our copy of the plugin catalogue.
+  async fn update_catalogue(
+    &self,
+    _request: tonic::Request<proto::Catalogue>,
+  ) -> Result<tonic::Response<()>, tonic::Status> {
+    debug!("Update catalogue request");
+
+    // currently a no-op
+    Ok(Response::new(()))
+  }
+
+  // Request to compare the contents and return the results of the comparison.
+  async fn compare_contents(
+    &self,
+    request: tonic::Request<proto::CompareContentsRequest>,
+  ) -> Result<tonic::Response<proto::CompareContentsResponse>, tonic::Status> {
     unimplemented!()
+  }
+
+  // Request to configure the expected interaction for a consumer tests.
+  async fn configure_interaction(
+    &self,
+    request: tonic::Request<proto::ConfigureInteractionRequest>,
+  ) -> Result<tonic::Response<proto::ConfigureInteractionResponse>, tonic::Status> {
+    let message = request.get_ref();
+    debug!("Configure interaction request for content type '{}'", message.content_type);
+
+    // Check for the "pact:proto" key
+    let fields = message.contents_config.as_ref().map(|config| config.fields.clone()).unwrap_or_default();
+    let proto_file = match fields.get("pact:proto").and_then(|file| proto_value_to_string(file)) {
+      Some(pf) => pf,
+      None => {
+        error!("Config item with key 'pact:proto' and path to the proto file is required");
+        return Ok(Response::new(proto::ConfigureInteractionResponse {
+          error: "Config item with key 'pact:proto' and path to the proto file is required".to_string(),
+          .. proto::ConfigureInteractionResponse::default()
+        }))
+      }
+    };
+
+    // Check for either the message type or proto service
+    if !fields.contains_key("pact:message-type") && !fields.contains_key("pact:proto-service") {
+      let message = "Config item with key 'pact:message-type' and the protobuf message name or 'pact:proto-service' and the service name is required".to_string();
+      error!("{}", message);
+      return Ok(Response::new(proto::ConfigureInteractionResponse {
+        error: message,
+        .. proto::ConfigureInteractionResponse::default()
+      }))
+    }
+
+    // Make sure we can execute the protobuf compiler
+    let protoc = match setup_protoc(&self.manifest.plugin_config).await {
+      Ok(protoc) => protoc,
+      Err(err) => {
+        error!("Failed to invoke protoc: {}", err);
+        return Ok(Response::new(proto::ConfigureInteractionResponse {
+          error: format!("Failed to invoke protoc: {}", err),
+          .. proto::ConfigureInteractionResponse::default()
+        }))
+      }
+    };
+
+    match self.process_proto(proto_file, &protoc, fields).await {
+      Ok(_) => {
+        todo!()
+      }
+      Err(err) => {
+        error!("Failed to process protobuf: {}", err);
+        return Ok(Response::new(proto::ConfigureInteractionResponse {
+          error: format!("Failed to process protobuf: {}", err),
+          .. proto::ConfigureInteractionResponse::default()
+        }))
+      }
+    }
   }
 
   // Request to generate the contents of the interaction.

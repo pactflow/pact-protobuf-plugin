@@ -13,27 +13,75 @@ use futures::TryFutureExt;
 use log::{debug, trace};
 use os_info::{Bitness, Info};
 use pact_models::json_utils::json_to_string;
+use prost::Message;
+use prost_types::FileDescriptorSet;
 use reqwest::Url;
 use serde_json::Value;
+use tempfile::{NamedTempFile, tempfile_in};
+use tokio::io::BufReader;
 use tokio::process::Command;
 use zip::ZipArchive;
 
-pub(crate) struct Protoc(String);
+pub(crate) struct Protoc {
+  protoc_path: String,
+  local_install: bool
+}
 
 impl Protoc {
-  fn new(path: String) -> Self {
-    Protoc(path.clone())
+  fn new(path: String, local_install: bool) -> Self {
+    Protoc {
+      protoc_path: path.clone(),
+      local_install
+    }
   }
 
   // Try to invoke the protoc binary
   async fn invoke(&self) -> anyhow::Result<String> {
-    trace!("Invoking protoc: '{} --version'", self.0);
-    match Command::new(&self.0).arg("--version").output().await {
+    trace!("Invoking protoc: '{} --version'", self.protoc_path);
+    match Command::new(&self.protoc_path).arg("--version").output().await {
       Ok(out) => {
         if out.status.success() {
           let version = from_utf8(out.stdout.as_ref()).unwrap_or_default();
           debug!("Protoc binary invoked OK: {}", version);
           Ok(version.to_string())
+        } else {
+          debug!("Protoc output: {}", from_utf8(out.stdout.as_slice()).unwrap_or_default());
+          debug!("Protoc stderr: {}", from_utf8(out.stderr.as_slice()).unwrap_or_default());
+          Err(anyhow!("Failed to invoke protoc binary: exit code {}", out.status))
+        }
+      }
+      Err(err) => Err(anyhow!("Failed to invoke protoc binary: {}", err))
+    }
+  }
+
+  pub(crate) async fn parse_proto_file(&self, proto_file: &Path) -> anyhow::Result<FileDescriptorSet> {
+    let tmp_dir = Path::new("tmp");
+    fs::create_dir_all(tmp_dir)?;
+    let mut file = NamedTempFile::new_in(tmp_dir)?;
+
+    let output = format!("-o{}", file.path().to_string_lossy());
+    let mut parent_dir = proto_file.to_path_buf();
+    parent_dir.pop();
+    let include = format!("-I{}", parent_dir.to_string_lossy());
+
+    let mut cmd = Command::new(&self.protoc_path);
+    cmd.arg(output.as_str())
+      .arg(include.as_str())
+      .arg("--include_imports")
+      .arg(proto_file);
+    if self.local_install {
+      let include2 = "-Iprotoc/include/google/protobuf";
+      trace!("Invoking protoc: '{} {} {} {} --include_imports {}'", self.protoc_path, output.as_str(), include.as_str(), include2, proto_file.to_string_lossy());
+      cmd.arg(include2);
+    } else {
+      trace!("Invoking protoc: '{} {} {} --include_imports {}'", self.protoc_path, output.as_str(), include.as_str(), proto_file.to_string_lossy());
+    }
+    match cmd.output().await {
+      Ok(out) => {
+        if out.status.success() {
+          let data = fs::read(file.path())?;
+          FileDescriptorSet::decode(data.as_slice())
+            .map_err(|err| anyhow!("Failed to load file descriptor set - {}", err))
         } else {
           debug!("Protoc output: {}", from_utf8(out.stdout.as_slice()).unwrap_or_default());
           debug!("Protoc stderr: {}", from_utf8(out.stderr.as_slice()).unwrap_or_default());
@@ -114,7 +162,7 @@ async fn system_protoc() -> anyhow::Result<Protoc> {
       if out.status.success() {
         let path = from_utf8(out.stdout.as_ref())?;
         debug!("Found protoc binary: {}", path);
-        let protoc = Protoc::new(path.trim().to_string());
+        let protoc = Protoc::new(path.trim().to_string(), false);
         protoc.invoke().await?;
         Ok(protoc)
       } else {
@@ -133,7 +181,7 @@ async fn local_protoc() -> anyhow::Result<Protoc> {
   let protoc_path = Path::new(local_path);
   if protoc_path.exists() {
     debug!("Found unpacked protoc binary");
-    let protoc = Protoc::new(protoc_path.to_string_lossy().to_string());
+    let protoc = Protoc::new(protoc_path.to_string_lossy().to_string(), true);
     protoc.invoke().await?;
     Ok(protoc)
   } else {
