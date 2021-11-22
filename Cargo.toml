@@ -32,6 +32,8 @@ zip = "0.5.13"
 serde_json = "1.0.71"
 tempfile = "3.2.0"
 itertools = "0.10.1"
+md5 = "0.7.0"
+base64 = "0.13.0"
 
 [dependencies.reqwest]
 version = "0.11"

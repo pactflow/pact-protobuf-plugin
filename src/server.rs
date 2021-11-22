@@ -1,12 +1,8 @@
 //! Module provides the main gRPC server for the plugin process
 
-use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::BufReader;
-use std::path::Path;
 
-use anyhow::anyhow;
-use itertools::Itertools;
 use log::{debug, error};
 use maplit::hashmap;
 use pact_plugin_driver::plugin_models::PactPluginManifest;
@@ -16,7 +12,8 @@ use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
 use pact_plugin_driver::utils::proto_value_to_string;
 use tonic::Response;
 
-use crate::protoc::{Protoc, setup_protoc};
+use crate::protobuf::process_proto;
+use crate::protoc::setup_protoc;
 
 /// Plugin gRPC server implementation
 #[derive(Debug, Default)]
@@ -37,109 +34,6 @@ impl ProtobufPactPlugin {
       })
       .unwrap_or_default();
     ProtobufPactPlugin { manifest }
-  }
-
-  async fn process_proto(&self, proto_file: String, protoc: &Protoc, fields: BTreeMap<String, prost_types::Value>) -> anyhow::Result<()> {
-    debug!("Parsing proto file '{}'", proto_file);
-    let descriptors = protoc.parse_proto_file(Path::new(proto_file.as_str())).await?;
-    debug!("Parsed proto file OK, file descriptors = {:?}", descriptors.file.iter().map(|file| file.name.as_ref()).collect_vec());
-
-    /*
-    val descriptorBytes = protoResult.toByteArray()
-        logger.debug { "Protobuf file descriptor set is ${descriptorBytes.size} bytes" }
-        val digest = MessageDigest.getInstance("MD5")
-        digest.update(descriptorBytes)
-        val descriptorHash = BaseEncoding.base16().lowerCase().encode(digest.digest());
-     */
-
-    /*
-
-
-        logger.debug { "Parsed proto file OK, file descriptors = ${protoResult.fileList.map { it.name }}" }
-
-        val fileDescriptors = protoResult.fileList.associateBy { it.name }
-        val fileProtoDesc = fileDescriptors[protoFile.fileName.toString()]
-        if (fileProtoDesc == null) {
-          logger.error { "Did not find a file proto descriptor for $protoFile" }
-          return Plugin.ConfigureInteractionResponse.newBuilder()
-            .setError("Did not find a file proto descriptor for $protoFile")
-            .build()
-        }
-
-        if (logger.isTraceEnabled) {
-          logger.trace { "All message types in proto descriptor" }
-          for (messageType in fileProtoDesc.messageTypeList) {
-            logger.trace { messageType.toString() }
-          }
-        }
-
-        val interactions: MutableList<Plugin.InteractionResponse.Builder> = mutableListOf()
-
-        if (config.containsKey("pact:message-type")) {
-          val message = config["pact:message-type"]!!.stringValue
-          when (val result = configureProtobufMessage(message, config, fileProtoDesc, fileDescriptors, protoFile)) {
-            is Ok -> {
-              val builder = result.value
-              val pluginConfigurationBuilder = builder.pluginConfigurationBuilder
-              pluginConfigurationBuilder.interactionConfigurationBuilder
-                .putFields("message", Value.newBuilder().setStringValue(message).build())
-                .putFields("descriptorKey", Value.newBuilder().setStringValue(descriptorHash.toString()).build())
-              interactions.add(builder)
-            }
-            is Err -> {
-              return Plugin.ConfigureInteractionResponse.newBuilder()
-                .setError(result.error)
-                .build()
-            }
-          }
-        } else {
-          val serviceName = config["pact:proto-service"]!!.stringValue
-          when (val result = configureProtobufService(serviceName, config, fileProtoDesc, fileDescriptors, protoFile)) {
-            is Ok -> {
-              val (requestPart, responsePart) = result.value
-              val pluginConfigurationBuilder = requestPart.pluginConfigurationBuilder
-              pluginConfigurationBuilder.interactionConfigurationBuilder
-                .putFields("service", Value.newBuilder().setStringValue(serviceName).build())
-                .putFields("descriptorKey", Value.newBuilder().setStringValue(descriptorHash.toString()).build())
-              interactions.add(requestPart)
-              interactions.add(responsePart)
-            }
-            is Err -> {
-              return Plugin.ConfigureInteractionResponse.newBuilder()
-                .setError(result.error)
-                .build()
-            }
-          }
-        }
-
-        val builder = Plugin.ConfigureInteractionResponse.newBuilder()
-        val fileContents = protoFile.toFile().readText()
-        val valueBuilder = Value.newBuilder()
-        val structValueBuilder = valueBuilder.structValueBuilder
-        structValueBuilder
-          .putAllFields(
-            mapOf(
-              "protoFile" to Value.newBuilder().setStringValue(fileContents).build(),
-              "protoDescriptors" to Value.newBuilder()
-                .setStringValue(Base64.getEncoder().encodeToString(descriptorBytes))
-                .build()
-            )
-          )
-          .build()
-        val pluginConfigurationBuilder = builder.pluginConfigurationBuilder
-        pluginConfigurationBuilder.pactConfigurationBuilder.putAllFields(
-          mapOf(descriptorHash.toString() to valueBuilder.build())
-        )
-
-        for (result in interactions) {
-          logger.debug { "Adding interaction $result" }
-          builder.addInteraction(result)
-        }
-
-        return builder.build()
-     */
-
-    Err(anyhow!("todo"))
   }
 }
 
@@ -237,13 +131,18 @@ impl PactPlugin for ProtobufPactPlugin {
       }
     };
 
-    match self.process_proto(proto_file, &protoc, fields).await {
-      Ok(_) => {
-        todo!()
+    // Process the proto file and configure the interaction
+    match process_proto(proto_file, &protoc, fields).await {
+      Ok((interactions, plugin_config)) => {
+        Ok(Response::new(proto::ConfigureInteractionResponse {
+          interaction: interactions,
+          plugin_configuration: Some(plugin_config),
+          .. proto::ConfigureInteractionResponse::default()
+        }))
       }
       Err(err) => {
         error!("Failed to process protobuf: {}", err);
-        return Ok(Response::new(proto::ConfigureInteractionResponse {
+        Ok(Response::new(proto::ConfigureInteractionResponse {
           error: format!("Failed to process protobuf: {}", err),
           .. proto::ConfigureInteractionResponse::default()
         }))

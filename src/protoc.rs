@@ -11,14 +11,14 @@ use std::str::from_utf8;
 use anyhow::anyhow;
 use futures::TryFutureExt;
 use log::{debug, trace};
+use md5::Digest;
 use os_info::{Bitness, Info};
 use pact_models::json_utils::json_to_string;
 use prost::Message;
 use prost_types::FileDescriptorSet;
 use reqwest::Url;
 use serde_json::Value;
-use tempfile::{NamedTempFile, tempfile_in};
-use tokio::io::BufReader;
+use tempfile::NamedTempFile;
 use tokio::process::Command;
 use zip::ZipArchive;
 
@@ -54,10 +54,10 @@ impl Protoc {
     }
   }
 
-  pub(crate) async fn parse_proto_file(&self, proto_file: &Path) -> anyhow::Result<FileDescriptorSet> {
+  pub(crate) async fn parse_proto_file(&self, proto_file: &Path) -> anyhow::Result<(FileDescriptorSet, Digest, Vec<u8>)> {
     let tmp_dir = Path::new("tmp");
     fs::create_dir_all(tmp_dir)?;
-    let mut file = NamedTempFile::new_in(tmp_dir)?;
+    let file = NamedTempFile::new_in(tmp_dir)?;
 
     let output = format!("-o{}", file.path().to_string_lossy());
     let mut parent_dir = proto_file.to_path_buf();
@@ -81,6 +81,7 @@ impl Protoc {
         if out.status.success() {
           let data = fs::read(file.path())?;
           FileDescriptorSet::decode(data.as_slice())
+            .map(|descriptor| (descriptor, md5::compute(data.as_slice()), data))
             .map_err(|err| anyhow!("Failed to load file descriptor set - {}", err))
         } else {
           debug!("Protoc output: {}", from_utf8(out.stdout.as_slice()).unwrap_or_default());
