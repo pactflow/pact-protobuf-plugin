@@ -8,11 +8,12 @@ use itertools::{Either, Itertools};
 use log::{debug, error, LevelFilter, max_level, trace, warn};
 use maplit::hashmap;
 use pact_models::generators::Generator;
-use pact_models::matchingrules::expressions::{MatchingReference, parse_matcher_def};
 use pact_models::matchingrules::{MatchingRule, MatchingRuleCategory};
+use pact_models::matchingrules::expressions::{MatchingReference, parse_matcher_def};
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::RuleLogic;
-use pact_plugin_driver::proto::{InteractionResponse, PluginConfiguration};
+use pact_plugin_driver::proto::{InteractionResponse, PluginConfiguration, Body};
+use pact_plugin_driver::proto::body::ContentTypeHint;
 use pact_plugin_driver::utils::{proto_value_to_json, proto_value_to_string, to_proto_struct};
 use prost_types::{DescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorProto};
 use prost_types::field_descriptor_proto::Type;
@@ -170,9 +171,8 @@ fn construct_protobuf_interaction_for_message(
     }
   }
 
-  //     logger.debug { "Returning response" }
-  //     val message = messageBuilder.build()
-  //     val builder = Plugin.InteractionResponse.newBuilder()
+  debug!("Returning response");
+
   //       .setInteractionMarkup("""
   //         |## ${descriptor.name}
   //         |```
@@ -209,10 +209,13 @@ fn construct_protobuf_interaction_for_message(
   //           .build()
   //       )
   //     }
-  //
+
   Ok(InteractionResponse {
-    // #[prost(message, optional, tag = "1")]
-    //     pub contents: ::core::option::Option<Body>,
+    contents: Some(Body {
+      content_type: format!("application/protobuf;message={}", message_name),
+      content: Some(message_builder.encode_message()?.to_vec()),
+      content_type_hint: ContentTypeHint::Binary as i32,
+    }),
     //     /// All matching rules to apply
     //     #[prost(map = "string, message", tag = "2")]
     //     pub rules: ::std::collections::HashMap<::prost::alloc::string::String, MatchingRules>,
@@ -318,10 +321,12 @@ fn value_for_type(field_name: &str, field_value: &str, descriptor: &FieldDescrip
 #[cfg(test)]
 mod tests {
   use expectest::prelude::*;
+  use maplit::btreemap;
   use prost_types::field_descriptor_proto::Type;
-  use prost_types::FieldDescriptorProto;
+  use prost_types::{DescriptorProto, field_descriptor_proto, FieldDescriptorProto, Value};
+
   use crate::message_builder::{ProtoValue, RType};
-  use crate::protobuf::value_for_type;
+  use crate::protobuf::{construct_protobuf_interaction_for_message, value_for_type};
 
   #[test]
   fn value_for_type_test() {
@@ -366,5 +371,109 @@ mod tests {
       rtype: RType::UInteger64(100),
       proto_type: Type::Uint64
     }));
+  }
+
+  #[test]
+  fn construct_protobuf_interaction_for_message_test() {
+    let message_descriptor = DescriptorProto {
+      name: Some("test_message".to_string()),
+      field: vec![
+        FieldDescriptorProto {
+          name: Some("implementation".to_string()),
+          number: Some(1),
+          label: None,
+          r#type: Some(field_descriptor_proto::Type::String as i32),
+          type_name: Some("string".to_string()),
+          extendee: None,
+          default_value: None,
+          oneof_index: None,
+          json_name: None,
+          options: None,
+          proto3_optional: None
+        },
+        FieldDescriptorProto {
+          name: Some("version".to_string()),
+          number: Some(2),
+          label: None,
+          r#type: Some(field_descriptor_proto::Type::String as i32),
+          type_name: Some("string".to_string()),
+          extendee: None,
+          default_value: None,
+          oneof_index: None,
+          json_name: None,
+          options: None,
+          proto3_optional: None
+        },
+        FieldDescriptorProto {
+          name: Some("length".to_string()),
+          number: Some(3),
+          label: None,
+          r#type: Some(field_descriptor_proto::Type::Int64 as i32),
+          type_name: Some("int64".to_string()),
+          extendee: None,
+          default_value: None,
+          oneof_index: None,
+          json_name: None,
+          options: None,
+          proto3_optional: None
+        },
+        FieldDescriptorProto {
+          name: Some("hash".to_string()),
+          number: Some(4),
+          label: None,
+          r#type: Some(field_descriptor_proto::Type::Uint64 as i32),
+          type_name: Some("uint64".to_string()),
+          extendee: None,
+          default_value: None,
+          oneof_index: None,
+          json_name: None,
+          options: None,
+          proto3_optional: None
+        }
+      ],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![]
+    };
+    let config = btreemap! {
+      "implementation".to_string() => prost_types::Value { kind: Some(prost_types::value::Kind::StringValue("notEmpty('plugin-driver-rust')".to_string())) },
+      "version".to_string() => prost_types::Value { kind: Some(prost_types::value::Kind::StringValue("matching(semver, '0.0.0')".to_string())) },
+      "hash".to_string() => prost_types::Value { kind: Some(prost_types::value::Kind::StringValue("matching(integer, 1234)".to_string())) }
+    };
+
+    let result = construct_protobuf_interaction_for_message(&message_descriptor, config, "test_message").unwrap();
+    let body = result.contents.as_ref().unwrap();
+    expect!(body.content_type.as_str()).to(be_equal_to("application/protobuf;message=test_message"));
+    expect!(body.content_type_hint).to(be_equal_to(0));
+    expect!(body.content.as_ref()).to(be_some().value(&vec![ 88 ]));
+
+    // #[prost(message, optional, tag = "1")]
+    //     pub contents: ::core::option::Option<Body>,
+    //     /// All matching rules to apply
+    //     #[prost(map = "string, message", tag = "2")]
+    //     pub rules: ::std::collections::HashMap<::prost::alloc::string::String, MatchingRules>,
+    //     /// Generators to apply
+    //     #[prost(map = "string, message", tag = "3")]
+    //     pub generators: ::std::collections::HashMap<::prost::alloc::string::String, Generator>,
+    //     /// For message interactions, any metadata to be applied
+    //     #[prost(message, optional, tag = "4")]
+    //     pub message_metadata: ::core::option::Option<::prost_types::Struct>,
+    //     /// Plugin specific data to be persisted in the pact file
+    //     #[prost(message, optional, tag = "5")]
+    //     pub plugin_configuration: ::core::option::Option<PluginConfiguration>,
+    //     /// Markdown/HTML formatted text representation of the interaction
+    //     #[prost(string, tag = "6")]
+    //     pub interaction_markup: ::prost::alloc::string::String,
+    //     #[prost(enumeration = "interaction_response::MarkupType", tag = "7")]
+    //     pub interaction_markup_type: i32,
+    //     /// Description of what part this interaction belongs to (in the case of there being more than one, for instance,
+    //     /// request/response messages)
+    //     #[prost(string, tag = "8")]
+    //     pub part_name: ::prost::alloc::string::String,
   }
 }

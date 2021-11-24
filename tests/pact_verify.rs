@@ -116,7 +116,7 @@ async fn init_plugin_request(request_message: &MessageRequest) -> (Status, (Cont
     match InitPluginRequest::decode(data) {
       Ok(request) => {
         debug!("Got init plugin request {:?}", request);
-        let plugin = ProtobufPactPlugin {};
+        let plugin = ProtobufPactPlugin::new();
         match plugin.init_plugin(tonic::Request::new(request)).await {
           Ok(response) => {
             debug!("Got init plugin response {:?}", response);
@@ -167,6 +167,7 @@ async fn verify_plugin() {
     enable_pending: false,
     include_wip_pacts_since: None,
     provider_tags: vec![],
+    provider_branch: None,
     selectors: vec![],
     auth: Some(HttpAuth::Token(env::var("PACTFLOW_TOKEN")
       .expect("The PACTFLOW_TOKEN environment variable must be set").to_string())),

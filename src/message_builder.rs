@@ -2,7 +2,12 @@
 
 use std::collections::HashMap;
 
+use anyhow::anyhow;
+use bytes::{Bytes, BytesMut};
+use itertools::Itertools;
 use maplit::hashmap;
+use prost::encoding::{encode_key, string, WireType};
+use prost::Message;
 use prost_types::{DescriptorProto, FieldDescriptorProto};
 use prost_types::field_descriptor_proto::Type;
 
@@ -63,15 +68,51 @@ impl MessageBuilder {
   pub fn add_repeated_field_value(&mut self, field_descriptor: &FieldDescriptorProto, field_name: &str, field_value: MessageFieldValue) -> &mut Self {
     self
   }
-}
 
-/// Type of message field
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum MessageFieldType {
-  /// Represents an absent field
-  Absent,
-  /// Singular field
-  Singular
+  /// Encodes the Protobuf message into a bytes buffer
+  pub fn encode_message(&self) -> anyhow::Result<Bytes> {
+    let mut buffer = BytesMut::with_capacity(1024);
+
+    for (_, field_data) in self.fields.iter()
+      .sorted_by(|(_, a), (_, b)| Ord::cmp(&a.descriptor.number.unwrap_or_default(), &b.descriptor.number.unwrap_or_default())) {
+      match field_data.field_type {
+        MessageFieldValueType::Normal => if let Some(value) = field_data.values.first() {
+          if let Some(tag) = field_data.descriptor.number {
+            if let Some(val) = &value.value {
+              match &val.proto_type {
+                Type::Double => {}
+                Type::Float => {}
+                Type::Int64 => {}
+                Type::Uint64 => {}
+                Type::Int32 => {}
+                Type::Fixed64 => {}
+                Type::Fixed32 => {}
+                Type::Bool => {}
+                Type::String => if let RType::String(s) = &val.rtype {
+                  string::encode(tag as u32, s, &mut buffer);
+                } else {
+                  return Err(anyhow!("Mismatched types, expected a string but got {:?}", val.rtype));
+                }
+                Type::Group => {}
+                Type::Message => {}
+                Type::Bytes => {}
+                Type::Uint32 => {}
+                Type::Enum => {}
+                Type::Sfixed32 => {}
+                Type::Sfixed64 => {}
+                Type::Sint32 => {}
+                Type::Sint64 => {}
+              }
+            }
+          }
+        }
+        MessageFieldValueType::Map => {}
+        MessageFieldValueType::Repeated => {}
+      }
+    }
+
+    Ok(buffer.freeze())
+  }
 }
 
 /// Rust type to use for a protobuf type
@@ -112,9 +153,7 @@ pub struct MessageFieldValue {
   /// Name of the field
   pub name: String,
   /// Field value
-  pub value: Option<ProtoValue>,
-  /// Type of the field in the message
-  pub field_type: MessageFieldType,
+  pub value: Option<ProtoValue>
 }
 
 impl MessageFieldValue {
@@ -126,8 +165,7 @@ impl MessageFieldValue {
         value: field_value.to_string(),
         rtype: RType::String(field_value.to_string()),
         proto_type: Type::String
-      }),
-      field_type: MessageFieldType::Singular
+      })
     }
   }
 
@@ -140,8 +178,7 @@ impl MessageFieldValue {
         value: field_value.to_string(),
         rtype: RType::Boolean(v),
         proto_type: Type::Bool
-      }),
-      field_type: MessageFieldType::Singular
+      })
     })
   }
 
@@ -154,8 +191,7 @@ impl MessageFieldValue {
         value: field_value.to_string(),
         rtype: RType::UInteger32(v),
         proto_type
-      }),
-      field_type: MessageFieldType::Singular
+      })
     })
   }
 
@@ -168,8 +204,7 @@ impl MessageFieldValue {
         value: field_value.to_string(),
         rtype: RType::Integer32(v),
         proto_type
-      }),
-      field_type: MessageFieldType::Singular
+      })
     })
   }
 
@@ -182,8 +217,7 @@ impl MessageFieldValue {
         value: field_value.to_string(),
         rtype: RType::UInteger64(v),
         proto_type
-      }),
-      field_type: MessageFieldType::Singular
+      })
     })
   }
 
@@ -196,8 +230,7 @@ impl MessageFieldValue {
         value: field_value.to_string(),
         rtype: RType::Integer64(v),
         proto_type
-      }),
-      field_type: MessageFieldType::Singular
+      })
     })
   }
 
@@ -210,8 +243,7 @@ impl MessageFieldValue {
         value: field_value.to_string(),
         rtype: RType::Float(v),
         proto_type
-      }),
-      field_type: MessageFieldType::Singular
+      })
     })
   }
 
@@ -224,8 +256,7 @@ impl MessageFieldValue {
         value: field_value.to_string(),
         rtype: RType::Double(v),
         proto_type
-      }),
-      field_type: MessageFieldType::Singular
+      })
     })
   }
 
@@ -233,8 +264,81 @@ impl MessageFieldValue {
   pub fn null(name: &str) -> MessageFieldValue {
     MessageFieldValue {
       name: name.to_string(),
-      value: None,
-      field_type: MessageFieldType::Absent
+      value: None
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use expectest::prelude::*;
+  use prost_types::{DescriptorProto, field_descriptor_proto, FieldDescriptorProto};
+  use prost_types::field_descriptor_proto::Type;
+
+  use crate::message_builder::{MessageBuilder, MessageFieldValue, ProtoValue, RType};
+
+  #[test]
+  fn encode_message_test() {
+    let field1 = FieldDescriptorProto {
+      name: Some("implementation".to_string()),
+      number: Some(1),
+      label: None,
+      r#type: Some(field_descriptor_proto::Type::String as i32),
+      type_name: Some("string".to_string()),
+      extendee: None,
+      default_value: None,
+      oneof_index: None,
+      json_name: None,
+      options: None,
+      proto3_optional: None
+    };
+    let field2 = FieldDescriptorProto {
+      name: Some("version".to_string()),
+      number: Some(2),
+      label: None,
+      r#type: Some(field_descriptor_proto::Type::String as i32),
+      type_name: Some("string".to_string()),
+      extendee: None,
+      default_value: None,
+      oneof_index: None,
+      json_name: None,
+      options: None,
+      proto3_optional: None
+    };
+    let descriptor = DescriptorProto {
+      name: Some("InitPluginRequest".to_string()),
+      field: vec![
+        field1.clone(),
+        field2.clone()
+      ],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![]
+    };
+    let mut message = MessageBuilder::new(&descriptor, "InitPluginRequest");
+    message.set_field(&field1, "implementation", MessageFieldValue {
+      name: "implementation".to_string(),
+      value: Some(ProtoValue {
+        value: "plugin-driver-rust".to_string(),
+        rtype: RType::String("plugin-driver-rust".to_string()),
+        proto_type: Type::String
+      })
+    });
+    message.set_field(&field2, "version", MessageFieldValue {
+      name: "version".to_string(),
+      value: Some(ProtoValue {
+        value: "0.0.0".to_string(),
+        rtype: RType::String("0.0.0".to_string()),
+        proto_type: Type::String
+      })
+    });
+
+    let result = message.encode_message().unwrap();
+    expect!(result.to_vec()).to(be_equal_to(base64::decode("ChJwbHVnaW4tZHJpdmVyLXJ1c3QSBTAuMC4w").unwrap()));
   }
 }
