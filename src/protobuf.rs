@@ -158,8 +158,10 @@ fn construct_protobuf_interaction_for_message(
             }
           } else {
             let field_value = build_field_value(&DocPath::root(), field, key.as_str(), value, &mut matching_rules, &mut generators)?;
-            debug!("Setting field {:?} to value {:?}", key, field_value);
-            message_builder.set_field(field, key.as_str(), field_value);
+            if let Some(field_value) = field_value {
+              debug!("Setting field {:?} to value {:?}", key, field_value);
+              message_builder.set_field(field, key.as_str(), field_value);
+            }
           }
           None => {
             return Err(anyhow!("Message {} field {} is of an unknown type", message_name, key))
@@ -258,12 +260,12 @@ fn build_field_value(
   value: prost_types::Value,
   matching_rules: &mut MatchingRuleCategory,
   generators: &mut HashMap<String, Generator>
-) -> anyhow::Result<MessageFieldValue> {
+) -> anyhow::Result<Option<MessageFieldValue>> {
   trace!("build_field_value({}, {}, {:?})", path, key, proto_value_to_json(&value));
 
   if let Some(val) = &value.kind {
     if let prost_types::value::Kind::NullValue(_) = val {
-      Ok(MessageFieldValue::null(key))
+      Ok(None)
     } else {
       let mrd = parse_matcher_def(proto_value_to_string(&value)
         .ok_or_else(|| anyhow!("Field values must be a string, got {:?}", value))?.as_str())?;
@@ -281,6 +283,7 @@ fn build_field_value(
         generators.insert(field_path.to_string(), generator);
       }
       value_for_type(key, mrd.value.as_str(), descriptor)
+        .map(|val| Some(val))
     }
   } else {
     Err(anyhow!("Field '{}' has an unknown type, can not do anything with it", key))
@@ -290,7 +293,6 @@ fn build_field_value(
 fn value_for_type(field_name: &str, field_value: &str, descriptor: &FieldDescriptorProto) -> anyhow::Result<MessageFieldValue> {
   trace!("value_for_type({}, {}, descriptor)", field_name, field_value);
   debug!("Creating value for type {:?} from '{}'", descriptor.type_name, field_value);
-  //         Descriptors.FieldDescriptor.JavaType.BYTE_STRING -> ByteString.copyFromUtf8(fieldValue ?: "")
   //         Descriptors.FieldDescriptor.JavaType.ENUM -> field.enumType.findValueByName(fieldValue)
   //         Descriptors.FieldDescriptor.JavaType.MESSAGE -> {
   //           if (field.messageType.fullName == "google.protobuf.BytesValue") {
@@ -311,10 +313,9 @@ fn value_for_type(field_name: &str, field_value: &str, descriptor: &FieldDescrip
     Type::Bool => MessageFieldValue::boolean(field_name, field_value),
     Type::String => Ok(MessageFieldValue::string(field_name, field_value)),
     // Type::Message => {}
-    // Type::Bytes => {}
+    Type::Bytes => Ok(MessageFieldValue::bytes(field_name, field_value)),
     // Type::Enum => {}
     _ => Err(anyhow!("Protobuf field {} has an unsupported type {:?}", field_name, t))
-    // None => Ok(MessageFieldValue::null(field_name))
   }
 }
 
@@ -325,7 +326,7 @@ mod tests {
   use prost_types::field_descriptor_proto::Type;
   use prost_types::{DescriptorProto, field_descriptor_proto, FieldDescriptorProto, Value};
 
-  use crate::message_builder::{ProtoValue, RType};
+  use crate::message_builder::RType;
   use crate::protobuf::{construct_protobuf_interaction_for_message, value_for_type};
 
   #[test]
@@ -345,11 +346,9 @@ mod tests {
     };
     let result = value_for_type("test", "test", &descriptor).unwrap();
     expect!(result.name).to(be_equal_to("test"));
-    expect!(result.value).to(be_some().value(ProtoValue {
-      value: "test".to_string(),
-      rtype: RType::String("test".to_string()),
-      proto_type: Type::String
-    }));
+    expect!(result.raw_value).to(be_some().value("test".to_string()));
+    expect!(result.rtype).to(be_equal_to(RType::String("test".to_string())));
+    expect!(result.proto_type).to(be_equal_to(Type::String));
 
     let descriptor = FieldDescriptorProto {
       name: None,
@@ -366,11 +365,9 @@ mod tests {
     };
     let result = value_for_type("test", "100", &descriptor).unwrap();
     expect!(result.name).to(be_equal_to("test"));
-    expect!(result.value).to(be_some().value(ProtoValue {
-      value: "100".to_string(),
-      rtype: RType::UInteger64(100),
-      proto_type: Type::Uint64
-    }));
+    expect!(result.raw_value).to(be_some().value("100".to_string()));
+    expect!(result.rtype).to(be_equal_to(RType::UInteger64(100)));
+    expect!(result.proto_type).to(be_equal_to(Type::Uint64));
   }
 
   #[test]
