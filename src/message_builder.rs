@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use anyhow::anyhow;
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use itertools::Itertools;
 use maplit::hashmap;
 use prost::encoding::{encode_key, encode_varint, string, WireType};
@@ -36,7 +36,7 @@ struct FieldValueInner {
 }
 
 /// Builder struct for a Protobuf message
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MessageBuilder {
   /// Protobuf descriptor for the message
   pub descriptor: DescriptorProto,
@@ -95,7 +95,14 @@ impl MessageBuilder {
                 return Err(anyhow!("Mismatched types, expected a string but got {:?}", value.rtype));
               }
               Type::Group => {}
-              Type::Message => {}
+              Type::Message => if let RType::Message(m) = &value.rtype {
+                let message_bytes = m.encode_message()?;
+                encode_key(tag as u32, WireType::LengthDelimited, &mut buffer);
+                encode_varint(message_bytes.len() as u64, &mut buffer);
+                buffer.put_slice(&message_bytes);
+              } else {
+                return Err(anyhow!("Mismatched types, expected a message builder but got {:?}", value.rtype));
+              }
               Type::Bytes => if let RType::Bytes(b) = &value.rtype {
                 prost::encoding::bytes::encode(tag as u32, b, &mut buffer);
               } else {
@@ -168,7 +175,9 @@ pub enum RType {
   /// Array of bytes
   Bytes(Vec<u8>),
   /// Enum value
-  Enum(String)
+  Enum(String),
+  /// Embedded message
+  Message(MessageBuilder)
 }
 
 /// Value of a message field
@@ -370,33 +379,6 @@ mod tests {
     };
     let encoded = body.encode_to_vec();
 
-
-    //                             FieldDescriptorProto {
-    //                                 name: Some(
-    //                                     "content",
-    //                                 ),
-    //                                 number: Some(
-    //                                     2,
-    //                                 ),
-    //                                 label: Some(
-    //                                     Optional,
-    //                                 ),
-    //                                 r#type: Some(
-    //                                     Message,
-    //                                 ),
-    //                                 type_name: Some(
-    //                                     ".google.protobuf.BytesValue",
-    //                                 ),
-    //                                 extendee: None,
-    //                                 default_value: None,
-    //                                 oneof_index: None,
-    //                                 json_name: Some(
-    //                                     "content",
-    //                                 ),
-    //                                 options: None,
-    //                                 proto3_optional: None,
-    //                             },
-
     let field1 = FieldDescriptorProto {
       name: Some("contentType".to_string()),
       number: Some(1),
@@ -414,8 +396,8 @@ mod tests {
       name: Some("content".to_string()),
       number: Some(2),
       label: None,
-      r#type: Some(field_descriptor_proto::Type::Bytes as i32),
-      type_name: Some("bytes".to_string()),
+      r#type: Some(field_descriptor_proto::Type::Message as i32),
+      type_name: Some(".google.protobuf.BytesValue".to_string()),
       extendee: None,
       default_value: None,
       oneof_index: None,
@@ -483,11 +465,47 @@ mod tests {
       rtype: RType::String("application/json".to_string()),
       proto_type: Type::String
     });
-    message.set_field(&field2, "content", MessageFieldValue {
-      name: "content".to_string(),
+
+    let bytes_field = FieldDescriptorProto {
+      name: Some("value".to_string()),
+      number: Some(1),
+      label: None,
+      r#type: Some(field_descriptor_proto::Type::Bytes as i32),
+      type_name: Some("bytes".to_string()),
+      extendee: None,
+      default_value: None,
+      oneof_index: None,
+      json_name: None,
+      options: None,
+      proto3_optional: None
+    };
+    let content_descriptor = DescriptorProto {
+      name: Some("BytesValue".to_string()),
+      field: vec![
+        bytes_field.clone()
+      ],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![]
+    };
+    let mut bytes_message = MessageBuilder::new(&content_descriptor, "BytesValue");
+    bytes_message.set_field(&bytes_field, "value", MessageFieldValue {
+      name: "value".to_string(),
       raw_value: Some("{\"test\": true}".to_string()),
       rtype: RType::Bytes("{\"test\": true}".as_bytes().to_vec()),
       proto_type: Type::Bytes
+    });
+
+    message.set_field(&field2, "content", MessageFieldValue {
+      name: "content".to_string(),
+      raw_value: Some("{\"test\": true}".to_string()),
+      rtype: RType::Message(bytes_message),
+      proto_type: Type::Message
     });
     message.set_field(&field3, "contentTypeHint", MessageFieldValue {
       name: "contentTypeHint".to_string(),
@@ -498,8 +516,5 @@ mod tests {
 
     let result = message.encode_message().unwrap();
     expect!(result.to_vec()).to(be_equal_to(encoded));
-
-    //<[10, 16, 97, 112, 112, 108, 105, 99, 97, 116, 105, 111, 110, 47, 106, 115, 111, 110, 18, 16, 10, 14, 123, 34, 116, 101, 115, 116, 34, 58, 32, 116, 114, 117, 101, 125, 24, 1]>
-    //<[10, 16, 97, 112, 112, 108, 105, 99, 97, 116, 105, 111, 110, 47, 106, 115, 111, 110, 18,         14, 123, 34, 116, 101, 115, 116, 34, 58, 32, 116, 114, 117, 101, 125, 16, 1]>`, src/message_builder.rs:499:5
   }
 }
