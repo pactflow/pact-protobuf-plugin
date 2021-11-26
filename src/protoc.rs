@@ -270,7 +270,7 @@ fn os_type(os_info: Bitness, arch: &str, os: &str) -> String {
 #[cfg(test)]
 mod tests {
   use expectest::prelude::*;
-  use os_info::{Bitness, Info, Type};
+  use os_info::Bitness;
 
   use super::os_type;
 

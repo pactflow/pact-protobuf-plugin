@@ -8,7 +8,7 @@ use itertools::{Either, Itertools};
 use log::{debug, error, LevelFilter, max_level, trace, warn};
 use maplit::hashmap;
 use pact_models::generators::Generator;
-use pact_models::matchingrules::{MatchingRule, MatchingRuleCategory};
+use pact_models::matchingrules::MatchingRuleCategory;
 use pact_models::matchingrules::expressions::{MatchingReference, parse_matcher_def};
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::RuleLogic;
@@ -304,12 +304,12 @@ fn value_for_type(field_name: &str, field_value: &str, descriptor: &FieldDescrip
   //         }
   let t = descriptor.r#type();
   match t {
-    Type::Double => MessageFieldValue::double(field_name, field_value, t),
-    Type::Float => MessageFieldValue::float(field_name, field_value, t),
-    Type::Int64 | Type::Sfixed64 | Type::Sint64 => MessageFieldValue::integer_64(field_name, field_value, t),
-    Type::Uint64 | Type::Fixed64 => MessageFieldValue::uinteger_64(field_name, field_value, t),
-    Type::Int32 | Type::Sfixed32 | Type::Sint32 => MessageFieldValue::integer_32(field_name, field_value, t),
-    Type::Uint32 | Type::Fixed32 => MessageFieldValue::uinteger_32(field_name, field_value, t),
+    Type::Double => MessageFieldValue::double(field_name, field_value),
+    Type::Float => MessageFieldValue::float(field_name, field_value),
+    Type::Int64 | Type::Sfixed64 | Type::Sint64 => MessageFieldValue::integer_64(field_name, field_value),
+    Type::Uint64 | Type::Fixed64 => MessageFieldValue::uinteger_64(field_name, field_value),
+    Type::Int32 | Type::Sfixed32 | Type::Sint32 => MessageFieldValue::integer_32(field_name, field_value),
+    Type::Uint32 | Type::Fixed32 => MessageFieldValue::uinteger_32(field_name, field_value),
     Type::Bool => MessageFieldValue::boolean(field_name, field_value),
     Type::String => Ok(MessageFieldValue::string(field_name, field_value)),
     // Type::Message => {}
@@ -348,7 +348,6 @@ mod tests {
     expect!(result.name).to(be_equal_to("test"));
     expect!(result.raw_value).to(be_some().value("test".to_string()));
     expect!(result.rtype).to(be_equal_to(RType::String("test".to_string())));
-    expect!(result.proto_type).to(be_equal_to(Type::String));
 
     let descriptor = FieldDescriptorProto {
       name: None,
@@ -367,7 +366,6 @@ mod tests {
     expect!(result.name).to(be_equal_to("test"));
     expect!(result.raw_value).to(be_some().value("100".to_string()));
     expect!(result.rtype).to(be_equal_to(RType::UInteger64(100)));
-    expect!(result.proto_type).to(be_equal_to(Type::Uint64));
   }
 
   #[test]

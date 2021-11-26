@@ -1,15 +1,14 @@
 //! Builder for creating protobuf messages based on a descriptor
 
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
 use anyhow::anyhow;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use itertools::Itertools;
+use log::trace;
 use maplit::hashmap;
 use prost::encoding::{encode_key, encode_varint, string, WireType};
-use prost::encoding::int32::encode_packed;
-use prost::encoding::int32::encode;
-use prost::Message;
 use prost_types::{DescriptorProto, FieldDescriptorProto};
 use prost_types::field_descriptor_proto::Type;
 
@@ -27,12 +26,14 @@ pub enum MessageFieldValueType {
 /// Inner struct to store the values for a field
 #[derive(Clone, Debug, PartialEq)]
 struct FieldValueInner {
-  /// Values for the field, only repeated fields will have more than one value.
+  /// Values for the field, only repeated and map fields will have more than one value.
   values: Vec<MessageFieldValue>,
   /// Descriptor for the field.
   descriptor: FieldDescriptorProto,
-  /// Type of field
-  field_type: MessageFieldValueType
+  /// Type of field (singular, map or repeated)
+  field_type: MessageFieldValueType,
+  /// Field data type
+  proto_type: Type
 }
 
 /// Builder struct for a Protobuf message
@@ -61,72 +62,114 @@ impl MessageBuilder {
     self.fields.insert(field_name.to_string(), FieldValueInner {
       values: vec![ field_value ],
       descriptor: field_descriptor.clone(),
-      field_type: MessageFieldValueType::Normal
+      field_type: MessageFieldValueType::Normal,
+      proto_type: field_descriptor.r#type()
     });
     self
   }
 
   /// Adds a value to a repeated field. If the field is not defined, configures it first.
   pub fn add_repeated_field_value(&mut self, field_descriptor: &FieldDescriptorProto, field_name: &str, field_value: MessageFieldValue) -> &mut Self {
+    match self.fields.entry(field_name.to_string()) {
+      Entry::Occupied(mut e) => e.get_mut().values.push(field_value),
+      Entry::Vacant(e) => {
+        e.insert(FieldValueInner {
+          values: vec![ field_value ],
+          descriptor: field_descriptor.clone(),
+          field_type: MessageFieldValueType::Repeated,
+          proto_type: field_descriptor.r#type()
+        });
+      }
+    };
+    self
+  }
+
+  /// Adds a map field value, which contains a key and value
+  pub fn add_map_field_value(&mut self, field_descriptor: &FieldDescriptorProto, field_name: &str, key: MessageFieldValue, value: MessageFieldValue) -> &mut Self {
+    match self.fields.entry(field_name.to_string()) {
+      Entry::Occupied(mut e) => {
+        e.get_mut().values.push(key);
+        e.get_mut().values.push(value);
+      },
+      Entry::Vacant(e) => {
+        e.insert(FieldValueInner {
+          values: vec![ key, value ],
+          descriptor: field_descriptor.clone(),
+          field_type: MessageFieldValueType::Map,
+          proto_type: field_descriptor.r#type()
+        });
+      }
+    };
     self
   }
 
   /// Encodes the Protobuf message into a bytes buffer
   pub fn encode_message(&self) -> anyhow::Result<Bytes> {
+    trace!("encode_message");
     let mut buffer = BytesMut::with_capacity(1024);
 
     for (_, field_data) in self.fields.iter()
       .sorted_by(|(_, a), (_, b)| Ord::cmp(&a.descriptor.number.unwrap_or_default(), &b.descriptor.number.unwrap_or_default())) {
       match field_data.field_type {
-        MessageFieldValueType::Normal => if let Some(value) = field_data.values.first() {
-          if let Some(tag) = field_data.descriptor.number {
-            match &value.proto_type {
-              Type::Double => {}
-              Type::Float => {}
-              Type::Int64 => {}
-              Type::Uint64 => {}
-              Type::Int32 => {}
-              Type::Fixed64 => {}
-              Type::Fixed32 => {}
-              Type::Bool => {}
-              Type::String => if let RType::String(s) = &value.rtype {
-                string::encode(tag as u32, s, &mut buffer);
-              } else {
-                return Err(anyhow!("Mismatched types, expected a string but got {:?}", value.rtype));
-              }
-              Type::Group => {}
-              Type::Message => if let RType::Message(m) = &value.rtype {
-                let message_bytes = m.encode_message()?;
-                encode_key(tag as u32, WireType::LengthDelimited, &mut buffer);
-                encode_varint(message_bytes.len() as u64, &mut buffer);
-                buffer.put_slice(&message_bytes);
-              } else {
-                return Err(anyhow!("Mismatched types, expected a message builder but got {:?}", value.rtype));
-              }
-              Type::Bytes => if let RType::Bytes(b) = &value.rtype {
-                prost::encoding::bytes::encode(tag as u32, b, &mut buffer);
-              } else {
-                return Err(anyhow!("Mismatched types, expected a byte array but got {:?}", value.rtype));
-              }
-              Type::Uint32 => {}
-              Type::Enum => if let RType::Enum(name) = &value.rtype {
-                self.encode_enum_value(&field_data.descriptor, value, tag, name, &mut buffer)?;
-              } else {
-                return Err(anyhow!("Mismatched types, expected an enum but got {:?}", value.rtype));
-              }
-              Type::Sfixed32 => {}
-              Type::Sfixed64 => {}
-              Type::Sint32 => {}
-              Type::Sint64 => {}
-            }
-          }
-        }
-        MessageFieldValueType::Map => {}
-        MessageFieldValueType::Repeated => {}
+        MessageFieldValueType::Normal => self.encode_single_field(&mut buffer, field_data)?,
+        MessageFieldValueType::Map => self.encode_map_field(&mut buffer, field_data)?,
+        MessageFieldValueType::Repeated => self.encode_repeated_field(&mut buffer, field_data)?
       }
     }
 
     Ok(buffer.freeze())
+  }
+
+  fn encode_single_field(&self, mut buffer: &mut BytesMut, field_data: &FieldValueInner) -> anyhow::Result<()> {
+    trace!("encode_single_field({:?})", field_data);
+    if let Some(value) = field_data.values.first() {
+      if let Some(tag) = field_data.descriptor.number {
+        match field_data.proto_type {
+          Type::Double => todo!(),
+          Type::Float => todo!(),
+          Type::Int64 => todo!(),
+          Type::Uint64 => todo!(),
+          Type::Int32 => todo!(),
+          Type::Fixed64 => todo!(),
+          Type::Fixed32 => todo!(),
+          Type::Bool => if let RType::Boolean(b) = &value.rtype {
+            prost::encoding::bool::encode(tag as u32, b, &mut buffer);
+          } else {
+            return Err(anyhow!("Mismatched types, expected a boolean but got {:?}", value.rtype));
+          }
+          Type::String => if let RType::String(s) = &value.rtype {
+            string::encode(tag as u32, s, &mut buffer);
+          } else {
+            return Err(anyhow!("Mismatched types, expected a string but got {:?}", value.rtype));
+          }
+          Type::Group => todo!(),
+          Type::Message => if let RType::Message(m) = &value.rtype {
+            let message_bytes = m.encode_message()?;
+            encode_key(tag as u32, WireType::LengthDelimited, &mut buffer);
+            encode_varint(message_bytes.len() as u64, &mut buffer);
+            buffer.put_slice(&message_bytes);
+          } else {
+            return Err(anyhow!("Mismatched types, expected a message builder but got {:?}", value.rtype));
+          }
+          Type::Bytes => if let RType::Bytes(b) = &value.rtype {
+            prost::encoding::bytes::encode(tag as u32, b, &mut buffer);
+          } else {
+            return Err(anyhow!("Mismatched types, expected a byte array but got {:?}", value.rtype));
+          }
+          Type::Uint32 => todo!(),
+          Type::Enum => if let RType::Enum(name) = &value.rtype {
+            self.encode_enum_value(&field_data.descriptor, value, tag, name, &mut buffer)?;
+          } else {
+            return Err(anyhow!("Mismatched types, expected an enum but got {:?}", value.rtype));
+          }
+          Type::Sfixed32 => todo!(),
+          Type::Sfixed64 => todo!(),
+          Type::Sint32 => todo!(),
+          Type::Sint64 => todo!()
+        }
+      }
+    }
+    Ok(())
   }
 
   fn encode_enum_value(
@@ -137,6 +180,7 @@ impl MessageBuilder {
     enum_value_name: &String,
     buffer: &mut BytesMut
   ) -> anyhow::Result<()> {
+    trace!("encode_enum_value({:?}, {}, '{}')", field_value, tag, enum_value_name);
     let enum_type_name = descriptor.type_name.as_ref().ok_or_else(|| anyhow!("Type name is missing from the descriptor for enum field {}", field_value.name))?;
     let enum_name = enum_type_name.split('.').last().unwrap_or_else(|| enum_type_name.as_str());
     let enum_proto = self.descriptor.enum_type.iter().find(|enum_type| enum_type.name.clone().unwrap_or_default() == enum_name)
@@ -150,6 +194,100 @@ impl MessageBuilder {
     } else {
       Err(anyhow!("Enum value {} for enum {} does not have a numeric value set", enum_value_name, enum_type_name))
     }
+  }
+
+  fn encode_map_field(&self, buffer: &mut BytesMut, field_value: &FieldValueInner) -> anyhow::Result<()> {
+    trace!("encode_map_field({:?})", field_value);
+    if !field_value.values.is_empty() {
+      if field_value.values.len() % 2 == 1 {
+        return Err(anyhow!("Map fields need to have an even number of field values as key-value pairs, got {} field values", field_value.values.len()));
+      }
+      let entry_type_name = field_value.descriptor.type_name.as_ref().ok_or_else(|| anyhow!("Type name is missing from the descriptor for map field"))?;
+      let entry_name = entry_type_name.split('.').last().unwrap_or_else(|| entry_type_name.as_str());
+      let entry_proto = self.descriptor.nested_type.iter().find(|nested_type| nested_type.name.clone().unwrap_or_default() == entry_name)
+        .ok_or_else(|| anyhow!("Did not find the nested type {} for the map field {} in the Protobuf descriptor", entry_name, entry_type_name))?;
+
+      let key_proto = entry_proto.field.iter().find(|f| f.name.clone().unwrap_or_default() == "key")
+        .ok_or_else(|| anyhow!("Did not find the field descriptor for the key for the map field {} in the Protobuf descriptor", entry_type_name))?;
+      let value_proto = entry_proto.field.iter().find(|f| f.name.clone().unwrap_or_default() == "value")
+        .ok_or_else(|| anyhow!("Did not find the field descriptor for the value for the map field {} in the Protobuf descriptor", entry_type_name))?;
+
+      let entries = field_value.values.iter().tuples::<(_, _)>()
+        .map(|(k, v)| {
+          MessageFieldValue {
+            name: entry_name.to_string(),
+            raw_value: None,
+            rtype: RType::Message(MessageBuilder {
+              descriptor: entry_proto.clone(),
+              message_name: entry_name.to_string(),
+              fields: hashmap! {
+                "key".to_string() => FieldValueInner {
+                  values: vec![ k.clone() ],
+                  descriptor: key_proto.clone(),
+                  field_type: MessageFieldValueType::Normal,
+                  proto_type: key_proto.r#type()
+                },
+                "value".to_string() => FieldValueInner {
+                  values: vec![ v.clone() ],
+                  descriptor: value_proto.clone(),
+                  field_type: MessageFieldValueType::Normal,
+                  proto_type: value_proto.r#type()
+                }
+              }
+            })
+          }
+        }).collect();
+
+      self.encode_repeated_field(buffer, &FieldValueInner {
+        values: entries,
+        descriptor: field_value.descriptor.clone(),
+        field_type: MessageFieldValueType::Repeated,
+        proto_type: field_value.proto_type
+      })
+    } else {
+      Ok(())
+    }
+  }
+
+  fn encode_repeated_field(&self, buffer: &mut BytesMut, field_value: &FieldValueInner) -> anyhow::Result<()> {
+    trace!("encode_repeated_field({:?})", field_value);
+    if !field_value.values.is_empty() {
+      let tag = field_value.descriptor.number
+        .ok_or_else(|| anyhow!("Tag was not set for field {}", field_value.descriptor.name.clone().unwrap_or_default()))?;
+      for value in &field_value.values {
+        trace!("encode_key({}, {})", tag, WireType::LengthDelimited as u8);
+        encode_key(tag as u32, WireType::LengthDelimited, buffer);
+        match field_value.proto_type {
+          Type::Double => todo!(),
+          Type::Float => todo!(),
+          Type::Int64 => todo!(),
+          Type::Uint64 => todo!(),
+          Type::Int32 => todo!(),
+          Type::Fixed64 => todo!(),
+          Type::Fixed32 => todo!(),
+          Type::Bool => todo!(),
+          Type::String => todo!(),
+          Type::Group => todo!(),
+          Type::Message => {
+            if let RType::Message(m) = &value.rtype {
+              let message_bytes = m.encode_message()?;
+              encode_varint(message_bytes.len() as u64, buffer);
+              buffer.put_slice(&message_bytes);
+            } else {
+              return Err(anyhow!("Mismatched types, expected a message builder but got {:?}", value.rtype));
+            }
+          }
+          Type::Bytes => todo!(),
+          Type::Uint32 => todo!(),
+          Type::Enum => todo!(),
+          Type::Sfixed32 => todo!(),
+          Type::Sfixed64 => todo!(),
+          Type::Sint32 => todo!(),
+          Type::Sint64 => todo!(),
+        }
+      }
+    }
+    Ok(())
   }
 }
 
@@ -188,9 +326,7 @@ pub struct MessageFieldValue {
   /// Raw value in text form
   pub raw_value: Option<String>,
   /// Rust type for the value
-  pub rtype: RType,
-  /// Protobuf type for the value
-  pub proto_type: Type
+  pub rtype: RType
 }
 
 impl MessageFieldValue {
@@ -199,8 +335,7 @@ impl MessageFieldValue {
     MessageFieldValue {
       name: field_name.to_string(),
       raw_value: Some(field_value.to_string()),
-      rtype: RType::String(field_value.to_string()),
-      proto_type: Type::String
+      rtype: RType::String(field_value.to_string())
     }
   }
 
@@ -210,74 +345,67 @@ impl MessageFieldValue {
     Ok(MessageFieldValue {
       name: field_name.to_string(),
       raw_value: Some(field_value.to_string()),
-      rtype: RType::Boolean(v),
-      proto_type: Type::Bool
+      rtype: RType::Boolean(v)
     })
   }
 
   /// Create an unsigned 32 bit integer value. This will fail with an error if the value is not a valid integer value.
-  pub fn uinteger_32(field_name: &str, field_value: &str, proto_type: Type) -> anyhow::Result<MessageFieldValue> {
+  pub fn uinteger_32(field_name: &str, field_value: &str) -> anyhow::Result<MessageFieldValue> {
     let v: u32 = field_value.parse()?;
     Ok(MessageFieldValue {
       name: field_name.to_string(),
       raw_value: Some(field_value.to_string()),
-      rtype: RType::UInteger32(v),
-      proto_type
+      rtype: RType::UInteger32(v)
     })
   }
 
   /// Create a signed 32 bit integer value. This will fail with an error if the value is not a valid integer value.
-  pub fn integer_32(field_name: &str, field_value: &str, proto_type: Type) -> anyhow::Result<MessageFieldValue> {
+  pub fn integer_32(field_name: &str, field_value: &str) -> anyhow::Result<MessageFieldValue> {
     let v: i32 = field_value.parse()?;
     Ok(MessageFieldValue {
       name: field_name.to_string(),
       raw_value: Some(field_value.to_string()),
-      rtype: RType::Integer32(v),
-      proto_type
+      rtype: RType::Integer32(v)
     })
   }
 
   /// Create an unsigned 64 bit integer value. This will fail with an error if the value is not a valid integer value.
-  pub fn uinteger_64(field_name: &str, field_value: &str, proto_type: Type) -> anyhow::Result<MessageFieldValue> {
+  pub fn uinteger_64(field_name: &str, field_value: &str) -> anyhow::Result<MessageFieldValue> {
     let v: u64 = field_value.parse()?;
     Ok(MessageFieldValue {
       name: field_name.to_string(),
       raw_value: Some(field_value.to_string()),
-      rtype: RType::UInteger64(v),
-      proto_type
+      rtype: RType::UInteger64(v)
     })
   }
 
   /// Create a signed 64 bit integer value. This will fail with an error if the value is not a valid integer value.
-  pub fn integer_64(field_name: &str, field_value: &str, proto_type: Type) -> anyhow::Result<MessageFieldValue> {
+  pub fn integer_64(field_name: &str, field_value: &str) -> anyhow::Result<MessageFieldValue> {
     let v: i64 = field_value.parse()?;
     Ok(MessageFieldValue {
       name: field_name.to_string(),
       raw_value: Some(field_value.to_string()),
-      rtype: RType::Integer64(v),
-      proto_type
+      rtype: RType::Integer64(v)
     })
   }
 
   /// Create an 32 bit floating point value. This will fail with an error if the value is not a valid float value.
-  pub fn float(field_name: &str, field_value: &str, proto_type: Type) -> anyhow::Result<MessageFieldValue> {
+  pub fn float(field_name: &str, field_value: &str) -> anyhow::Result<MessageFieldValue> {
     let v: f32 = field_value.parse()?;
     Ok(MessageFieldValue {
       name: field_name.to_string(),
       raw_value: Some(field_value.to_string()),
-      rtype: RType::Float(v),
-      proto_type
+      rtype: RType::Float(v)
     })
   }
 
   /// Create an 64 bit floating point value. This will fail with an error if the value is not a valid float value.
-  pub fn double(field_name: &str, field_value: &str, proto_type: Type) -> anyhow::Result<MessageFieldValue> {
+  pub fn double(field_name: &str, field_value: &str) -> anyhow::Result<MessageFieldValue> {
     let v: f64 = field_value.parse()?;
     Ok(MessageFieldValue {
       name: field_name.to_string(),
       raw_value: Some(field_value.to_string()),
-      rtype: RType::Double(v),
-      proto_type
+      rtype: RType::Double(v)
     })
   }
 
@@ -286,52 +414,128 @@ impl MessageFieldValue {
     MessageFieldValue {
       name: field_name.to_string(),
       raw_value: Some(field_value.to_string()),
-      rtype: RType::Bytes(field_value.as_bytes().to_vec()),
-      proto_type: Type::Bytes
+      rtype: RType::Bytes(field_value.as_bytes().to_vec())
     }
   }
 }
 
 #[cfg(test)]
 mod tests {
-  use bytes::Bytes;
   use expectest::prelude::*;
-  use prost_types::{DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorSet};
+  use maplit::{btreemap, hashmap};
+  use prost_types::{DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorSet, MessageOptions, OneofDescriptorProto};
   use prost_types::field_descriptor_proto::Type;
-  use pact_plugin_driver::proto::Body;
+  use pact_plugin_driver::proto::{Body, CompareContentsRequest, MatchingRules, MatchingRule};
   use pact_plugin_driver::proto::body::ContentTypeHint;
   use prost::Message;
+  use prost_types::field_descriptor_proto::Label::Optional;
+  use prost_types::value::Kind;
 
   use crate::message_builder::{MessageBuilder, MessageFieldValue, RType};
+  use crate::message_builder::MessageFieldValueType::Repeated;
 
-  #[test]
+  macro_rules! string_field_descriptor {
+    ($name:expr, $n:expr) => (
+        FieldDescriptorProto {
+          name: Some($name.to_string()),
+          number: Some($n),
+          label: Some(Optional as i32),
+          r#type: Some(field_descriptor_proto::Type::String as i32),
+          type_name: Some("String".to_string()),
+          extendee: None,
+          default_value: None,
+          oneof_index: None,
+          json_name: None,
+          options: None,
+          proto3_optional: None
+        }
+    );
+  }
+
+  macro_rules! bool_field_descriptor {
+    ($name:expr, $n:expr) => (
+        FieldDescriptorProto {
+          name: Some($name.to_string()),
+          number: Some($n),
+          label: Some(Optional as i32),
+          r#type: Some(field_descriptor_proto::Type::Bool as i32),
+          type_name: Some("Bool".to_string()),
+          extendee: None,
+          default_value: None,
+          oneof_index: None,
+          json_name: None,
+          options: None,
+          proto3_optional: None
+        }
+    );
+  }
+
+  macro_rules! message_field_descriptor {
+    ($name:expr, $n:expr, $t:expr) => (
+      FieldDescriptorProto {
+        name: Some($name.to_string()),
+        number: Some($n),
+        label: Some(Optional as i32),
+        r#type: Some(field_descriptor_proto::Type::Message as i32),
+        type_name: Some($t.to_string()),
+        extendee: None,
+        default_value: None,
+        oneof_index: None,
+        json_name: None,
+        options: None,
+        proto3_optional: None
+      }
+    );
+  }
+
+  macro_rules! enum_field_descriptor {
+    ($name:expr, $n:expr, $t:expr) => (
+      FieldDescriptorProto {
+        name: Some($name.to_string()),
+        number: Some($n),
+        label: Some(Optional as i32),
+        r#type: Some(field_descriptor_proto::Type::Enum as i32),
+        type_name: Some($t.to_string()),
+        extendee: None,
+        default_value: None,
+        oneof_index: None,
+        json_name: None,
+        options: None,
+        proto3_optional: None
+      }
+    );
+  }
+
+  macro_rules! bytes_field_descriptor {
+    ($name:expr, $n:expr) => (
+        FieldDescriptorProto {
+          name: Some($name.to_string()),
+          number: Some($n),
+          label: Some(Optional as i32),
+          r#type: Some(field_descriptor_proto::Type::Bytes as i32),
+          type_name: Some("Bytes".to_string()),
+          extendee: None,
+          default_value: None,
+          oneof_index: None,
+          json_name: None,
+          options: None,
+          proto3_optional: None
+        }
+    );
+  }
+
+  #[test_log::test]
   fn encode_simple_message_test() {
-    let field1 = FieldDescriptorProto {
-      name: Some("implementation".to_string()),
-      number: Some(1),
-      label: None,
-      r#type: Some(field_descriptor_proto::Type::String as i32),
-      type_name: Some("String".to_string()),
-      extendee: None,
-      default_value: None,
-      oneof_index: None,
-      json_name: None,
-      options: None,
-      proto3_optional: None
-    };
-    let field2 = FieldDescriptorProto {
-      name: Some("version".to_string()),
-      number: Some(2),
-      label: None,
-      r#type: Some(field_descriptor_proto::Type::String as i32),
-      type_name: Some("String".to_string()),
-      extendee: None,
-      default_value: None,
-      oneof_index: None,
-      json_name: None,
-      options: None,
-      proto3_optional: None
-    };
+    // message InitPluginRequest {
+    //   // Implementation calling the plugin
+    //   string implementation = 1;
+    //   // Version of the implementation
+    //   string version = 2;
+    // }
+
+    let field1 = string_field_descriptor!("implementation", 1);
+    let field2 = string_field_descriptor!("version", 2);
+
     let descriptor = DescriptorProto {
       name: Some("InitPluginRequest".to_string()),
       field: vec![
@@ -351,26 +555,38 @@ mod tests {
     message.set_field(&field1, "implementation", MessageFieldValue {
       name: "implementation".to_string(),
       raw_value: Some("plugin-driver-rust".to_string()),
-      rtype: RType::String("plugin-driver-rust".to_string()),
-      proto_type: Type::String
+      rtype: RType::String("plugin-driver-rust".to_string())
     });
     message.set_field(&field2, "version", MessageFieldValue {
       name: "version".to_string(),
       raw_value: Some("0.0.0".to_string()),
-      rtype: RType::String("0.0.0".to_string()),
-      proto_type: Type::String
+      rtype: RType::String("0.0.0".to_string())
     });
 
     let result = message.encode_message().unwrap();
     expect!(result.to_vec()).to(be_equal_to(base64::decode("ChJwbHVnaW4tZHJpdmVyLXJ1c3QSBTAuMC4w").unwrap()));
   }
 
-  #[test]
+  #[test_log::test]
   fn encode_message_bytes_test() {
-    // let bytes = base64::decode("CuIFChxnb29nbGUvcHJvdG9idWYvc3RydWN0LnByb3RvEg9nb29nbGUucHJvdG9idWYimAEKBlN0cnVjdBI7CgZmaWVsZHMYASADKAsyIy5nb29nbGUucHJvdG9idWYuU3RydWN0LkZpZWxkc0VudHJ5UgZmaWVsZHMaUQoLRmllbGRzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSLAoFdmFsdWUYAiABKAsyFi5nb29nbGUucHJvdG9idWYuVmFsdWVSBXZhbHVlOgI4ASKyAgoFVmFsdWUSOwoKbnVsbF92YWx1ZRgBIAEoDjIaLmdvb2dsZS5wcm90b2J1Zi5OdWxsVmFsdWVIAFIJbnVsbFZhbHVlEiMKDG51bWJlcl92YWx1ZRgCIAEoAUgAUgtudW1iZXJWYWx1ZRIjCgxzdHJpbmdfdmFsdWUYAyABKAlIAFILc3RyaW5nVmFsdWUSHwoKYm9vbF92YWx1ZRgEIAEoCEgAUglib29sVmFsdWUSPAoMc3RydWN0X3ZhbHVlGAUgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdEgAUgtzdHJ1Y3RWYWx1ZRI7CgpsaXN0X3ZhbHVlGAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLkxpc3RWYWx1ZUgAUglsaXN0VmFsdWVCBgoEa2luZCI7CglMaXN0VmFsdWUSLgoGdmFsdWVzGAEgAygLMhYuZ29vZ2xlLnByb3RvYnVmLlZhbHVlUgZ2YWx1ZXMqGwoJTnVsbFZhbHVlEg4KCk5VTExfVkFMVUUQAEJ/ChNjb20uZ29vZ2xlLnByb3RvYnVmQgtTdHJ1Y3RQcm90b1ABWi9nb29nbGUuZ29sYW5nLm9yZy9wcm90b2J1Zi90eXBlcy9rbm93bi9zdHJ1Y3RwYvgBAaICA0dQQqoCHkdvb2dsZS5Qcm90b2J1Zi5XZWxsS25vd25UeXBlc2IGcHJvdG8zCoYECh5nb29nbGUvcHJvdG9idWYvd3JhcHBlcnMucHJvdG8SD2dvb2dsZS5wcm90b2J1ZiIjCgtEb3VibGVWYWx1ZRIUCgV2YWx1ZRgBIAEoAVIFdmFsdWUiIgoKRmxvYXRWYWx1ZRIUCgV2YWx1ZRgBIAEoAlIFdmFsdWUiIgoKSW50NjRWYWx1ZRIUCgV2YWx1ZRgBIAEoA1IFdmFsdWUiIwoLVUludDY0VmFsdWUSFAoFdmFsdWUYASABKARSBXZhbHVlIiIKCkludDMyVmFsdWUSFAoFdmFsdWUYASABKAVSBXZhbHVlIiMKC1VJbnQzMlZhbHVlEhQKBXZhbHVlGAEgASgNUgV2YWx1ZSIhCglCb29sVmFsdWUSFAoFdmFsdWUYASABKAhSBXZhbHVlIiMKC1N0cmluZ1ZhbHVlEhQKBXZhbHVlGAEgASgJUgV2YWx1ZSIiCgpCeXRlc1ZhbHVlEhQKBXZhbHVlGAEgASgMUgV2YWx1ZUKDAQoTY29tLmdvb2dsZS5wcm90b2J1ZkINV3JhcHBlcnNQcm90b1ABWjFnb29nbGUuZ29sYW5nLm9yZy9wcm90b2J1Zi90eXBlcy9rbm93bi93cmFwcGVyc3Bi+AEBogIDR1BCqgIeR29vZ2xlLlByb3RvYnVmLldlbGxLbm93blR5cGVzYgZwcm90bzMKvgEKG2dvb2dsZS9wcm90b2J1Zi9lbXB0eS5wcm90bxIPZ29vZ2xlLnByb3RvYnVmIgcKBUVtcHR5Qn0KE2NvbS5nb29nbGUucHJvdG9idWZCCkVtcHR5UHJvdG9QAVouZ29vZ2xlLmdvbGFuZy5vcmcvcHJvdG9idWYvdHlwZXMva25vd24vZW1wdHlwYvgBAaICA0dQQqoCHkdvb2dsZS5Qcm90b2J1Zi5XZWxsS25vd25UeXBlc2IGcHJvdG8zCv0iCgxwbHVnaW4ucHJvdG8SDmlvLnBhY3QucGx1Z2luGhxnb29nbGUvcHJvdG9idWYvc3RydWN0LnByb3RvGh5nb29nbGUvcHJvdG9idWYvd3JhcHBlcnMucHJvdG8aG2dvb2dsZS9wcm90b2J1Zi9lbXB0eS5wcm90byJVChFJbml0UGx1Z2luUmVxdWVzdBImCg5pbXBsZW1lbnRhdGlvbhgBIAEoCVIOaW1wbGVtZW50YXRpb24SGAoHdmVyc2lvbhgCIAEoCVIHdmVyc2lvbiLHAgoOQ2F0YWxvZ3VlRW50cnkSPAoEdHlwZRgBIAEoDjIoLmlvLnBhY3QucGx1Z2luLkNhdGFsb2d1ZUVudHJ5LkVudHJ5VHlwZVIEdHlwZRIQCgNrZXkYAiABKAlSA2tleRJCCgZ2YWx1ZXMYAyADKAsyKi5pby5wYWN0LnBsdWdpbi5DYXRhbG9ndWVFbnRyeS5WYWx1ZXNFbnRyeVIGdmFsdWVzGjkKC1ZhbHVlc0VudHJ5EhAKA2tleRgBIAEoCVIDa2V5EhQKBXZhbHVlGAIgASgJUgV2YWx1ZToCOAEiZgoJRW50cnlUeXBlEhMKD0NPTlRFTlRfTUFUQ0hFUhAAEhUKEUNPTlRFTlRfR0VORVJBVE9SEAESDwoLTU9DS19TRVJWRVIQAhILCgdNQVRDSEVSEAMSDwoLSU5URVJBQ1RJT04QBCJSChJJbml0UGx1Z2luUmVzcG9uc2USPAoJY2F0YWxvZ3VlGAEgAygLMh4uaW8ucGFjdC5wbHVnaW4uQ2F0YWxvZ3VlRW50cnlSCWNhdGFsb2d1ZSJJCglDYXRhbG9ndWUSPAoJY2F0YWxvZ3VlGAEgAygLMh4uaW8ucGFjdC5wbHVnaW4uQ2F0YWxvZ3VlRW50cnlSCWNhdGFsb2d1ZSLlAQoEQm9keRIgCgtjb250ZW50VHlwZRgBIAEoCVILY29udGVudFR5cGUSNQoHY29udGVudBgCIAEoCzIbLmdvb2dsZS5wcm90b2J1Zi5CeXRlc1ZhbHVlUgdjb250ZW50Ek4KD2NvbnRlbnRUeXBlSGludBgDIAEoDjIkLmlvLnBhY3QucGx1Z2luLkJvZHkuQ29udGVudFR5cGVIaW50Ug9jb250ZW50VHlwZUhpbnQiNAoPQ29udGVudFR5cGVIaW50EgsKB0RFRkFVTFQQABIICgRURVhUEAESCgoGQklOQVJZEAIipQMKFkNvbXBhcmVDb250ZW50c1JlcXVlc3QSMAoIZXhwZWN0ZWQYASABKAsyFC5pby5wYWN0LnBsdWdpbi5Cb2R5UghleHBlY3RlZBIsCgZhY3R1YWwYAiABKAsyFC5pby5wYWN0LnBsdWdpbi5Cb2R5UgZhY3R1YWwSMgoVYWxsb3dfdW5leHBlY3RlZF9rZXlzGAMgASgIUhNhbGxvd1VuZXhwZWN0ZWRLZXlzEkcKBXJ1bGVzGAQgAygLMjEuaW8ucGFjdC5wbHVnaW4uQ29tcGFyZUNvbnRlbnRzUmVxdWVzdC5SdWxlc0VudHJ5UgVydWxlcxJVChNwbHVnaW5Db25maWd1cmF0aW9uGAUgASgLMiMuaW8ucGFjdC5wbHVnaW4uUGx1Z2luQ29uZmlndXJhdGlvblITcGx1Z2luQ29uZmlndXJhdGlvbhpXCgpSdWxlc0VudHJ5EhAKA2tleRgBIAEoCVIDa2V5EjMKBXZhbHVlGAIgASgLMh0uaW8ucGFjdC5wbHVnaW4uTWF0Y2hpbmdSdWxlc1IFdmFsdWU6AjgBIkkKE0NvbnRlbnRUeXBlTWlzbWF0Y2gSGgoIZXhwZWN0ZWQYASABKAlSCGV4cGVjdGVkEhYKBmFjdHVhbBgCIAEoCVIGYWN0dWFsIsMBCg9Db250ZW50TWlzbWF0Y2gSNwoIZXhwZWN0ZWQYASABKAsyGy5nb29nbGUucHJvdG9idWYuQnl0ZXNWYWx1ZVIIZXhwZWN0ZWQSMwoGYWN0dWFsGAIgASgLMhsuZ29vZ2xlLnByb3RvYnVmLkJ5dGVzVmFsdWVSBmFjdHVhbBIaCghtaXNtYXRjaBgDIAEoCVIIbWlzbWF0Y2gSEgoEcGF0aBgEIAEoCVIEcGF0aBISCgRkaWZmGAUgASgJUgRkaWZmIlQKEUNvbnRlbnRNaXNtYXRjaGVzEj8KCm1pc21hdGNoZXMYASADKAsyHy5pby5wYWN0LnBsdWdpbi5Db250ZW50TWlzbWF0Y2hSCm1pc21hdGNoZXMipwIKF0NvbXBhcmVDb250ZW50c1Jlc3BvbnNlEhQKBWVycm9yGAEgASgJUgVlcnJvchJHCgx0eXBlTWlzbWF0Y2gYAiABKAsyIy5pby5wYWN0LnBsdWdpbi5Db250ZW50VHlwZU1pc21hdGNoUgx0eXBlTWlzbWF0Y2gSTgoHcmVzdWx0cxgDIAMoCzI0LmlvLnBhY3QucGx1Z2luLkNvbXBhcmVDb250ZW50c1Jlc3BvbnNlLlJlc3VsdHNFbnRyeVIHcmVzdWx0cxpdCgxSZXN1bHRzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSNwoFdmFsdWUYAiABKAsyIS5pby5wYWN0LnBsdWdpbi5Db250ZW50TWlzbWF0Y2hlc1IFdmFsdWU6AjgBIoABChtDb25maWd1cmVJbnRlcmFjdGlvblJlcXVlc3QSIAoLY29udGVudFR5cGUYASABKAlSC2NvbnRlbnRUeXBlEj8KDmNvbnRlbnRzQ29uZmlnGAIgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdFIOY29udGVudHNDb25maWciUwoMTWF0Y2hpbmdSdWxlEhIKBHR5cGUYASABKAlSBHR5cGUSLwoGdmFsdWVzGAIgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdFIGdmFsdWVzIkEKDU1hdGNoaW5nUnVsZXMSMAoEcnVsZRgBIAMoCzIcLmlvLnBhY3QucGx1Z2luLk1hdGNoaW5nUnVsZVIEcnVsZSJQCglHZW5lcmF0b3ISEgoEdHlwZRgBIAEoCVIEdHlwZRIvCgZ2YWx1ZXMYAiABKAsyFy5nb29nbGUucHJvdG9idWYuU3RydWN0UgZ2YWx1ZXMisQEKE1BsdWdpbkNvbmZpZ3VyYXRpb24SUwoYaW50ZXJhY3Rpb25Db25maWd1cmF0aW9uGAEgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdFIYaW50ZXJhY3Rpb25Db25maWd1cmF0aW9uEkUKEXBhY3RDb25maWd1cmF0aW9uGAIgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdFIRcGFjdENvbmZpZ3VyYXRpb24iiAYKE0ludGVyYWN0aW9uUmVzcG9uc2USMAoIY29udGVudHMYASABKAsyFC5pby5wYWN0LnBsdWdpbi5Cb2R5Ughjb250ZW50cxJECgVydWxlcxgCIAMoCzIuLmlvLnBhY3QucGx1Z2luLkludGVyYWN0aW9uUmVzcG9uc2UuUnVsZXNFbnRyeVIFcnVsZXMSUwoKZ2VuZXJhdG9ycxgDIAMoCzIzLmlvLnBhY3QucGx1Z2luLkludGVyYWN0aW9uUmVzcG9uc2UuR2VuZXJhdG9yc0VudHJ5UgpnZW5lcmF0b3JzEkEKD21lc3NhZ2VNZXRhZGF0YRgEIAEoCzIXLmdvb2dsZS5wcm90b2J1Zi5TdHJ1Y3RSD21lc3NhZ2VNZXRhZGF0YRJVChNwbHVnaW5Db25maWd1cmF0aW9uGAUgASgLMiMuaW8ucGFjdC5wbHVnaW4uUGx1Z2luQ29uZmlndXJhdGlvblITcGx1Z2luQ29uZmlndXJhdGlvbhIsChFpbnRlcmFjdGlvbk1hcmt1cBgGIAEoCVIRaW50ZXJhY3Rpb25NYXJrdXASZAoVaW50ZXJhY3Rpb25NYXJrdXBUeXBlGAcgASgOMi4uaW8ucGFjdC5wbHVnaW4uSW50ZXJhY3Rpb25SZXNwb25zZS5NYXJrdXBUeXBlUhVpbnRlcmFjdGlvbk1hcmt1cFR5cGUSGgoIcGFydE5hbWUYCCABKAlSCHBhcnROYW1lGlcKClJ1bGVzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSMwoFdmFsdWUYAiABKAsyHS5pby5wYWN0LnBsdWdpbi5NYXRjaGluZ1J1bGVzUgV2YWx1ZToCOAEaWAoPR2VuZXJhdG9yc0VudHJ5EhAKA2tleRgBIAEoCVIDa2V5Ei8KBXZhbHVlGAIgASgLMhkuaW8ucGFjdC5wbHVnaW4uR2VuZXJhdG9yUgV2YWx1ZToCOAEiJwoKTWFya3VwVHlwZRIPCgtDT01NT05fTUFSSxAAEggKBEhUTUwQASLSAQocQ29uZmlndXJlSW50ZXJhY3Rpb25SZXNwb25zZRIUCgVlcnJvchgBIAEoCVIFZXJyb3ISRQoLaW50ZXJhY3Rpb24YAiADKAsyIy5pby5wYWN0LnBsdWdpbi5JbnRlcmFjdGlvblJlc3BvbnNlUgtpbnRlcmFjdGlvbhJVChNwbHVnaW5Db25maWd1cmF0aW9uGAMgASgLMiMuaW8ucGFjdC5wbHVnaW4uUGx1Z2luQ29uZmlndXJhdGlvblITcGx1Z2luQ29uZmlndXJhdGlvbiLTAgoWR2VuZXJhdGVDb250ZW50UmVxdWVzdBIwCghjb250ZW50cxgBIAEoCzIULmlvLnBhY3QucGx1Z2luLkJvZHlSCGNvbnRlbnRzElYKCmdlbmVyYXRvcnMYAiADKAsyNi5pby5wYWN0LnBsdWdpbi5HZW5lcmF0ZUNvbnRlbnRSZXF1ZXN0LkdlbmVyYXRvcnNFbnRyeVIKZ2VuZXJhdG9ycxJVChNwbHVnaW5Db25maWd1cmF0aW9uGAMgASgLMiMuaW8ucGFjdC5wbHVnaW4uUGx1Z2luQ29uZmlndXJhdGlvblITcGx1Z2luQ29uZmlndXJhdGlvbhpYCg9HZW5lcmF0b3JzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSLwoFdmFsdWUYAiABKAsyGS5pby5wYWN0LnBsdWdpbi5HZW5lcmF0b3JSBXZhbHVlOgI4ASJLChdHZW5lcmF0ZUNvbnRlbnRSZXNwb25zZRIwCghjb250ZW50cxgBIAEoCzIULmlvLnBhY3QucGx1Z2luLkJvZHlSCGNvbnRlbnRzMuIDCgpQYWN0UGx1Z2luElMKCkluaXRQbHVnaW4SIS5pby5wYWN0LnBsdWdpbi5Jbml0UGx1Z2luUmVxdWVzdBoiLmlvLnBhY3QucGx1Z2luLkluaXRQbHVnaW5SZXNwb25zZRJECg9VcGRhdGVDYXRhbG9ndWUSGS5pby5wYWN0LnBsdWdpbi5DYXRhbG9ndWUaFi5nb29nbGUucHJvdG9idWYuRW1wdHkSYgoPQ29tcGFyZUNvbnRlbnRzEiYuaW8ucGFjdC5wbHVnaW4uQ29tcGFyZUNvbnRlbnRzUmVxdWVzdBonLmlvLnBhY3QucGx1Z2luLkNvbXBhcmVDb250ZW50c1Jlc3BvbnNlEnEKFENvbmZpZ3VyZUludGVyYWN0aW9uEisuaW8ucGFjdC5wbHVnaW4uQ29uZmlndXJlSW50ZXJhY3Rpb25SZXF1ZXN0GiwuaW8ucGFjdC5wbHVnaW4uQ29uZmlndXJlSW50ZXJhY3Rpb25SZXNwb25zZRJiCg9HZW5lcmF0ZUNvbnRlbnQSJi5pby5wYWN0LnBsdWdpbi5HZW5lcmF0ZUNvbnRlbnRSZXF1ZXN0GicuaW8ucGFjdC5wbHVnaW4uR2VuZXJhdGVDb250ZW50UmVzcG9uc2VCEFoOaW8ucGFjdC5wbHVnaW5iBnByb3RvMw==").unwrap();
-    // let bytes1 = Bytes::copy_from_slice(bytes.as_slice());
-    // let fds = FileDescriptorSet::decode(bytes1);
-    // dbg!(fds);
+    // message Body {
+    //   // The content type of the body in MIME format (i.e. application/json)
+    //   string contentType = 1;
+    //   // Bytes of the actual content
+    //   google.protobuf.BytesValue content = 2;
+    //   // Enum of content type override. This is a hint on how the content type should be treated.
+    //   enum ContentTypeHint {
+    //     // Determine the form of the content using the default rules of the Pact implementation
+    //     DEFAULT = 0;
+    //     // Contents must always be treated as a text form
+    //     TEXT = 1;
+    //     // Contents must always be treated as a binary form
+    //     BINARY = 2;
+    //   }
+    //   // Content type override to apply (if required). If omitted, the default rules of the Pact implementation
+    //   // will be used
+    //   ContentTypeHint contentTypeHint = 3;
+    // }
 
     let body = Body {
       content_type: "application/json".to_string(),
@@ -379,45 +595,9 @@ mod tests {
     };
     let encoded = body.encode_to_vec();
 
-    let field1 = FieldDescriptorProto {
-      name: Some("contentType".to_string()),
-      number: Some(1),
-      label: None,
-      r#type: Some(field_descriptor_proto::Type::String as i32),
-      type_name: Some("String".to_string()),
-      extendee: None,
-      default_value: None,
-      oneof_index: None,
-      json_name: None,
-      options: None,
-      proto3_optional: None
-    };
-    let field2 = FieldDescriptorProto {
-      name: Some("content".to_string()),
-      number: Some(2),
-      label: None,
-      r#type: Some(field_descriptor_proto::Type::Message as i32),
-      type_name: Some(".google.protobuf.BytesValue".to_string()),
-      extendee: None,
-      default_value: None,
-      oneof_index: None,
-      json_name: None,
-      options: None,
-      proto3_optional: None
-    };
-    let field3 = FieldDescriptorProto {
-      name: Some("contentTypeHint".to_string()),
-      number: Some(3),
-      label: None,
-      r#type: Some(field_descriptor_proto::Type::Enum as i32),
-      type_name: Some(".io.pact.plugin.Body.ContentTypeHint".to_string()),
-      extendee: None,
-      default_value: None,
-      oneof_index: None,
-      json_name: None,
-      options: None,
-      proto3_optional: None
-    };
+    let field1 = string_field_descriptor!("contentType".to_string(), 1);
+    let field2 = message_field_descriptor!("content", 2, ".google.protobuf.BytesValue");
+    let field3 = enum_field_descriptor!("contentTypeHint", 3, ".io.pact.plugin.Body.ContentTypeHint");
     let descriptor = DescriptorProto {
       name: Some("Body".to_string()),
       field: vec![
@@ -462,23 +642,10 @@ mod tests {
     message.set_field(&field1, "contentType", MessageFieldValue {
       name: "contentType".to_string(),
       raw_value: Some("application/json".to_string()),
-      rtype: RType::String("application/json".to_string()),
-      proto_type: Type::String
+      rtype: RType::String("application/json".to_string())
     });
 
-    let bytes_field = FieldDescriptorProto {
-      name: Some("value".to_string()),
-      number: Some(1),
-      label: None,
-      r#type: Some(field_descriptor_proto::Type::Bytes as i32),
-      type_name: Some("bytes".to_string()),
-      extendee: None,
-      default_value: None,
-      oneof_index: None,
-      json_name: None,
-      options: None,
-      proto3_optional: None
-    };
+    let bytes_field = bytes_field_descriptor!("value", 1);
     let content_descriptor = DescriptorProto {
       name: Some("BytesValue".to_string()),
       field: vec![
@@ -497,21 +664,357 @@ mod tests {
     bytes_message.set_field(&bytes_field, "value", MessageFieldValue {
       name: "value".to_string(),
       raw_value: Some("{\"test\": true}".to_string()),
-      rtype: RType::Bytes("{\"test\": true}".as_bytes().to_vec()),
-      proto_type: Type::Bytes
+      rtype: RType::Bytes("{\"test\": true}".as_bytes().to_vec())
     });
 
     message.set_field(&field2, "content", MessageFieldValue {
       name: "content".to_string(),
       raw_value: Some("{\"test\": true}".to_string()),
-      rtype: RType::Message(bytes_message),
-      proto_type: Type::Message
+      rtype: RType::Message(bytes_message)
     });
     message.set_field(&field3, "contentTypeHint", MessageFieldValue {
       name: "contentTypeHint".to_string(),
       raw_value: Some("TEXT".to_string()),
-      rtype: RType::Enum("TEXT".to_string()),
-      proto_type: Type::Enum
+      rtype: RType::Enum("TEXT".to_string())
+    });
+
+    let result = message.encode_message().unwrap();
+    expect!(result.to_vec()).to(be_equal_to(encoded));
+  }
+
+  #[test_log::test]
+  fn encode_message_with_map_field_test() {
+    // message CompareContentsRequest {
+    //   // Expected body from the Pact interaction
+    //   Body expected = 1;
+    //   // Actual received body
+    //   Body actual = 2;
+    //   // If unexpected keys or attributes should be allowed. Setting this to false results in additional keys or fields
+    //   // will cause a mismatch
+    //   bool allow_unexpected_keys = 3;
+    //   // Map of expressions to matching rules. The expressions follow the documented Pact matching rule expressions
+    //   map<string, MatchingRules> rules = 4;
+    //   // Additional data added to the Pact/Interaction by the plugin
+    //   PluginConfiguration pluginConfiguration = 5;
+    // }
+
+    // let bytes = base64::decode("CuIFChxnb29nbGUvcHJvdG9idWYvc3RydWN0LnByb3RvEg9nb29nbGUucHJvdG9idWYimAEKBlN0cnVjdBI7CgZmaWVsZHMYASADKAsyIy5nb29nbGUucHJvdG9idWYuU3RydWN0LkZpZWxkc0VudHJ5UgZmaWVsZHMaUQoLRmllbGRzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSLAoFdmFsdWUYAiABKAsyFi5nb29nbGUucHJvdG9idWYuVmFsdWVSBXZhbHVlOgI4ASKyAgoFVmFsdWUSOwoKbnVsbF92YWx1ZRgBIAEoDjIaLmdvb2dsZS5wcm90b2J1Zi5OdWxsVmFsdWVIAFIJbnVsbFZhbHVlEiMKDG51bWJlcl92YWx1ZRgCIAEoAUgAUgtudW1iZXJWYWx1ZRIjCgxzdHJpbmdfdmFsdWUYAyABKAlIAFILc3RyaW5nVmFsdWUSHwoKYm9vbF92YWx1ZRgEIAEoCEgAUglib29sVmFsdWUSPAoMc3RydWN0X3ZhbHVlGAUgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdEgAUgtzdHJ1Y3RWYWx1ZRI7CgpsaXN0X3ZhbHVlGAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLkxpc3RWYWx1ZUgAUglsaXN0VmFsdWVCBgoEa2luZCI7CglMaXN0VmFsdWUSLgoGdmFsdWVzGAEgAygLMhYuZ29vZ2xlLnByb3RvYnVmLlZhbHVlUgZ2YWx1ZXMqGwoJTnVsbFZhbHVlEg4KCk5VTExfVkFMVUUQAEJ/ChNjb20uZ29vZ2xlLnByb3RvYnVmQgtTdHJ1Y3RQcm90b1ABWi9nb29nbGUuZ29sYW5nLm9yZy9wcm90b2J1Zi90eXBlcy9rbm93bi9zdHJ1Y3RwYvgBAaICA0dQQqoCHkdvb2dsZS5Qcm90b2J1Zi5XZWxsS25vd25UeXBlc2IGcHJvdG8zCoYECh5nb29nbGUvcHJvdG9idWYvd3JhcHBlcnMucHJvdG8SD2dvb2dsZS5wcm90b2J1ZiIjCgtEb3VibGVWYWx1ZRIUCgV2YWx1ZRgBIAEoAVIFdmFsdWUiIgoKRmxvYXRWYWx1ZRIUCgV2YWx1ZRgBIAEoAlIFdmFsdWUiIgoKSW50NjRWYWx1ZRIUCgV2YWx1ZRgBIAEoA1IFdmFsdWUiIwoLVUludDY0VmFsdWUSFAoFdmFsdWUYASABKARSBXZhbHVlIiIKCkludDMyVmFsdWUSFAoFdmFsdWUYASABKAVSBXZhbHVlIiMKC1VJbnQzMlZhbHVlEhQKBXZhbHVlGAEgASgNUgV2YWx1ZSIhCglCb29sVmFsdWUSFAoFdmFsdWUYASABKAhSBXZhbHVlIiMKC1N0cmluZ1ZhbHVlEhQKBXZhbHVlGAEgASgJUgV2YWx1ZSIiCgpCeXRlc1ZhbHVlEhQKBXZhbHVlGAEgASgMUgV2YWx1ZUKDAQoTY29tLmdvb2dsZS5wcm90b2J1ZkINV3JhcHBlcnNQcm90b1ABWjFnb29nbGUuZ29sYW5nLm9yZy9wcm90b2J1Zi90eXBlcy9rbm93bi93cmFwcGVyc3Bi+AEBogIDR1BCqgIeR29vZ2xlLlByb3RvYnVmLldlbGxLbm93blR5cGVzYgZwcm90bzMKvgEKG2dvb2dsZS9wcm90b2J1Zi9lbXB0eS5wcm90bxIPZ29vZ2xlLnByb3RvYnVmIgcKBUVtcHR5Qn0KE2NvbS5nb29nbGUucHJvdG9idWZCCkVtcHR5UHJvdG9QAVouZ29vZ2xlLmdvbGFuZy5vcmcvcHJvdG9idWYvdHlwZXMva25vd24vZW1wdHlwYvgBAaICA0dQQqoCHkdvb2dsZS5Qcm90b2J1Zi5XZWxsS25vd25UeXBlc2IGcHJvdG8zCv0iCgxwbHVnaW4ucHJvdG8SDmlvLnBhY3QucGx1Z2luGhxnb29nbGUvcHJvdG9idWYvc3RydWN0LnByb3RvGh5nb29nbGUvcHJvdG9idWYvd3JhcHBlcnMucHJvdG8aG2dvb2dsZS9wcm90b2J1Zi9lbXB0eS5wcm90byJVChFJbml0UGx1Z2luUmVxdWVzdBImCg5pbXBsZW1lbnRhdGlvbhgBIAEoCVIOaW1wbGVtZW50YXRpb24SGAoHdmVyc2lvbhgCIAEoCVIHdmVyc2lvbiLHAgoOQ2F0YWxvZ3VlRW50cnkSPAoEdHlwZRgBIAEoDjIoLmlvLnBhY3QucGx1Z2luLkNhdGFsb2d1ZUVudHJ5LkVudHJ5VHlwZVIEdHlwZRIQCgNrZXkYAiABKAlSA2tleRJCCgZ2YWx1ZXMYAyADKAsyKi5pby5wYWN0LnBsdWdpbi5DYXRhbG9ndWVFbnRyeS5WYWx1ZXNFbnRyeVIGdmFsdWVzGjkKC1ZhbHVlc0VudHJ5EhAKA2tleRgBIAEoCVIDa2V5EhQKBXZhbHVlGAIgASgJUgV2YWx1ZToCOAEiZgoJRW50cnlUeXBlEhMKD0NPTlRFTlRfTUFUQ0hFUhAAEhUKEUNPTlRFTlRfR0VORVJBVE9SEAESDwoLTU9DS19TRVJWRVIQAhILCgdNQVRDSEVSEAMSDwoLSU5URVJBQ1RJT04QBCJSChJJbml0UGx1Z2luUmVzcG9uc2USPAoJY2F0YWxvZ3VlGAEgAygLMh4uaW8ucGFjdC5wbHVnaW4uQ2F0YWxvZ3VlRW50cnlSCWNhdGFsb2d1ZSJJCglDYXRhbG9ndWUSPAoJY2F0YWxvZ3VlGAEgAygLMh4uaW8ucGFjdC5wbHVnaW4uQ2F0YWxvZ3VlRW50cnlSCWNhdGFsb2d1ZSLlAQoEQm9keRIgCgtjb250ZW50VHlwZRgBIAEoCVILY29udGVudFR5cGUSNQoHY29udGVudBgCIAEoCzIbLmdvb2dsZS5wcm90b2J1Zi5CeXRlc1ZhbHVlUgdjb250ZW50Ek4KD2NvbnRlbnRUeXBlSGludBgDIAEoDjIkLmlvLnBhY3QucGx1Z2luLkJvZHkuQ29udGVudFR5cGVIaW50Ug9jb250ZW50VHlwZUhpbnQiNAoPQ29udGVudFR5cGVIaW50EgsKB0RFRkFVTFQQABIICgRURVhUEAESCgoGQklOQVJZEAIipQMKFkNvbXBhcmVDb250ZW50c1JlcXVlc3QSMAoIZXhwZWN0ZWQYASABKAsyFC5pby5wYWN0LnBsdWdpbi5Cb2R5UghleHBlY3RlZBIsCgZhY3R1YWwYAiABKAsyFC5pby5wYWN0LnBsdWdpbi5Cb2R5UgZhY3R1YWwSMgoVYWxsb3dfdW5leHBlY3RlZF9rZXlzGAMgASgIUhNhbGxvd1VuZXhwZWN0ZWRLZXlzEkcKBXJ1bGVzGAQgAygLMjEuaW8ucGFjdC5wbHVnaW4uQ29tcGFyZUNvbnRlbnRzUmVxdWVzdC5SdWxlc0VudHJ5UgVydWxlcxJVChNwbHVnaW5Db25maWd1cmF0aW9uGAUgASgLMiMuaW8ucGFjdC5wbHVnaW4uUGx1Z2luQ29uZmlndXJhdGlvblITcGx1Z2luQ29uZmlndXJhdGlvbhpXCgpSdWxlc0VudHJ5EhAKA2tleRgBIAEoCVIDa2V5EjMKBXZhbHVlGAIgASgLMh0uaW8ucGFjdC5wbHVnaW4uTWF0Y2hpbmdSdWxlc1IFdmFsdWU6AjgBIkkKE0NvbnRlbnRUeXBlTWlzbWF0Y2gSGgoIZXhwZWN0ZWQYASABKAlSCGV4cGVjdGVkEhYKBmFjdHVhbBgCIAEoCVIGYWN0dWFsIsMBCg9Db250ZW50TWlzbWF0Y2gSNwoIZXhwZWN0ZWQYASABKAsyGy5nb29nbGUucHJvdG9idWYuQnl0ZXNWYWx1ZVIIZXhwZWN0ZWQSMwoGYWN0dWFsGAIgASgLMhsuZ29vZ2xlLnByb3RvYnVmLkJ5dGVzVmFsdWVSBmFjdHVhbBIaCghtaXNtYXRjaBgDIAEoCVIIbWlzbWF0Y2gSEgoEcGF0aBgEIAEoCVIEcGF0aBISCgRkaWZmGAUgASgJUgRkaWZmIlQKEUNvbnRlbnRNaXNtYXRjaGVzEj8KCm1pc21hdGNoZXMYASADKAsyHy5pby5wYWN0LnBsdWdpbi5Db250ZW50TWlzbWF0Y2hSCm1pc21hdGNoZXMipwIKF0NvbXBhcmVDb250ZW50c1Jlc3BvbnNlEhQKBWVycm9yGAEgASgJUgVlcnJvchJHCgx0eXBlTWlzbWF0Y2gYAiABKAsyIy5pby5wYWN0LnBsdWdpbi5Db250ZW50VHlwZU1pc21hdGNoUgx0eXBlTWlzbWF0Y2gSTgoHcmVzdWx0cxgDIAMoCzI0LmlvLnBhY3QucGx1Z2luLkNvbXBhcmVDb250ZW50c1Jlc3BvbnNlLlJlc3VsdHNFbnRyeVIHcmVzdWx0cxpdCgxSZXN1bHRzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSNwoFdmFsdWUYAiABKAsyIS5pby5wYWN0LnBsdWdpbi5Db250ZW50TWlzbWF0Y2hlc1IFdmFsdWU6AjgBIoABChtDb25maWd1cmVJbnRlcmFjdGlvblJlcXVlc3QSIAoLY29udGVudFR5cGUYASABKAlSC2NvbnRlbnRUeXBlEj8KDmNvbnRlbnRzQ29uZmlnGAIgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdFIOY29udGVudHNDb25maWciUwoMTWF0Y2hpbmdSdWxlEhIKBHR5cGUYASABKAlSBHR5cGUSLwoGdmFsdWVzGAIgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdFIGdmFsdWVzIkEKDU1hdGNoaW5nUnVsZXMSMAoEcnVsZRgBIAMoCzIcLmlvLnBhY3QucGx1Z2luLk1hdGNoaW5nUnVsZVIEcnVsZSJQCglHZW5lcmF0b3ISEgoEdHlwZRgBIAEoCVIEdHlwZRIvCgZ2YWx1ZXMYAiABKAsyFy5nb29nbGUucHJvdG9idWYuU3RydWN0UgZ2YWx1ZXMisQEKE1BsdWdpbkNvbmZpZ3VyYXRpb24SUwoYaW50ZXJhY3Rpb25Db25maWd1cmF0aW9uGAEgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdFIYaW50ZXJhY3Rpb25Db25maWd1cmF0aW9uEkUKEXBhY3RDb25maWd1cmF0aW9uGAIgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdFIRcGFjdENvbmZpZ3VyYXRpb24iiAYKE0ludGVyYWN0aW9uUmVzcG9uc2USMAoIY29udGVudHMYASABKAsyFC5pby5wYWN0LnBsdWdpbi5Cb2R5Ughjb250ZW50cxJECgVydWxlcxgCIAMoCzIuLmlvLnBhY3QucGx1Z2luLkludGVyYWN0aW9uUmVzcG9uc2UuUnVsZXNFbnRyeVIFcnVsZXMSUwoKZ2VuZXJhdG9ycxgDIAMoCzIzLmlvLnBhY3QucGx1Z2luLkludGVyYWN0aW9uUmVzcG9uc2UuR2VuZXJhdG9yc0VudHJ5UgpnZW5lcmF0b3JzEkEKD21lc3NhZ2VNZXRhZGF0YRgEIAEoCzIXLmdvb2dsZS5wcm90b2J1Zi5TdHJ1Y3RSD21lc3NhZ2VNZXRhZGF0YRJVChNwbHVnaW5Db25maWd1cmF0aW9uGAUgASgLMiMuaW8ucGFjdC5wbHVnaW4uUGx1Z2luQ29uZmlndXJhdGlvblITcGx1Z2luQ29uZmlndXJhdGlvbhIsChFpbnRlcmFjdGlvbk1hcmt1cBgGIAEoCVIRaW50ZXJhY3Rpb25NYXJrdXASZAoVaW50ZXJhY3Rpb25NYXJrdXBUeXBlGAcgASgOMi4uaW8ucGFjdC5wbHVnaW4uSW50ZXJhY3Rpb25SZXNwb25zZS5NYXJrdXBUeXBlUhVpbnRlcmFjdGlvbk1hcmt1cFR5cGUSGgoIcGFydE5hbWUYCCABKAlSCHBhcnROYW1lGlcKClJ1bGVzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSMwoFdmFsdWUYAiABKAsyHS5pby5wYWN0LnBsdWdpbi5NYXRjaGluZ1J1bGVzUgV2YWx1ZToCOAEaWAoPR2VuZXJhdG9yc0VudHJ5EhAKA2tleRgBIAEoCVIDa2V5Ei8KBXZhbHVlGAIgASgLMhkuaW8ucGFjdC5wbHVnaW4uR2VuZXJhdG9yUgV2YWx1ZToCOAEiJwoKTWFya3VwVHlwZRIPCgtDT01NT05fTUFSSxAAEggKBEhUTUwQASLSAQocQ29uZmlndXJlSW50ZXJhY3Rpb25SZXNwb25zZRIUCgVlcnJvchgBIAEoCVIFZXJyb3ISRQoLaW50ZXJhY3Rpb24YAiADKAsyIy5pby5wYWN0LnBsdWdpbi5JbnRlcmFjdGlvblJlc3BvbnNlUgtpbnRlcmFjdGlvbhJVChNwbHVnaW5Db25maWd1cmF0aW9uGAMgASgLMiMuaW8ucGFjdC5wbHVnaW4uUGx1Z2luQ29uZmlndXJhdGlvblITcGx1Z2luQ29uZmlndXJhdGlvbiLTAgoWR2VuZXJhdGVDb250ZW50UmVxdWVzdBIwCghjb250ZW50cxgBIAEoCzIULmlvLnBhY3QucGx1Z2luLkJvZHlSCGNvbnRlbnRzElYKCmdlbmVyYXRvcnMYAiADKAsyNi5pby5wYWN0LnBsdWdpbi5HZW5lcmF0ZUNvbnRlbnRSZXF1ZXN0LkdlbmVyYXRvcnNFbnRyeVIKZ2VuZXJhdG9ycxJVChNwbHVnaW5Db25maWd1cmF0aW9uGAMgASgLMiMuaW8ucGFjdC5wbHVnaW4uUGx1Z2luQ29uZmlndXJhdGlvblITcGx1Z2luQ29uZmlndXJhdGlvbhpYCg9HZW5lcmF0b3JzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSLwoFdmFsdWUYAiABKAsyGS5pby5wYWN0LnBsdWdpbi5HZW5lcmF0b3JSBXZhbHVlOgI4ASJLChdHZW5lcmF0ZUNvbnRlbnRSZXNwb25zZRIwCghjb250ZW50cxgBIAEoCzIULmlvLnBhY3QucGx1Z2luLkJvZHlSCGNvbnRlbnRzMuIDCgpQYWN0UGx1Z2luElMKCkluaXRQbHVnaW4SIS5pby5wYWN0LnBsdWdpbi5Jbml0UGx1Z2luUmVxdWVzdBoiLmlvLnBhY3QucGx1Z2luLkluaXRQbHVnaW5SZXNwb25zZRJECg9VcGRhdGVDYXRhbG9ndWUSGS5pby5wYWN0LnBsdWdpbi5DYXRhbG9ndWUaFi5nb29nbGUucHJvdG9idWYuRW1wdHkSYgoPQ29tcGFyZUNvbnRlbnRzEiYuaW8ucGFjdC5wbHVnaW4uQ29tcGFyZUNvbnRlbnRzUmVxdWVzdBonLmlvLnBhY3QucGx1Z2luLkNvbXBhcmVDb250ZW50c1Jlc3BvbnNlEnEKFENvbmZpZ3VyZUludGVyYWN0aW9uEisuaW8ucGFjdC5wbHVnaW4uQ29uZmlndXJlSW50ZXJhY3Rpb25SZXF1ZXN0GiwuaW8ucGFjdC5wbHVnaW4uQ29uZmlndXJlSW50ZXJhY3Rpb25SZXNwb25zZRJiCg9HZW5lcmF0ZUNvbnRlbnQSJi5pby5wYWN0LnBsdWdpbi5HZW5lcmF0ZUNvbnRlbnRSZXF1ZXN0GicuaW8ucGFjdC5wbHVnaW4uR2VuZXJhdGVDb250ZW50UmVzcG9uc2VCEFoOaW8ucGFjdC5wbHVnaW5iBnByb3RvMw==").unwrap();
+    // let bytes1 = Bytes::copy_from_slice(bytes.as_slice());
+    // let fds = FileDescriptorSet::decode(bytes1);
+    // dbg!(fds);
+
+    let compare_message = CompareContentsRequest {
+      allow_unexpected_keys: true,
+      rules: hashmap! {
+        "$.one".to_string() => MatchingRules {
+          rule: vec![
+            MatchingRule {
+              r#type: "Type".to_string(),
+              values: None
+            }
+          ]
+        },
+        "$.two".to_string() => MatchingRules {
+          rule: vec![
+            MatchingRule {
+              r#type: "Regex".to_string(),
+              values: Some(::prost_types::Struct {
+                fields: btreemap! {
+                  "regex".to_string() => ::prost_types::Value {
+                    kind: Some(Kind::StringValue(".*".to_string()))
+                  }
+                }
+              })
+            }
+          ]
+        }
+      },
+      .. CompareContentsRequest::default()
+    };
+    let encoded = compare_message.encode_to_vec();
+
+    let field1 = bool_field_descriptor!("allowUnexpectedKeys", 3);
+    let field2 = FieldDescriptorProto {
+      name: Some("rules".to_string()),
+      number: Some(4),
+      label: Some(Repeated as i32),
+      r#type: Some(field_descriptor_proto::Type::Message as i32),
+      type_name: Some(".io.pact.plugin.CompareContentsRequest.RulesEntry".to_string()),
+      extendee: None,
+      default_value: None,
+      oneof_index: None,
+      json_name: None,
+      options: None,
+      proto3_optional: None
+    };
+    let descriptor = DescriptorProto {
+      name: Some("CompareContentsRequest".to_string()),
+      field: vec![
+        field1.clone(),
+        field2.clone()
+      ],
+      extension: vec![],
+      nested_type: vec![
+        DescriptorProto {
+          name: Some("RulesEntry".to_string()),
+          field: vec![
+            string_field_descriptor!("key", 1),
+            message_field_descriptor!("value", 2, ".io.pact.plugin.MatchingRules")
+          ],
+          extension: vec![],
+          nested_type: vec![],
+          enum_type: vec![],
+          extension_range: vec![],
+          oneof_decl: vec![],
+          options: Some(MessageOptions {
+            message_set_wire_format: None,
+            no_standard_descriptor_accessor: None,
+            deprecated: None,
+            map_entry: Some(true),
+            uninterpreted_option: vec![]
+          }),
+          reserved_range: vec![],
+          reserved_name: vec![]
+        }
+      ],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![]
+    };
+
+    let mut message = MessageBuilder::new(&descriptor, "CompareContentsRequest");
+    message.set_field(&field1, "allowUnexpectedKeys", MessageFieldValue {
+      name: "allowUnexpectedKeys".to_string(),
+      raw_value: Some("true".to_string()),
+      rtype: RType::Boolean(true)
+    });
+
+    let matching_rule_field = FieldDescriptorProto {
+      name: Some("rule".to_string()),
+      number: Some(1),
+      label: Some(Repeated as i32),
+      r#type: Some(field_descriptor_proto::Type::Message as i32),
+      type_name: Some(".io.pact.plugin.MatchingRule".to_string()),
+      extendee: None,
+      default_value: None,
+      oneof_index: None,
+      json_name: Some("rule".to_string()),
+      options: None,
+      proto3_optional: None,
+    };
+    let rule_descriptor = DescriptorProto {
+      name: Some("MatchingRules".to_string()),
+      field: vec![
+        matching_rule_field.clone()
+      ],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![],
+    };
+    let mut matching_rules = MessageBuilder::new(&rule_descriptor, "MatchingRules");
+
+    let type_field_descriptor = string_field_descriptor!("type", 1);
+    let values_field_descriptor = message_field_descriptor!("values", 2, ".google.protobuf.Struct");
+    let matching_rule_descriptor = DescriptorProto {
+      name: Some("MatchingRule".to_string()),
+      field: vec![
+        type_field_descriptor.clone(),
+        values_field_descriptor.clone()
+      ],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![]
+    };
+    let mut matching_rule_1 = MessageBuilder::new(&matching_rule_descriptor, "MatchingRule");
+    matching_rule_1.set_field(&type_field_descriptor, "type", MessageFieldValue {
+      name: "type".to_string(),
+      raw_value: Some("Type".to_string()),
+      rtype: RType::String("Type".to_string())
+    });
+
+    matching_rules.add_repeated_field_value(&matching_rule_field, "rule", MessageFieldValue {
+      name: "".to_string(),
+      raw_value: None,
+      rtype: RType::Message(matching_rule_1)
+    });
+
+    let mut rule2 = MessageBuilder::new(&rule_descriptor, "MatchingRules");
+    let mut matching_rule_2 = MessageBuilder::new(&matching_rule_descriptor, "MatchingRule");
+    matching_rule_2.set_field(&type_field_descriptor, "type", MessageFieldValue {
+      name: "type".to_string(),
+      raw_value: Some("Regex".to_string()),
+      rtype: RType::String("Regex".to_string())
+    });
+
+    let struct_fields_descriptor = FieldDescriptorProto {
+      name: Some("fields".to_string()),
+      number: Some(1),
+      label: Some(Repeated as i32),
+      r#type: Some(field_descriptor_proto::Type::Message as i32),
+      type_name: Some(".google.protobuf.Struct.FieldsEntry".to_string()),
+      extendee: None,
+      default_value: None,
+      oneof_index: None,
+      json_name: Some("fields".to_string()),
+      options: None,
+      proto3_optional: None,
+    };
+    let value_descriptor = FieldDescriptorProto {
+      name: Some("value".to_string()),
+      number: Some(2),
+      label: Some(Optional as i32),
+      r#type: Some(field_descriptor_proto::Type::Message as i32),
+      type_name: Some(".google.protobuf.Value".to_string()),
+      extendee: None,
+      default_value: None,
+      oneof_index: None,
+      json_name: Some("value".to_string()),
+      options: None,
+      proto3_optional: None
+    };
+    let struct_descriptor = DescriptorProto {
+      name: Some("Struct".to_string()),
+      field: vec![
+        struct_fields_descriptor.clone()
+      ],
+      extension: vec![],
+      nested_type: vec![
+        DescriptorProto {
+          name: Some("FieldsEntry".to_string()),
+          field: vec![
+            FieldDescriptorProto {
+              name: Some("key".to_string()),
+              number: Some(1),
+              label: Some(Optional as i32),
+              r#type: Some(field_descriptor_proto::Type::String as i32),
+              type_name: None,
+              extendee: None,
+              default_value: None,
+              oneof_index: None,
+              json_name: Some("key".to_string()),
+              options: None,
+              proto3_optional: None,
+            },
+            value_descriptor.clone()
+          ],
+          extension: vec![],
+          nested_type: vec![],
+          enum_type: vec![],
+          extension_range: vec![],
+          oneof_decl: vec![],
+          options: Some(
+            MessageOptions {
+              message_set_wire_format: None,
+              no_standard_descriptor_accessor: None,
+              deprecated: None,
+              map_entry: Some(true),
+              uninterpreted_option: vec![]
+            },
+          ),
+          reserved_range: vec![],
+          reserved_name: vec![]
+        },
+      ],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![]
+    };
+
+    let value_string_field = FieldDescriptorProto {
+      name: Some("string_value".to_string()),
+      number: Some(3),
+      label: Some(Optional as i32),
+      r#type: Some(field_descriptor_proto::Type::String as i32),
+      type_name: None,
+      extendee: None,
+      default_value: None,
+      oneof_index: Some(0),
+      json_name: Some("stringValue".to_string()),
+      options: None,
+      proto3_optional: None,
+    };
+    let value_descriptor = DescriptorProto {
+      name: Some("Value".to_string()),
+      field: vec![
+        value_string_field.clone()
+      ],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![
+        OneofDescriptorProto {
+          name: Some("kind".to_string()),
+          options: None,
+        },
+      ],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![]
+    };
+    let mut regex_values = MessageBuilder::new(&value_descriptor, "Value");
+    regex_values.set_field(&value_string_field, "string_value", MessageFieldValue {
+      name: "string_value".to_string(),
+      raw_value: None,
+      rtype: RType::String(".*".to_string())
+    });
+
+    let mut matching_rule_values = MessageBuilder::new(&struct_descriptor, "Struct");
+    matching_rule_values.add_map_field_value(&struct_fields_descriptor, "fields", MessageFieldValue {
+      name: "key".to_string(),
+      raw_value: None,
+      rtype: RType::String("regex".to_string())
+    }, MessageFieldValue {
+      name: "value".to_string(),
+      raw_value: None,
+      rtype: RType::Message(regex_values)
+    });
+
+    matching_rule_2.set_field(&values_field_descriptor, "values", MessageFieldValue {
+      name: "values".to_string(),
+      raw_value: None,
+      rtype: RType::Message(matching_rule_values)
+    });
+
+    rule2.add_repeated_field_value(&matching_rule_field, "rule", MessageFieldValue {
+      name: "".to_string(),
+      raw_value: None,
+      rtype: RType::Message(matching_rule_2)
+    });
+
+    message.add_map_field_value(&field2, "rules", MessageFieldValue {
+      name: "key".to_string(),
+      raw_value: None,
+      rtype: RType::String("$.two".to_string())
+    }, MessageFieldValue {
+      name: "value".to_string(),
+      raw_value: None,
+      rtype: RType::Message(rule2)
+    });
+    message.add_map_field_value(&field2, "rules", MessageFieldValue {
+      name: "key".to_string(),
+      raw_value: None,
+      rtype: RType::String("$.one".to_string())
+    }, MessageFieldValue {
+      name: "value".to_string(),
+      raw_value: Some("".to_string()),
+      rtype: RType::Message(matching_rules)
     });
 
     let result = message.encode_message().unwrap();
