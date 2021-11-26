@@ -1,13 +1,13 @@
 //! Builder for creating protobuf messages based on a descriptor
 
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::btree_map::Entry;
+use std::collections::BTreeMap;
 
 use anyhow::anyhow;
 use bytes::{BufMut, Bytes, BytesMut};
 use itertools::Itertools;
 use log::trace;
-use maplit::hashmap;
+use maplit::btreemap;
 use prost::encoding::{encode_key, encode_varint, string, WireType};
 use prost_types::{DescriptorProto, FieldDescriptorProto};
 use prost_types::field_descriptor_proto::Type;
@@ -44,7 +44,7 @@ pub struct MessageBuilder {
   /// Message name
   pub message_name: String,
 
-  fields: HashMap<String, FieldValueInner>
+  fields: BTreeMap<String, FieldValueInner>
 }
 
 impl MessageBuilder {
@@ -53,7 +53,7 @@ impl MessageBuilder {
     MessageBuilder {
       descriptor: descriptor.clone(),
       message_name: message_name.to_string(),
-      fields: hashmap!{}
+      fields: btreemap!{}
     }
   }
 
@@ -125,8 +125,8 @@ impl MessageBuilder {
     if let Some(value) = field_data.values.first() {
       if let Some(tag) = field_data.descriptor.number {
         match field_data.proto_type {
-          Type::Double => todo!(),
-          Type::Float => todo!(),
+          Type::Double => prost::encoding::double::encode(tag as u32, &value.rtype.as_f64()?, &mut buffer),
+          Type::Float => prost::encoding::float::encode(tag as u32, &value.rtype.as_f32()?, &mut buffer),
           Type::Int64 => todo!(),
           Type::Uint64 => todo!(),
           Type::Int32 => todo!(),
@@ -220,7 +220,7 @@ impl MessageBuilder {
             rtype: RType::Message(MessageBuilder {
               descriptor: entry_proto.clone(),
               message_name: entry_name.to_string(),
-              fields: hashmap! {
+              fields: btreemap! {
                 "key".to_string() => FieldValueInner {
                   values: vec![ k.clone() ],
                   descriptor: key_proto.clone(),
@@ -316,6 +316,38 @@ pub enum RType {
   Enum(String),
   /// Embedded message
   Message(MessageBuilder)
+}
+
+impl RType {
+  /// Convert this value to a double
+  pub fn as_f64(&self) -> anyhow::Result<f64> {
+    match self {
+      RType::String(s) => s.parse::<f64>().map_err(|err| anyhow!(err)),
+      RType::Boolean(b) => Ok(*b as u8 as f64),
+      RType::UInteger32(u) => Ok(*u as f64),
+      RType::Integer32(i) => Ok(*i as f64),
+      RType::UInteger64(u) => Ok(*u as f64),
+      RType::Integer64(i) => Ok(*i as f64),
+      RType::Float(f) => Ok(*f as f64),
+      RType::Double(d) => Ok(*d),
+      _ => Err(anyhow!("Can't convert {:?} to f64", self))
+    }
+  }
+
+  /// Convert this value to a float
+  pub fn as_f32(&self) -> anyhow::Result<f32> {
+    match self {
+      RType::String(s) => s.parse::<f32>().map_err(|err| anyhow!(err)),
+      RType::Boolean(b) => Ok(*b as u8 as f32),
+      RType::UInteger32(u) => Ok(*u as f32),
+      RType::Integer32(i) => Ok(*i as f32),
+      RType::UInteger64(u) => Ok(*u as f32),
+      RType::Integer64(i) => Ok(*i as f32),
+      RType::Float(f) => Ok(*f),
+      RType::Double(d) => Ok(*d as f32),
+      _ => Err(anyhow!("Can't convert {:?} to f64", self))
+    }
+  }
 }
 
 /// Value of a message field
@@ -1001,20 +1033,20 @@ mod tests {
     message.add_map_field_value(&field2, "rules", MessageFieldValue {
       name: "key".to_string(),
       raw_value: None,
-      rtype: RType::String("$.two".to_string())
-    }, MessageFieldValue {
-      name: "value".to_string(),
-      raw_value: None,
-      rtype: RType::Message(rule2)
-    });
-    message.add_map_field_value(&field2, "rules", MessageFieldValue {
-      name: "key".to_string(),
-      raw_value: None,
       rtype: RType::String("$.one".to_string())
     }, MessageFieldValue {
       name: "value".to_string(),
       raw_value: Some("".to_string()),
       rtype: RType::Message(matching_rules)
+    });
+    message.add_map_field_value(&field2, "rules", MessageFieldValue {
+      name: "key".to_string(),
+      raw_value: None,
+      rtype: RType::String("$.two".to_string())
+    }, MessageFieldValue {
+      name: "value".to_string(),
+      raw_value: None,
+      rtype: RType::Message(rule2)
     });
 
     let result = message.encode_message().unwrap();
