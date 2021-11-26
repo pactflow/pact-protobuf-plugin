@@ -111,7 +111,7 @@ impl MessageBuilder {
     for (_, field_data) in self.fields.iter()
       .sorted_by(|(_, a), (_, b)| Ord::cmp(&a.descriptor.number.unwrap_or_default(), &b.descriptor.number.unwrap_or_default())) {
       match field_data.field_type {
-        MessageFieldValueType::Normal => self.encode_single_field(&mut buffer, field_data)?,
+        MessageFieldValueType::Normal => self.encode_single_field(&mut buffer, field_data, field_data.values.first().cloned())?,
         MessageFieldValueType::Map => self.encode_map_field(&mut buffer, field_data)?,
         MessageFieldValueType::Repeated => self.encode_repeated_field(&mut buffer, field_data)?
       }
@@ -120,28 +120,21 @@ impl MessageBuilder {
     Ok(buffer.freeze())
   }
 
-  fn encode_single_field(&self, mut buffer: &mut BytesMut, field_data: &FieldValueInner) -> anyhow::Result<()> {
-    trace!("encode_single_field({:?})", field_data);
-    if let Some(value) = field_data.values.first() {
+  fn encode_single_field(&self, mut buffer: &mut BytesMut, field_data: &FieldValueInner, value: Option<MessageFieldValue>) -> anyhow::Result<()> {
+    trace!("encode_single_field({:?}, {:?})", field_data, value);
+    if let Some(value) = value {
       if let Some(tag) = field_data.descriptor.number {
         match field_data.proto_type {
           Type::Double => prost::encoding::double::encode(tag as u32, &value.rtype.as_f64()?, &mut buffer),
           Type::Float => prost::encoding::float::encode(tag as u32, &value.rtype.as_f32()?, &mut buffer),
-          Type::Int64 => todo!(),
-          Type::Uint64 => todo!(),
-          Type::Int32 => todo!(),
-          Type::Fixed64 => todo!(),
-          Type::Fixed32 => todo!(),
-          Type::Bool => if let RType::Boolean(b) = &value.rtype {
-            prost::encoding::bool::encode(tag as u32, b, &mut buffer);
-          } else {
-            return Err(anyhow!("Mismatched types, expected a boolean but got {:?}", value.rtype));
-          }
-          Type::String => if let RType::String(s) = &value.rtype {
-            string::encode(tag as u32, s, &mut buffer);
-          } else {
-            return Err(anyhow!("Mismatched types, expected a string but got {:?}", value.rtype));
-          }
+          Type::Int64 => prost::encoding::int64::encode(tag as u32, &value.rtype.as_i64()?, &mut buffer),
+          Type::Uint64 => prost::encoding::uint64::encode(tag as u32, &value.rtype.as_u64()?, &mut buffer),
+          Type::Int32 => prost::encoding::int32::encode(tag as u32, &value.rtype.as_i32()?, &mut buffer),
+          Type::Uint32 => prost::encoding::uint32::encode(tag as u32, &value.rtype.as_u32()?, &mut buffer),
+          Type::Fixed64 => prost::encoding::fixed64::encode(tag as u32, &value.rtype.as_u64()?, &mut buffer),
+          Type::Fixed32 => prost::encoding::fixed32::encode(tag as u32, &value.rtype.as_u32()?, &mut buffer),
+          Type::Bool => prost::encoding::bool::encode(tag as u32, &value.rtype.as_bool()?, &mut buffer),
+          Type::String => string::encode(tag as u32, &value.rtype.as_str()?, &mut buffer),
           Type::Group => todo!(),
           Type::Message => if let RType::Message(m) = &value.rtype {
             let message_bytes = m.encode_message()?;
@@ -156,16 +149,15 @@ impl MessageBuilder {
           } else {
             return Err(anyhow!("Mismatched types, expected a byte array but got {:?}", value.rtype));
           }
-          Type::Uint32 => todo!(),
           Type::Enum => if let RType::Enum(name) = &value.rtype {
-            self.encode_enum_value(&field_data.descriptor, value, tag, name, &mut buffer)?;
+            self.encode_enum_value(&field_data.descriptor, &value, tag, name, &mut buffer)?;
           } else {
             return Err(anyhow!("Mismatched types, expected an enum but got {:?}", value.rtype));
           }
-          Type::Sfixed32 => todo!(),
-          Type::Sfixed64 => todo!(),
-          Type::Sint32 => todo!(),
-          Type::Sint64 => todo!()
+          Type::Sfixed32 => prost::encoding::sfixed32::encode(tag as u32, &value.rtype.as_i32()?, &mut buffer),
+          Type::Sfixed64 => prost::encoding::sfixed64::encode(tag as u32, &value.rtype.as_i64()?, &mut buffer),
+          Type::Sint32 => prost::encoding::sint32::encode(tag as u32, &value.rtype.as_i32()?, &mut buffer),
+          Type::Sint64 => prost::encoding::sint64::encode(tag as u32, &value.rtype.as_i64()?, &mut buffer)
         }
       }
     }
@@ -252,39 +244,8 @@ impl MessageBuilder {
   fn encode_repeated_field(&self, buffer: &mut BytesMut, field_value: &FieldValueInner) -> anyhow::Result<()> {
     trace!("encode_repeated_field({:?})", field_value);
     if !field_value.values.is_empty() {
-      let tag = field_value.descriptor.number
-        .ok_or_else(|| anyhow!("Tag was not set for field {}", field_value.descriptor.name.clone().unwrap_or_default()))?;
       for value in &field_value.values {
-        trace!("encode_key({}, {})", tag, WireType::LengthDelimited as u8);
-        encode_key(tag as u32, WireType::LengthDelimited, buffer);
-        match field_value.proto_type {
-          Type::Double => todo!(),
-          Type::Float => todo!(),
-          Type::Int64 => todo!(),
-          Type::Uint64 => todo!(),
-          Type::Int32 => todo!(),
-          Type::Fixed64 => todo!(),
-          Type::Fixed32 => todo!(),
-          Type::Bool => todo!(),
-          Type::String => todo!(),
-          Type::Group => todo!(),
-          Type::Message => {
-            if let RType::Message(m) = &value.rtype {
-              let message_bytes = m.encode_message()?;
-              encode_varint(message_bytes.len() as u64, buffer);
-              buffer.put_slice(&message_bytes);
-            } else {
-              return Err(anyhow!("Mismatched types, expected a message builder but got {:?}", value.rtype));
-            }
-          }
-          Type::Bytes => todo!(),
-          Type::Uint32 => todo!(),
-          Type::Enum => todo!(),
-          Type::Sfixed32 => todo!(),
-          Type::Sfixed64 => todo!(),
-          Type::Sint32 => todo!(),
-          Type::Sint64 => todo!(),
-        }
+        self.encode_single_field(buffer, field_value, Some(value.clone()))?;
       }
     }
     Ok(())
@@ -346,6 +307,96 @@ impl RType {
       RType::Float(f) => Ok(*f),
       RType::Double(d) => Ok(*d as f32),
       _ => Err(anyhow!("Can't convert {:?} to f64", self))
+    }
+  }
+
+  /// Convert this value to a u64
+  pub fn as_u64(&self) -> anyhow::Result<u64> {
+    match self {
+      RType::String(s) => s.parse::<u64>().map_err(|err| anyhow!(err)),
+      RType::Boolean(b) => Ok(*b as u64),
+      RType::UInteger32(u) => Ok(*u as u64),
+      RType::Integer32(i) => Ok(*i as u64),
+      RType::UInteger64(u) => Ok(*u),
+      RType::Integer64(i) => Ok(*i as u64),
+      RType::Float(f) => Ok(*f as u64),
+      RType::Double(d) => Ok(*d as u64),
+      _ => Err(anyhow!("Can't convert {:?} to u64", self))
+    }
+  }
+
+  /// Convert this value to a i64
+  pub fn as_i64(&self) -> anyhow::Result<i64> {
+    match self {
+      RType::String(s) => s.parse::<i64>().map_err(|err| anyhow!(err)),
+      RType::Boolean(b) => Ok(*b as i64),
+      RType::UInteger32(u) => Ok(*u as i64),
+      RType::Integer32(i) => Ok(*i as i64),
+      RType::UInteger64(u) => Ok(*u as i64),
+      RType::Integer64(i) => Ok(*i),
+      RType::Float(f) => Ok(*f as i64),
+      RType::Double(d) => Ok(*d as i64),
+      _ => Err(anyhow!("Can't convert {:?} to i64", self))
+    }
+  }
+
+  /// Convert this value to a u32
+  pub fn as_u32(&self) -> anyhow::Result<u32> {
+    match self {
+      RType::String(s) => s.parse::<u32>().map_err(|err| anyhow!(err)),
+      RType::Boolean(b) => Ok(*b as u32),
+      RType::UInteger32(u) => Ok(*u),
+      RType::Integer32(i) => Ok(*i as u32),
+      RType::UInteger64(u) => Ok(*u as u32),
+      RType::Integer64(i) => Ok(*i as u32),
+      RType::Float(f) => Ok(*f as u32),
+      RType::Double(d) => Ok(*d as u32),
+      _ => Err(anyhow!("Can't convert {:?} to u32", self))
+    }
+  }
+
+  /// Convert this value to a i32
+  pub fn as_i32(&self) -> anyhow::Result<i32> {
+    match self {
+      RType::String(s) => s.parse::<i32>().map_err(|err| anyhow!(err)),
+      RType::Boolean(b) => Ok(*b as i32),
+      RType::UInteger32(u) => Ok(*u as i32),
+      RType::Integer32(i) => Ok(*i),
+      RType::UInteger64(u) => Ok(*u as i32),
+      RType::Integer64(i) => Ok(*i as i32),
+      RType::Float(f) => Ok(*f as i32),
+      RType::Double(d) => Ok(*d as i32),
+      _ => Err(anyhow!("Can't convert {:?} to i32", self))
+    }
+  }
+
+  /// Convert this value to a string
+  pub fn as_str(&self) -> anyhow::Result<String> {
+    match self {
+      RType::String(s) => Ok(s.clone()),
+      RType::Boolean(b) => Ok(b.to_string()),
+      RType::UInteger32(u) => Ok(u.to_string()),
+      RType::Integer32(i) => Ok(i.to_string()),
+      RType::UInteger64(u) => Ok(u.to_string()),
+      RType::Integer64(i) => Ok(i.to_string()),
+      RType::Float(f) => Ok(f.to_string()),
+      RType::Double(d) => Ok(d.to_string()),
+      _ => Err(anyhow!("Can't convert {:?} to a string", self))
+    }
+  }
+
+  /// Convert this value to a bool
+  pub fn as_bool(&self) -> anyhow::Result<bool> {
+    match self {
+      RType::String(s) => s.parse::<bool>().map_err(|err| anyhow!(err)),
+      RType::Boolean(b) => Ok(*b),
+      RType::UInteger32(u) => Ok(*u > 0),
+      RType::Integer32(i) => Ok(*i > 0),
+      RType::UInteger64(u) => Ok(*u > 0),
+      RType::Integer64(i) => Ok(*i > 0),
+      RType::Float(f) => Ok(*f > 0.0),
+      RType::Double(d) => Ok(*d > 0.0),
+      _ => Err(anyhow!("Can't convert {:?} to i64", self))
     }
   }
 }
