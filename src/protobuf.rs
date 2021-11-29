@@ -12,7 +12,13 @@ use pact_models::matchingrules::MatchingRuleCategory;
 use pact_models::matchingrules::expressions::{MatchingReference, parse_matcher_def};
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::RuleLogic;
-use pact_plugin_driver::proto::{InteractionResponse, PluginConfiguration, Body};
+use pact_plugin_driver::proto::{
+  Body,
+  InteractionResponse,
+  PluginConfiguration,
+  MatchingRules,
+  MatchingRule
+};
 use pact_plugin_driver::proto::body::ContentTypeHint;
 use pact_plugin_driver::utils::{proto_value_to_json, proto_value_to_string, to_proto_struct};
 use prost_types::{DescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorProto};
@@ -182,27 +188,7 @@ fn construct_protobuf_interaction_for_message(
   //         |```
   //         |
   //       """.trimMargin("|"))
-  //
-  //     builder.contentsBuilder
-  //       .setContentType("application/protobuf;message=$messageName")
-  //       .setContent(BytesValue.newBuilder().setValue(message.toByteString()).build())
-  //       .setContentTypeHint(Plugin.Body.ContentTypeHint.BINARY)
-  //
-  //     for ((key, rules) in matchingRules.matchingRules) {
-  //       val rulesBuilder = Plugin.MatchingRules.newBuilder()
-  //
-  //       for (rule in rules.rules) {
-  //         rulesBuilder.addRule(
-  //           Plugin.MatchingRule.newBuilder()
-  //             .setType(rule.name)
-  //             .setValues(toProtoStruct(rule.attributes))
-  //             .build()
-  //         )
-  //       }
-  //
-  //       builder.putRules(key, rulesBuilder.build())
-  //     }
-  //
+
   //     for ((key, generator) in generators) {
   //       builder.putGenerators(
   //         key, Plugin.Generator.newBuilder()
@@ -212,18 +198,44 @@ fn construct_protobuf_interaction_for_message(
   //       )
   //     }
 
+  let rules = matching_rules.rules.iter().map(|(path, rule_list)| {
+    (path.to_string(), MatchingRules {
+      rule: rule_list.rules.iter().map(|rule| {
+        let rule_values = rule.values();
+        let values = if rule_values.is_empty() {
+          None
+        } else {
+          Some(to_proto_struct(rule_values.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()))
+        };
+        MatchingRule {
+          r#type: rule.name(),
+          values
+        }
+      }).collect()
+    })
+  }).collect();
+
+  let generators = generators.iter().map(|(path, generator)| {
+    let gen_values = generator.values();
+    let values = if gen_values.is_empty() {
+      None
+    } else {
+      Some(to_proto_struct(gen_values.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()))
+    };
+    (path.to_string(), pact_plugin_driver::proto::Generator {
+      r#type: generator.name(),
+      values
+    })
+  }).collect();
+
   Ok(InteractionResponse {
     contents: Some(Body {
       content_type: format!("application/protobuf;message={}", message_name),
       content: Some(message_builder.encode_message()?.to_vec()),
       content_type_hint: ContentTypeHint::Binary as i32,
     }),
-    //     /// All matching rules to apply
-    //     #[prost(map = "string, message", tag = "2")]
-    //     pub rules: ::std::collections::HashMap<::prost::alloc::string::String, MatchingRules>,
-    //     /// Generators to apply
-    //     #[prost(map = "string, message", tag = "3")]
-    //     pub generators: ::std::collections::HashMap<::prost::alloc::string::String, Generator>,
+    rules,
+    generators,
     //     /// For message interactions, any metadata to be applied
     //     #[prost(message, optional, tag = "4")]
     //     pub message_metadata: ::core::option::Option<::prost_types::Struct>,
@@ -323,8 +335,9 @@ fn value_for_type(field_name: &str, field_value: &str, descriptor: &FieldDescrip
 mod tests {
   use expectest::prelude::*;
   use maplit::{btreemap, hashmap};
-  use prost_types::field_descriptor_proto::Type;
+  use pact_plugin_driver::proto::{MatchingRules, MatchingRule};
   use prost_types::{DescriptorProto, field_descriptor_proto, FieldDescriptorProto, Value};
+  use prost_types::field_descriptor_proto::Type;
 
   use crate::message_builder::RType;
   use crate::protobuf::{construct_protobuf_interaction_for_message, value_for_type};
@@ -457,16 +470,14 @@ mod tests {
       210, 9 // 9 << 7 + 210 == 1234
     ]));
 
-    // expect!(result.rules).to(be_equal_to(hashmap! {
-    //
-    // }));
+    expect!(result.rules).to(be_equal_to(hashmap! {
+      "$.implementation".to_string() => MatchingRules { rule: vec![ MatchingRule { r#type: "not-empty".to_string(), .. MatchingRule::default() } ] },
+      "$.version".to_string() => MatchingRules { rule: vec![ MatchingRule { r#type: "semver".to_string(), .. MatchingRule::default() } ] },
+      "$.hash".to_string() => MatchingRules { rule: vec![ MatchingRule { r#type: "integer".to_string(), .. MatchingRule::default() } ] }
+    }));
 
-    //     /// All matching rules to apply
-    //     #[prost(map = "string, message", tag = "2")]
-    //     pub rules: ::std::collections::HashMap<::prost::alloc::string::String, MatchingRules>,
-    //     /// Generators to apply
-    //     #[prost(map = "string, message", tag = "3")]
-    //     pub generators: ::std::collections::HashMap<::prost::alloc::string::String, Generator>,
+    expect!(result.generators).to(be_equal_to(hashmap! {}));
+
     //     /// For message interactions, any metadata to be applied
     //     #[prost(message, optional, tag = "4")]
     //     pub message_metadata: ::core::option::Option<::prost_types::Struct>,
