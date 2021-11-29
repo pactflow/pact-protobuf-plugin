@@ -135,7 +135,6 @@ impl MessageBuilder {
           Type::Fixed32 => prost::encoding::fixed32::encode(tag as u32, &value.rtype.as_u32()?, &mut buffer),
           Type::Bool => prost::encoding::bool::encode(tag as u32, &value.rtype.as_bool()?, &mut buffer),
           Type::String => string::encode(tag as u32, &value.rtype.as_str()?, &mut buffer),
-          Type::Group => todo!(),
           Type::Message => if let RType::Message(m) = &value.rtype {
             let message_bytes = m.encode_message()?;
             encode_key(tag as u32, WireType::LengthDelimited, &mut buffer);
@@ -157,7 +156,8 @@ impl MessageBuilder {
           Type::Sfixed32 => prost::encoding::sfixed32::encode(tag as u32, &value.rtype.as_i32()?, &mut buffer),
           Type::Sfixed64 => prost::encoding::sfixed64::encode(tag as u32, &value.rtype.as_i64()?, &mut buffer),
           Type::Sint32 => prost::encoding::sint32::encode(tag as u32, &value.rtype.as_i32()?, &mut buffer),
-          Type::Sint64 => prost::encoding::sint64::encode(tag as u32, &value.rtype.as_i64()?, &mut buffer)
+          Type::Sint64 => prost::encoding::sint64::encode(tag as u32, &value.rtype.as_i64()?, &mut buffer),
+          _ => return Err(anyhow!("Protobuf type {:?} is not supported", field_data.proto_type))
         }
       }
     }
@@ -506,8 +506,7 @@ impl MessageFieldValue {
 mod tests {
   use expectest::prelude::*;
   use maplit::{btreemap, hashmap};
-  use prost_types::{DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorSet, MessageOptions, OneofDescriptorProto};
-  use prost_types::field_descriptor_proto::Type;
+  use prost_types::{DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto, field_descriptor_proto, FieldDescriptorProto, MessageOptions, OneofDescriptorProto};
   use pact_plugin_driver::proto::{Body, CompareContentsRequest, MatchingRules, MatchingRule};
   use pact_plugin_driver::proto::body::ContentTypeHint;
   use prost::Message;

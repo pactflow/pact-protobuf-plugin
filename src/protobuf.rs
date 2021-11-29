@@ -442,13 +442,21 @@ mod tests {
     };
 
     let result = construct_protobuf_interaction_for_message(&message_descriptor, config, "test_message").unwrap();
+
     let body = result.contents.as_ref().unwrap();
     expect!(body.content_type.as_str()).to(be_equal_to("application/protobuf;message=test_message"));
-    expect!(body.content_type_hint).to(be_equal_to(0));
-    expect!(body.content.as_ref()).to(be_some().value(&vec![ 88 ]));
+    expect!(body.content_type_hint).to(be_equal_to(2));
+    expect!(body.content.as_ref()).to(be_some().value(&vec![
+      10, // field 1 length encoded (1 << 3 + 2 == 10)
+      18, // 18 bytes
+      112, 108, 117, 103, 105, 110, 45, 100, 114, 105, 118, 101, 114, 45, 114, 117, 115, 116,
+      18, // field 2 length encoded (2 << 3 + 2 == 18)
+      5, // 5 bytes
+      48, 46, 48, 46, 48,
+      32, // field 4 varint encoded (4 << 3 + 0 == 32)
+      210, 9 // 9 << 7 + 210 == 1234
+    ]));
 
-    // #[prost(message, optional, tag = "1")]
-    //     pub contents: ::core::option::Option<Body>,
     //     /// All matching rules to apply
     //     #[prost(map = "string, message", tag = "2")]
     //     pub rules: ::std::collections::HashMap<::prost::alloc::string::String, MatchingRules>,
