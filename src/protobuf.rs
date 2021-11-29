@@ -20,6 +20,7 @@ use pact_plugin_driver::proto::{
   MatchingRule
 };
 use pact_plugin_driver::proto::body::ContentTypeHint;
+use pact_plugin_driver::proto::interaction_response::MarkupType;
 use pact_plugin_driver::utils::{proto_value_to_json, proto_value_to_string, to_proto_struct};
 use prost_types::{DescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorProto};
 use prost_types::field_descriptor_proto::Type;
@@ -181,23 +182,6 @@ fn construct_protobuf_interaction_for_message(
 
   debug!("Returning response");
 
-  //       .setInteractionMarkup("""
-  //         |## ${descriptor.name}
-  //         |```
-  //         |$message
-  //         |```
-  //         |
-  //       """.trimMargin("|"))
-
-  //     for ((key, generator) in generators) {
-  //       builder.putGenerators(
-  //         key, Plugin.Generator.newBuilder()
-  //           .setType(generator.type)
-  //           .setValues(toProtoStruct(toJson(generator.toMap(PactSpecVersion.V4)).asObject()!!.entries))
-  //           .build()
-  //       )
-  //     }
-
   let rules = matching_rules.rules.iter().map(|(path, rule_list)| {
     (path.to_string(), MatchingRules {
       rule: rule_list.rules.iter().map(|rule| {
@@ -236,18 +220,8 @@ fn construct_protobuf_interaction_for_message(
     }),
     rules,
     generators,
-    //     /// For message interactions, any metadata to be applied
-    //     #[prost(message, optional, tag = "4")]
-    //     pub message_metadata: ::core::option::Option<::prost_types::Struct>,
-    //     /// Markdown/HTML formatted text representation of the interaction
-    //     #[prost(string, tag = "6")]
-    //     pub interaction_markup: ::prost::alloc::string::String,
-    //     #[prost(enumeration = "interaction_response::MarkupType", tag = "7")]
-    //     pub interaction_markup_type: i32,
-    //     /// Description of what part this interaction belongs to (in the case of there being more than one, for instance,
-    //     /// request/response messages)
-    //     #[prost(string, tag = "8")]
-    //     pub part_name: ::prost::alloc::string::String,
+    interaction_markup: message_builder.generate_markup("")?,
+    interaction_markup_type: MarkupType::CommonMark as i32,
     .. InteractionResponse::default()
   })
 }
@@ -478,20 +452,17 @@ mod tests {
 
     expect!(result.generators).to(be_equal_to(hashmap! {}));
 
-    //     /// For message interactions, any metadata to be applied
-    //     #[prost(message, optional, tag = "4")]
-    //     pub message_metadata: ::core::option::Option<::prost_types::Struct>,
+    expect!(result.interaction_markup_type).to(be_equal_to(1));
+    expect!(result.interaction_markup).to(be_equal_to("
+      ```
+      test_message {
+
+      }
+      ```
+    "));
+
     //     /// Plugin specific data to be persisted in the pact file
     //     #[prost(message, optional, tag = "5")]
     //     pub plugin_configuration: ::core::option::Option<PluginConfiguration>,
-    //     /// Markdown/HTML formatted text representation of the interaction
-    //     #[prost(string, tag = "6")]
-    //     pub interaction_markup: ::prost::alloc::string::String,
-    //     #[prost(enumeration = "interaction_response::MarkupType", tag = "7")]
-    //     pub interaction_markup_type: i32,
-    //     /// Description of what part this interaction belongs to (in the case of there being more than one, for instance,
-    //     /// request/response messages)
-    //     #[prost(string, tag = "8")]
-    //     pub part_name: ::prost::alloc::string::String,
   }
 }

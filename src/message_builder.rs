@@ -250,6 +250,59 @@ impl MessageBuilder {
     }
     Ok(())
   }
+
+  /// Generate a markdown representation of the message
+  pub fn generate_markup(&self, indent: &str) -> anyhow::Result<String> {
+    let mut buffer = String::new();
+
+    buffer.push_str(format!("```protobuf\n{}message {} {{\n", indent, self.message_name).as_str());
+
+    for (name, inner) in self.fields.iter()
+      .sorted_by(|(_, a), (_, b)| Ord::cmp(&a.descriptor.number, &b.descriptor.number)) {
+      if let Some(field_num) = inner.descriptor.number {
+        match inner.field_type {
+          MessageFieldValueType::Normal => buffer.push_str(format!("{}    {} {} = {};\n", indent, field_type_name(inner)?, name, field_num).as_str()),
+          MessageFieldValueType::Map => buffer.push_str(format!("{}    map<{}> {} = {};\n", indent, field_type_name(inner)?, name, field_num).as_str()),
+          MessageFieldValueType::Repeated => buffer.push_str(format!("{}    repeated {} {} = {};\n", indent, field_type_name(inner)?, name, field_num).as_str()),
+        }
+      }
+    }
+
+    buffer.push_str(format!("{}}}\n```\n", indent).as_str());
+
+    Ok(buffer)
+  }
+}
+
+fn field_type_name(field: &FieldValueInner) -> anyhow::Result<String> {
+  Ok(match field.proto_type {
+    Type::Double => "double".to_string(),
+    Type::Float => "float".to_string(),
+    Type::Int64 => "int64".to_string(),
+    Type::Uint64 => "uint64".to_string(),
+    Type::Int32 => "int32".to_string(),
+    Type::Fixed64 => "fixed64".to_string(),
+    Type::Fixed32 => "fixed32".to_string(),
+    Type::Bool => "bool".to_string(),
+    Type::String => "string".to_string(),
+    Type::Group => "group".to_string(),
+    Type::Message => {
+      let message = field.descriptor.type_name.as_ref()
+        .ok_or_else(|| anyhow!("Type name is missing from the descriptor for message field"))?;
+      format!("message {}", message)
+    },
+    Type::Bytes => "bytes".to_string(),
+    Type::Uint32 => "uint32".to_string(),
+    Type::Enum => {
+      let enum_type_name = field.descriptor.type_name.as_ref()
+        .ok_or_else(|| anyhow!("Type name is missing from the descriptor for enum field"))?;
+      format!("enum {}", enum_type_name)
+    }
+    Type::Sfixed32 => "sfixed32".to_string(),
+    Type::Sfixed64 => "sfixed64".to_string(),
+    Type::Sint32 => "sint32".to_string(),
+    Type::Sint64 => "sint64".to_string()
+  })
 }
 
 /// Rust type to use for a protobuf type
@@ -506,12 +559,13 @@ impl MessageFieldValue {
 mod tests {
   use expectest::prelude::*;
   use maplit::{btreemap, hashmap};
-  use prost_types::{DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto, field_descriptor_proto, FieldDescriptorProto, MessageOptions, OneofDescriptorProto};
-  use pact_plugin_driver::proto::{Body, CompareContentsRequest, MatchingRules, MatchingRule};
+  use pact_plugin_driver::proto::{Body, CompareContentsRequest, MatchingRule, MatchingRules};
   use pact_plugin_driver::proto::body::ContentTypeHint;
   use prost::Message;
+  use prost_types::{DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto, field_descriptor_proto, FieldDescriptorProto, MessageOptions, OneofDescriptorProto};
   use prost_types::field_descriptor_proto::Label::Optional;
   use prost_types::value::Kind;
+  use trim_margin::MarginTrimmable;
 
   use crate::message_builder::{MessageBuilder, MessageFieldValue, RType};
   use crate::message_builder::MessageFieldValueType::Repeated;
@@ -647,6 +701,16 @@ mod tests {
 
     let result = message.encode_message().unwrap();
     expect!(result.to_vec()).to(be_equal_to(base64::decode("ChJwbHVnaW4tZHJpdmVyLXJ1c3QSBTAuMC4w").unwrap()));
+
+    expect!(message.generate_markup("")).to(be_ok().value(
+      "|```protobuf
+         |message InitPluginRequest {
+         |    string implementation = 1;
+         |    string version = 2;
+         |}
+         |```
+         |
+         ".trim_margin().unwrap()));
   }
 
   #[test_log::test]
@@ -762,6 +826,17 @@ mod tests {
 
     let result = message.encode_message().unwrap();
     expect!(result.to_vec()).to(be_equal_to(encoded));
+
+    expect!(message.generate_markup("")).to(be_ok().value(
+      "|```protobuf
+         |message Body {
+         |    string contentType = 1;
+         |    message .google.protobuf.BytesValue content = 2;
+         |    enum .io.pact.plugin.Body.ContentTypeHint contentTypeHint = 3;
+         |}
+         |```
+         |
+         ".trim_margin().unwrap()));
   }
 
   #[test_log::test]
@@ -1096,5 +1171,15 @@ mod tests {
 
     let result = message.encode_message().unwrap();
     expect!(result.to_vec()).to(be_equal_to(encoded));
+
+    expect!(message.generate_markup("")).to(be_ok().value(
+      "|```protobuf
+         |message CompareContentsRequest {
+         |    bool allowUnexpectedKeys = 3;
+         |    map<message .io.pact.plugin.CompareContentsRequest.RulesEntry> rules = 4;
+         |}
+         |```
+         |
+         ".trim_margin().unwrap()));
   }
 }
