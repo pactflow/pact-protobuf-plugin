@@ -169,15 +169,15 @@ impl MessageBuilder {
     descriptor: &FieldDescriptorProto,
     field_value: &MessageFieldValue,
     tag: i32,
-    enum_value_name: &String,
+    enum_value_name: &str,
     buffer: &mut BytesMut
   ) -> anyhow::Result<()> {
     trace!("encode_enum_value({:?}, {}, '{}')", field_value, tag, enum_value_name);
     let enum_type_name = descriptor.type_name.as_ref().ok_or_else(|| anyhow!("Type name is missing from the descriptor for enum field {}", field_value.name))?;
-    let enum_name = enum_type_name.split('.').last().unwrap_or_else(|| enum_type_name.as_str());
+    let enum_name = enum_type_name.split('.').last().unwrap_or(enum_type_name);
     let enum_proto = self.descriptor.enum_type.iter().find(|enum_type| enum_type.name.clone().unwrap_or_default() == enum_name)
       .ok_or_else(|| anyhow!("Did not find the enum {} for the type {} in the Protobuf descriptor", enum_name, enum_type_name))?;
-    let enum_value = enum_proto.value.iter().find(|enum_val| enum_val.name.clone().unwrap_or_default() == enum_value_name.as_str())
+    let enum_value = enum_proto.value.iter().find(|enum_val| enum_val.name.clone().unwrap_or_default() == enum_value_name)
       .ok_or_else(|| anyhow!("Did not find the enum value {} for the enum {} in the Protobuf descriptor", enum_value_name, enum_type_name))?;
     if let Some(enum_value_number) = enum_value.number {
       encode_key(tag as u32, WireType::Varint, buffer);
@@ -209,7 +209,7 @@ impl MessageBuilder {
           MessageFieldValue {
             name: entry_name.to_string(),
             raw_value: None,
-            rtype: RType::Message(MessageBuilder {
+            rtype: RType::Message(Box::new(MessageBuilder {
               descriptor: entry_proto.clone(),
               message_name: entry_name.to_string(),
               fields: btreemap! {
@@ -226,7 +226,7 @@ impl MessageBuilder {
                   proto_type: value_proto.r#type()
                 }
               }
-            })
+            }))
           }
         }).collect();
 
@@ -276,7 +276,7 @@ pub enum RType {
   /// Enum value
   Enum(String),
   /// Embedded message
-  Message(MessageBuilder)
+  Message(Box<MessageBuilder>)
 }
 
 impl RType {
@@ -752,7 +752,7 @@ mod tests {
     message.set_field(&field2, "content", MessageFieldValue {
       name: "content".to_string(),
       raw_value: Some("{\"test\": true}".to_string()),
-      rtype: RType::Message(bytes_message)
+      rtype: RType::Message(Box::new(bytes_message))
     });
     message.set_field(&field3, "contentTypeHint", MessageFieldValue {
       name: "contentTypeHint".to_string(),
@@ -930,7 +930,7 @@ mod tests {
     matching_rules.add_repeated_field_value(&matching_rule_field, "rule", MessageFieldValue {
       name: "".to_string(),
       raw_value: None,
-      rtype: RType::Message(matching_rule_1)
+      rtype: RType::Message(Box::new(matching_rule_1))
     });
 
     let mut rule2 = MessageBuilder::new(&rule_descriptor, "MatchingRules");
@@ -1065,19 +1065,19 @@ mod tests {
     }, MessageFieldValue {
       name: "value".to_string(),
       raw_value: None,
-      rtype: RType::Message(regex_values)
+      rtype: RType::Message(Box::new(regex_values))
     });
 
     matching_rule_2.set_field(&values_field_descriptor, "values", MessageFieldValue {
       name: "values".to_string(),
       raw_value: None,
-      rtype: RType::Message(matching_rule_values)
+      rtype: RType::Message(Box::new(matching_rule_values))
     });
 
     rule2.add_repeated_field_value(&matching_rule_field, "rule", MessageFieldValue {
       name: "".to_string(),
       raw_value: None,
-      rtype: RType::Message(matching_rule_2)
+      rtype: RType::Message(Box::new(matching_rule_2))
     });
 
     message.add_map_field_value(&field2, "rules", MessageFieldValue {
@@ -1087,7 +1087,7 @@ mod tests {
     }, MessageFieldValue {
       name: "value".to_string(),
       raw_value: Some("".to_string()),
-      rtype: RType::Message(matching_rules)
+      rtype: RType::Message(Box::new(matching_rules))
     });
     message.add_map_field_value(&field2, "rules", MessageFieldValue {
       name: "key".to_string(),
@@ -1096,7 +1096,7 @@ mod tests {
     }, MessageFieldValue {
       name: "value".to_string(),
       raw_value: None,
-      rtype: RType::Message(rule2)
+      rtype: RType::Message(Box::new(rule2))
     });
 
     let result = message.encode_message().unwrap();

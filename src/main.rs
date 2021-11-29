@@ -29,7 +29,7 @@ impl Stream for TcpIncoming {
     // Delegates to the poll_accept method of the inner TcpListener
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         Pin::new(&mut self.inner).poll_accept(cx)
-          .map_ok(|(stream, _)| stream).map(|v| Some(v))
+          .map_ok(|(stream, _)| stream).map(Some)
     }
 }
 

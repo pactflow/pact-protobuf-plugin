@@ -283,7 +283,7 @@ fn build_field_value(
         generators.insert(field_path.to_string(), generator);
       }
       value_for_type(key, mrd.value.as_str(), descriptor)
-        .map(|val| Some(val))
+        .map(Some)
     }
   } else {
     Err(anyhow!("Field '{}' has an unknown type, can not do anything with it", key))
@@ -322,7 +322,7 @@ fn value_for_type(field_name: &str, field_value: &str, descriptor: &FieldDescrip
 #[cfg(test)]
 mod tests {
   use expectest::prelude::*;
-  use maplit::btreemap;
+  use maplit::{btreemap, hashmap};
   use prost_types::field_descriptor_proto::Type;
   use prost_types::{DescriptorProto, field_descriptor_proto, FieldDescriptorProto, Value};
 
@@ -456,6 +456,10 @@ mod tests {
       32, // field 4 varint encoded (4 << 3 + 0 == 32)
       210, 9 // 9 << 7 + 210 == 1234
     ]));
+
+    // expect!(result.rules).to(be_equal_to(hashmap! {
+    //
+    // }));
 
     //     /// All matching rules to apply
     //     #[prost(map = "string, message", tag = "2")]

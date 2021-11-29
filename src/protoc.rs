@@ -30,7 +30,7 @@ pub(crate) struct Protoc {
 impl Protoc {
   fn new(path: String, local_install: bool) -> Self {
     Protoc {
-      protoc_path: path.clone(),
+      protoc_path: path,
       local_install
     }
   }
@@ -145,8 +145,8 @@ async fn download_protoc(config: &HashMap<String, Value>, os_info: &Info) -> any
     let mut protoc_file = File::create(format!("./protoc-{}-{}.zip", protoc_version, os_type))?;
     let mut count: usize = 0;
     while let Some(chunk) = response.chunk().await? {
-      count = count + chunk.len();
-      protoc_file.write(chunk.as_ref())?;
+      count += chunk.len();
+      protoc_file.write_all(chunk.as_ref())?;
     }
     debug!("Downloaded {} bytes", count);
     unpack_protoc(config, os_info).await
