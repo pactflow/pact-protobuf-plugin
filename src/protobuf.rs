@@ -310,6 +310,7 @@ mod tests {
   use expectest::prelude::*;
   use maplit::{btreemap, hashmap};
   use pact_plugin_driver::proto::{MatchingRules, MatchingRule};
+  use pact_plugin_driver::proto::interaction_response::MarkupType;
   use prost_types::{DescriptorProto, field_descriptor_proto, FieldDescriptorProto, Value};
   use prost_types::field_descriptor_proto::Type;
 
@@ -452,7 +453,7 @@ mod tests {
 
     expect!(result.generators).to(be_equal_to(hashmap! {}));
 
-    expect!(result.interaction_markup_type).to(be_equal_to(1));
+    expect!(result.interaction_markup_type).to(be_equal_to(MarkupType::CommonMark as i32));
     expect!(result.interaction_markup).to(be_equal_to("
       ```
       test_message {
@@ -460,9 +461,5 @@ mod tests {
       }
       ```
     "));
-
-    //     /// Plugin specific data to be persisted in the pact file
-    //     #[prost(message, optional, tag = "5")]
-    //     pub plugin_configuration: ::core::option::Option<PluginConfiguration>,
   }
 }

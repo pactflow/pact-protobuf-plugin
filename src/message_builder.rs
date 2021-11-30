@@ -570,13 +570,14 @@ mod tests {
   use crate::message_builder::{MessageBuilder, MessageFieldValue, RType};
   use crate::message_builder::MessageFieldValueType::Repeated;
 
+  #[macro_export]
   macro_rules! string_field_descriptor {
     ($name:expr, $n:expr) => (
-        FieldDescriptorProto {
+        prost_types::FieldDescriptorProto {
           name: Some($name.to_string()),
           number: Some($n),
-          label: Some(Optional as i32),
-          r#type: Some(field_descriptor_proto::Type::String as i32),
+          label: Some(prost_types::field_descriptor_proto::Label::Optional as i32),
+          r#type: Some(prost_types::field_descriptor_proto::Type::String as i32),
           type_name: Some("String".to_string()),
           extendee: None,
           default_value: None,
@@ -588,13 +589,14 @@ mod tests {
     );
   }
 
+  #[macro_export]
   macro_rules! bool_field_descriptor {
     ($name:expr, $n:expr) => (
-        FieldDescriptorProto {
+        prost_types::FieldDescriptorProto {
           name: Some($name.to_string()),
           number: Some($n),
-          label: Some(Optional as i32),
-          r#type: Some(field_descriptor_proto::Type::Bool as i32),
+          label: Some(prost_types::field_descriptor_proto::Label::Optional as i32),
+          r#type: Some(prost_types::field_descriptor_proto::Type::Bool as i32),
           type_name: Some("Bool".to_string()),
           extendee: None,
           default_value: None,
@@ -606,13 +608,14 @@ mod tests {
     );
   }
 
+  #[macro_export]
   macro_rules! message_field_descriptor {
     ($name:expr, $n:expr, $t:expr) => (
-      FieldDescriptorProto {
+      prost_types::FieldDescriptorProto {
         name: Some($name.to_string()),
         number: Some($n),
-        label: Some(Optional as i32),
-        r#type: Some(field_descriptor_proto::Type::Message as i32),
+        label: Some(prost_types::field_descriptor_proto::Label::Optional as i32),
+        r#type: Some(prost_types::field_descriptor_proto::Type::Message as i32),
         type_name: Some($t.to_string()),
         extendee: None,
         default_value: None,
@@ -624,13 +627,14 @@ mod tests {
     );
   }
 
+  #[macro_export]
   macro_rules! enum_field_descriptor {
     ($name:expr, $n:expr, $t:expr) => (
-      FieldDescriptorProto {
+      prost_types::FieldDescriptorProto {
         name: Some($name.to_string()),
         number: Some($n),
-        label: Some(Optional as i32),
-        r#type: Some(field_descriptor_proto::Type::Enum as i32),
+        label: Some(prost_types::field_descriptor_proto::Label::Optional as i32),
+        r#type: Some(prost_types::field_descriptor_proto::Type::Enum as i32),
         type_name: Some($t.to_string()),
         extendee: None,
         default_value: None,
@@ -642,13 +646,14 @@ mod tests {
     );
   }
 
+  #[macro_export]
   macro_rules! bytes_field_descriptor {
     ($name:expr, $n:expr) => (
-        FieldDescriptorProto {
+        prost_types::FieldDescriptorProto {
           name: Some($name.to_string()),
           number: Some($n),
-          label: Some(Optional as i32),
-          r#type: Some(field_descriptor_proto::Type::Bytes as i32),
+          label: Some(prost_types::field_descriptor_proto::Label::Optional as i32),
+          r#type: Some(prost_types::field_descriptor_proto::Type::Bytes as i32),
           type_name: Some("Bytes".to_string()),
           extendee: None,
           default_value: None,
