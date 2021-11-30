@@ -150,7 +150,7 @@ async fn init_plugin_request(request_message: &MessageRequest) -> (Status, (Cont
 
 // Pact verification test. This first starts up a Rocket server that can provide the Protobuf
 // messages required by the Pact verifier.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn verify_plugin() {
   let _ = env_logger::builder().is_test(true).try_init();
 
