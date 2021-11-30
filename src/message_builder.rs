@@ -195,7 +195,7 @@ impl MessageBuilder {
         return Err(anyhow!("Map fields need to have an even number of field values as key-value pairs, got {} field values", field_value.values.len()));
       }
       let entry_type_name = field_value.descriptor.type_name.as_ref().ok_or_else(|| anyhow!("Type name is missing from the descriptor for map field"))?;
-      let entry_name = entry_type_name.split('.').last().unwrap_or_else(|| entry_type_name.as_str());
+      let entry_name = last_name(entry_type_name.as_str());
       let entry_proto = self.descriptor.nested_type.iter().find(|nested_type| nested_type.name.clone().unwrap_or_default() == entry_name)
         .ok_or_else(|| anyhow!("Did not find the nested type {} for the map field {} in the Protobuf descriptor", entry_name, entry_type_name))?;
 
@@ -272,6 +272,11 @@ impl MessageBuilder {
 
     Ok(buffer)
   }
+}
+
+/// Return the last name in a dot separated string
+pub(crate) fn last_name(entry_type_name: &str) -> &str {
+  entry_type_name.split('.').last().unwrap_or_else(|| entry_type_name)
 }
 
 fn field_type_name(field: &FieldValueInner) -> anyhow::Result<String> {
@@ -557,6 +562,7 @@ impl MessageFieldValue {
 
 #[cfg(test)]
 mod tests {
+  use bytes::BytesMut;
   use expectest::prelude::*;
   use maplit::{btreemap, hashmap};
   use pact_plugin_driver::proto::{Body, CompareContentsRequest, MatchingRule, MatchingRules};
@@ -569,6 +575,7 @@ mod tests {
 
   use crate::message_builder::{MessageBuilder, MessageFieldValue, RType};
   use crate::message_builder::MessageFieldValueType::Repeated;
+  use crate::message_decoder::decode_message;
 
   #[macro_export]
   macro_rules! string_field_descriptor {
@@ -888,7 +895,8 @@ mod tests {
       },
       .. CompareContentsRequest::default()
     };
-    let encoded = compare_message.encode_to_vec();
+    let mut encoded_buf = BytesMut::with_capacity(compare_message.encoded_len());
+    let encoded = compare_message.encode(&mut encoded_buf);
 
     let field1 = bool_field_descriptor!("allowUnexpectedKeys", 3);
     let field2 = FieldDescriptorProto {
@@ -1174,8 +1182,10 @@ mod tests {
       rtype: RType::Message(Box::new(rule2))
     });
 
-    let result = message.encode_message().unwrap();
-    expect!(result.to_vec()).to(be_equal_to(encoded));
+    let encoded_fields = decode_message(&mut encoded_buf, &descriptor).unwrap();
+    let mut bytes = message.encode_message().unwrap();
+    let result = decode_message(&mut bytes, &descriptor).unwrap();
+    expect!(result).to(be_equal_to(encoded_fields));
 
     expect!(message.generate_markup("")).to(be_ok().value(
       "|```protobuf

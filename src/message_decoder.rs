@@ -3,10 +3,12 @@
 use std::str::from_utf8;
 
 use anyhow::anyhow;
-use bytes::{Buf, BytesMut};
+use bytes::Buf;
+use itertools::Itertools;
 use prost::encoding::{decode_key, decode_varint, WireType};
 use prost_types::{DescriptorProto, EnumDescriptorProto, FieldDescriptorProto};
 use prost_types::field_descriptor_proto::Type;
+use crate::message_builder::last_name;
 
 /// Decoded Protobuf field
 #[derive(Clone, Debug, PartialEq)]
@@ -100,7 +102,7 @@ pub fn decode_message<B>(buffer: &mut B, descriptor: &DescriptorProto) -> anyhow
           Type::String => ProtobufFieldData::String(from_utf8(&data_buffer)?.to_string()),
           Type::Message => {
             let message_proto = descriptor.nested_type.iter()
-              .find(|message_descriptor|  message_descriptor.name == field_descriptor.type_name)
+              .find(|message_descriptor|  message_descriptor.name == field_descriptor.type_name.as_ref().map(|v| last_name(v.as_str()).to_string()))
               .ok_or_else(|| anyhow!("Did not find the embedded message {:?} for the field {} in the Protobuf descriptor", field_descriptor.type_name, field_num))?;
             ProtobufFieldData::Message(data_buffer.to_vec(), message_proto.clone())
           }
@@ -127,7 +129,7 @@ pub fn decode_message<B>(buffer: &mut B, descriptor: &DescriptorProto) -> anyhow
     });
   }
 
-  Ok(fields)
+  Ok(fields.iter().sorted_by(|a, b| Ord::cmp(&a.field_num, &b.field_num)).cloned().collect())
 }
 
 fn find_field_descriptor(field_num: i32, descriptor: &DescriptorProto) -> anyhow::Result<FieldDescriptorProto> {

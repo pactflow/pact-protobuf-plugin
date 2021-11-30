@@ -313,6 +313,7 @@ mod tests {
   use pact_plugin_driver::proto::interaction_response::MarkupType;
   use prost_types::{DescriptorProto, field_descriptor_proto, FieldDescriptorProto, Value};
   use prost_types::field_descriptor_proto::Type;
+  use trim_margin::MarginTrimmable;
 
   use crate::message_builder::RType;
   use crate::protobuf::{construct_protobuf_interaction_for_message, value_for_type};
@@ -454,12 +455,14 @@ mod tests {
     expect!(result.generators).to(be_equal_to(hashmap! {}));
 
     expect!(result.interaction_markup_type).to(be_equal_to(MarkupType::CommonMark as i32));
-    expect!(result.interaction_markup).to(be_equal_to("
-      ```
-      test_message {
-
-      }
-      ```
-    "));
+    expect!(result.interaction_markup).to(be_equal_to(
+     "|```protobuf
+      |message test_message {
+      |    string implementation = 1;
+      |    string version = 2;
+      |    uint64 hash = 4;
+      |}
+      |```
+      |".trim_margin().unwrap()));
   }
 }
