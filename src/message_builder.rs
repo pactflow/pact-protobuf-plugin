@@ -898,7 +898,7 @@ mod tests {
       .. CompareContentsRequest::default()
     };
     let mut encoded_buf = BytesMut::with_capacity(compare_message.encoded_len());
-    let encoded = compare_message.encode(&mut encoded_buf);
+    compare_message.encode(&mut encoded_buf).unwrap();
 
     let field1 = bool_field_descriptor!("allowUnexpectedKeys", 3);
     let field2 = FieldDescriptorProto {

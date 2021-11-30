@@ -2,9 +2,11 @@
 //!
 //! Implements the version 1 of the Pact plugin interface described at `https://github.com/pact-foundation/pact-plugins/blob/main/docs/content-matcher-design.md`.
 
+use std::env;
 use std::net::SocketAddr;
 use std::pin::Pin;
 
+use clap::{App, ErrorKind};
 use env_logger::Env;
 use futures::Stream;
 use futures::task::{Context, Poll};
@@ -44,6 +46,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Setup the logging system based on the LOG_LEVEL environment variable
     let env = Env::new().filter("LOG_LEVEL");
     env_logger::init_from_env(env);
+
+    let args: Vec<String> = env::args().collect();
+    let program = args[0].clone();
+    let app = App::new(program)
+      .version(clap::crate_version!())
+      .about("Pact Protobuf plugin")
+      .version_short("v");
+
+    if let Err(err) = app.get_matches_safe() {
+      match err.kind {
+        ErrorKind::HelpDisplayed => {
+          println!("{}", err.message);
+          return Ok(())
+        },
+        ErrorKind::VersionDisplayed => {
+          println!();
+          return Ok(())
+        },
+        _ => {}
+      }
+    }
 
     // Bind to a OS provided port and create a TCP listener
     let addr: SocketAddr = "0.0.0.0:0".parse()?;
