@@ -564,9 +564,11 @@ impl MessageFieldValue {
 mod tests {
   use bytes::BytesMut;
   use expectest::prelude::*;
+  use itertools::Itertools;
   use maplit::{btreemap, hashmap};
   use pact_plugin_driver::proto::{Body, CompareContentsRequest, MatchingRule, MatchingRules};
   use pact_plugin_driver::proto::body::ContentTypeHint;
+  use prost::encoding::WireType;
   use prost::Message;
   use prost_types::{DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto, field_descriptor_proto, FieldDescriptorProto, MessageOptions, OneofDescriptorProto};
   use prost_types::field_descriptor_proto::Label::Optional;
@@ -575,7 +577,7 @@ mod tests {
 
   use crate::message_builder::{MessageBuilder, MessageFieldValue, RType};
   use crate::message_builder::MessageFieldValueType::Repeated;
-  use crate::message_decoder::decode_message;
+  use crate::message_decoder::{decode_message, ProtobufFieldData};
 
   #[macro_export]
   macro_rules! string_field_descriptor {
@@ -1185,7 +1187,38 @@ mod tests {
     let encoded_fields = decode_message(&mut encoded_buf, &descriptor).unwrap();
     let mut bytes = message.encode_message().unwrap();
     let result = decode_message(&mut bytes, &descriptor).unwrap();
-    expect!(result).to(be_equal_to(encoded_fields));
+
+    expect!(result.len()).to(be_equal_to(encoded_fields.len()));
+
+    let actual_fields = result.iter().map(|f| f.field_num)
+      .sorted()
+      .collect_vec();
+    let expected_fields = result.iter().map(|f| f.field_num)
+      .sorted()
+      .collect_vec();
+    expect!(actual_fields).to(be_equal_to(expected_fields));
+
+    expect!(result.iter().find(|f| f.field_num == 3)).to(be_equal_to(encoded_fields.iter().find(|f| f.field_num == 3)));
+
+    let expected_map_values = encoded_fields.iter().filter(|f| f.field_num == 4).collect_vec();
+    let actual_map_values = result.iter().filter(|f| f.field_num == 4).collect_vec();
+    expect!(actual_map_values.len()).to(be_equal_to(2));
+    let actual_data = actual_map_values.iter().map(|f| {
+      expect!(f.wire_type).to(be_equal_to(WireType::LengthDelimited));
+      match &f.data {
+        ProtobufFieldData::Message(d, _) => d.clone(),
+        _ => panic!("Got an unexpected field type {:?}", f.data)
+      }
+    }).sorted_by(|a, b| Ord::cmp(&a.len(), &b.len()))
+      .collect_vec();
+    let expected_data = expected_map_values.iter().map(|f| {
+      match &f.data {
+        ProtobufFieldData::Message(d, _) => d.clone(),
+        _ => panic!("Got an unexpected field type {:?}", f.data)
+      }
+    }).sorted_by(|a, b| Ord::cmp(&a.len(), &b.len()))
+      .collect_vec();
+    expect!(actual_data).to(be_equal_to(expected_data));
 
     expect!(message.generate_markup("")).to(be_ok().value(
       "|```protobuf
