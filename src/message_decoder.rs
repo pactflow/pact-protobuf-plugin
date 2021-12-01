@@ -8,7 +8,8 @@ use itertools::Itertools;
 use prost::encoding::{decode_key, decode_varint, WireType};
 use prost_types::{DescriptorProto, EnumDescriptorProto, FieldDescriptorProto};
 use prost_types::field_descriptor_proto::Type;
-use crate::message_builder::last_name;
+
+use crate::utils::last_name;
 
 /// Decoded Protobuf field
 #[derive(Clone, Debug, PartialEq)]
