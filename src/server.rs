@@ -1,16 +1,23 @@
 //! Module provides the main gRPC server for the plugin process
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
+use anyhow::anyhow;
 
-use log::{debug, error};
-use maplit::hashmap;
+use bytes::Bytes;
+use log::{debug, error, trace};
+use maplit::{btreemap, hashmap};
 use pact_plugin_driver::plugin_models::PactPluginManifest;
 use pact_plugin_driver::proto;
 use pact_plugin_driver::proto::catalogue_entry::EntryType;
 use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
 use pact_plugin_driver::utils::proto_value_to_string;
+use prost::Message;
+use prost_types::{FileDescriptorProto, FileDescriptorSet};
+use prost_types::value::Kind;
 use tonic::Response;
+use crate::matching::{match_message, match_service};
 
 use crate::protobuf::process_proto;
 use crate::protoc::setup_protoc;
@@ -85,6 +92,152 @@ impl PactPlugin for ProtobufPactPlugin {
     &self,
     request: tonic::Request<proto::CompareContentsRequest>,
   ) -> Result<tonic::Response<proto::CompareContentsResponse>, tonic::Status> {
+    trace!("Got compare_contents request {:?}", request.get_ref());
+
+    let request = request.get_ref();
+
+    // Check for the plugin specific configuration for the interaction
+    let plugin_configuration = request.plugin_configuration.clone().unwrap_or_default();
+    let interaction_config = plugin_configuration.interaction_configuration.as_ref()
+      .map(|config| &config.fields);
+    let interaction_config = match interaction_config {
+      Some(config) => config,
+      None => {
+        error!("Plugin configuration for the interaction is required");
+        return Ok(Response::new(proto::CompareContentsResponse {
+          error: "Plugin configuration for the interaction is required".to_string(),
+          .. proto::CompareContentsResponse::default()
+        }))
+      }
+    };
+
+    // From the plugin configuration for the interaction, get the descriptor key. This key is used
+    // to lookup the encoded Protobuf descriptors in the Pact level plugin configuration
+    let message_key = match interaction_config.get("descriptorKey").map(|key| proto_value_to_string(key)).flatten() {
+      Some(key) => key,
+      None => {
+        error!("Plugin configuration item with key 'descriptorKey' is required");
+        return Ok(Response::new(proto::CompareContentsResponse {
+          error: "Plugin configuration item with key 'descriptorKey' is required".to_string(),
+          .. proto::CompareContentsResponse::default()
+        }))
+      }
+    };
+    debug!("compare_contents: message_key = {}", message_key);
+
+    let pact_configuration = plugin_configuration.pact_configuration.unwrap_or_default();
+    debug!("Pact level configuration keys: {:?}", pact_configuration.fields.keys());
+
+    let config_for_interaction = match pact_configuration.fields.get(&message_key)
+      .map(|config| match &config.kind {
+        Some(kind) => match kind {
+          Kind::StructValue(s) => s.fields.clone(),
+          _ => btreemap!{}
+        }
+        None => btreemap!{}
+      }) {
+      Some(config) => config,
+      None => {
+        error!("Did not find the Protobuf config for key {}", message_key);
+        return Ok(Response::new(proto::CompareContentsResponse {
+          error: format!("Did not find the Protobuf config for key {}", message_key),
+          .. proto::CompareContentsResponse::default()
+        }))
+      }
+    };
+
+    // From the plugin configuration for the interaction, there should be either a message type name
+    // or a service name. Check for either.
+    let message = interaction_config.get("message").map(|val| proto_value_to_string(val)).flatten();
+    let service = interaction_config.get("service").map(|val| proto_value_to_string(val)).flatten();
+    if message.is_none() && service.is_none() {
+      error!("Plugin configuration item with key 'message' or 'service' is required");
+      return Ok(Response::new(proto::CompareContentsResponse {
+        error: "Plugin configuration item with key 'message' or 'service' is required".to_string(),
+        .. proto::CompareContentsResponse::default()
+      }))
+    }
+
+    // Get the encoded Protobuf descriptors from the Pact level configuration
+    let descriptor_bytes_encoded = config_for_interaction.get("protoDescriptors")
+      .map(|val| proto_value_to_string(val))
+      .flatten()
+      .unwrap_or_default();
+    if descriptor_bytes_encoded.is_empty() {
+      error!("Plugin configuration item with key '{}' is required", message_key);
+      return Ok(Response::new(proto::CompareContentsResponse {
+        error: format!("Plugin configuration item with key '{}' is required", message_key),
+        .. proto::CompareContentsResponse::default()
+      }))
+    }
+
+    // The descriptor bytes will be base 64 encoded.
+    let descriptor_bytes = match base64::decode(descriptor_bytes_encoded) {
+      Ok(bytes) => Bytes::from(bytes),
+      Err(err) => {
+        error!("Failed to decode the Protobuf descriptor - {}", err);
+        return Ok(Response::new(proto::CompareContentsResponse {
+          error: format!("Failed to decode the Protobuf descriptor - {}", err),
+          .. proto::CompareContentsResponse::default()
+        }))
+      }
+    };
+    debug!("Protobuf file descriptor set is {} bytes", descriptor_bytes.len());
+
+    // Get an MD5 hash of the bytes to check that it matches the descriptor key
+    let digest = md5::compute(&descriptor_bytes);
+    let descriptor_hash = format!("{:x}", digest);
+    if descriptor_hash != message_key {
+      error!("Protobuf descriptors checksum failed. Expected {} but got {}", message_key, descriptor_hash);
+      return Ok(Response::new(proto::CompareContentsResponse {
+        error: format!("Protobuf descriptors checksum failed. Expected {} but got {}", message_key, descriptor_hash),
+        .. proto::CompareContentsResponse::default()
+      }))
+    }
+
+    // Decode the Protobuf descriptors
+    let descriptors = match FileDescriptorSet::decode(descriptor_bytes) {
+      Ok(descriptors) => descriptors,
+      Err(err) => {
+        error!("Failed to decode the Protobuf descriptors - {}", err);
+        return Ok(Response::new(proto::CompareContentsResponse {
+          error: format!("Failed to decode the Protobuf descriptors - {}", err),
+          .. proto::CompareContentsResponse::default()
+        }))
+      }
+    };
+    let descriptor_map: HashMap<String, FileDescriptorProto> = descriptors.file.iter()
+      .map(|descriptor| (descriptor.name.clone().unwrap_or_default(), descriptor.clone())).collect();
+
+    let result = if let Some(message_name) = message {
+      debug!("Received compareContents request for message {}", message_name);
+      match_message(message_name.as_str(), &descriptors, &request)
+    } else if let Some(service_name) = service {
+      debug!("Received compareContents request for service {}", service_name);
+      match_service(service_name.as_str(), &descriptors, &request)
+    } else {
+      Err(anyhow!("Did not get a message or service to match"))
+    };
+
+    //       val response = Plugin.CompareContentsResponse.newBuilder()
+    //       for (item in result.bodyResults) {
+    //         response.putResults(item.key, Plugin.ContentMismatches.newBuilder().addAllMismatches(item.result.map {
+    //           val builder = Plugin.ContentMismatch.newBuilder()
+    //             .setExpected(
+    //               BytesValue.newBuilder().setValue(ByteString.copyFrom(it.expected.toString().toByteArray())).build()
+    //             )
+    //             .setActual(
+    //               BytesValue.newBuilder().setValue(ByteString.copyFrom(it.actual.toString().toByteArray())).build()
+    //             )
+    //             .setMismatch(it.mismatch)
+    //             .setPath(it.path)
+    //           if (it.diff.isNotEmpty()) {
+    //             builder.diff = it.diff
+    //           }
+    //           builder.build()
+    //         }).build())
+    //       }
+
     unimplemented!()
   }
 
