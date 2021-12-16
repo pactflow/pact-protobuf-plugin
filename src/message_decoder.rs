@@ -1,15 +1,16 @@
 //! Decoder for encoded Protobuf messages using the descriptors
 
+use std::fmt::{Display, Formatter};
 use std::str::from_utf8;
 
 use anyhow::anyhow;
-use bytes::Buf;
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use itertools::Itertools;
 use prost::encoding::{decode_key, decode_varint, WireType};
 use prost_types::{DescriptorProto, EnumDescriptorProto, FieldDescriptorProto};
 use prost_types::field_descriptor_proto::Type;
 
-use crate::utils::last_name;
+use crate::utils::{as_hex, last_name};
 
 /// Decoded Protobuf field
 #[derive(Clone, Debug, PartialEq)]
@@ -47,6 +48,35 @@ pub enum ProtobufFieldData {
   Enum(i32, EnumDescriptorProto),
   /// Embedded message
   Message(Vec<u8>, DescriptorProto)
+}
+
+impl Display for ProtobufFieldData {
+  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    match self {
+      ProtobufFieldData::String(s) => write!(f, "\"{}\"", s),
+      ProtobufFieldData::Boolean(b) => write!(f, "{}", b),
+      ProtobufFieldData::UInteger32(n) => write!(f, "{}", n),
+      ProtobufFieldData::Integer32(n) => write!(f, "{}", n),
+      ProtobufFieldData::UInteger64(n) => write!(f, "{}", n),
+      ProtobufFieldData::Integer64(n) => write!(f, "{}", n),
+      ProtobufFieldData::Float(n) => write!(f, "{}", n),
+      ProtobufFieldData::Double(n) => write!(f, "{}", n),
+      ProtobufFieldData::Bytes(b) => if b.len() <= 16 {
+        write!(f, "{}", as_hex(b.as_slice()))
+      } else {
+        write!(f, "{}... ({} bytes)", as_hex(&b[0..16]), b.len())
+      },
+      ProtobufFieldData::Enum(n, descriptor) => {
+        let enum_value_name = descriptor.value.iter()
+          .find(|v| v.number.is_some() && v.number.as_ref().unwrap() == n)
+          .map(|v| v.name.clone().unwrap_or_default()).unwrap_or_else(|| "unknown".to_string());
+        write!(f, "{}", enum_value_name)
+      },
+      ProtobufFieldData::Message(_, descriptor) => {
+        write!(f, "{}", descriptor.name.clone().unwrap_or_else(|| "unknown".to_string()))
+      }
+    }
+  }
 }
 
 /// Decodes the Protobuf message using the descriptors

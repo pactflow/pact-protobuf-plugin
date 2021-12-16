@@ -1,10 +1,13 @@
 //! Shared utilities
 
 use std::collections::BTreeMap;
+use std::fmt::Write;
 
 use anyhow::anyhow;
 use prost_types::{DescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorSet, MessageOptions, Type, Value};
 use prost_types::field_descriptor_proto::Label;
+
+use crate::message_decoder::ProtobufField;
 
 /// Return the last name in a dot separated string
 pub fn last_name(entry_type_name: &str) -> &str {
@@ -55,6 +58,27 @@ pub fn find_nested_type(message_descriptor: &DescriptorProto, field: &FieldDescr
   }
 }
 
+/// Return the hexadecimal representation for the bytes
+pub(crate) fn as_hex(data: &[u8]) -> String {
+  let mut buffer = String::with_capacity(data.len() * 2);
+
+  for b in data {
+    let _ = write!(&mut buffer, "{:02x}", b);
+  }
+
+  buffer
+}
+
+/// If the message fields include the field with the given descriptor
+pub fn find_message_field<'a>(message: &'a Vec<ProtobufField>, field_descriptor: &ProtobufField) -> Option<&'a ProtobufField> {
+  message.iter().find(|v| v.field_num == field_descriptor.field_num)
+}
+
+/// If the field is a repeated field
+pub fn is_repeated(descriptor: &FieldDescriptorProto) -> bool {
+  descriptor.label() == Label::Repeated
+}
+
 #[cfg(test)]
 mod tests {
   use bytes::Bytes;
@@ -63,7 +87,7 @@ mod tests {
   use prost_types::{DescriptorProto, field, FieldDescriptorProto, FileDescriptorSet, MessageOptions};
   use prost_types::field_descriptor_proto::{Label, Type};
 
-  use crate::utils::{find_message_type_by_name, last_name, find_nested_type, is_map_field};
+  use crate::utils::{as_hex, find_message_type_by_name, find_nested_type, is_map_field, last_name};
 
   #[test]
   fn last_name_test() {
@@ -277,5 +301,11 @@ mod tests {
     expect!(is_map_field(&message, &repeated_field_with_no_nested_type)).to(be_false());
     expect!(is_map_field(&message, &field_with_non_map_nested_type)).to(be_false());
     expect!(is_map_field(&message, &field_with_map_nested_type)).to(be_true());
+  }
+
+  #[test]
+  fn as_hex_test() {
+    expect!(as_hex(&[])).to(be_equal_to(""));
+    expect!(as_hex(&[1, 2, 3, 255])).to(be_equal_to("010203ff"));
   }
 }

@@ -41,6 +41,10 @@ impl ProviderStateExecutor for NoopProviderStateExecutor {
   ) -> anyhow::Result<HashMap<String, Value>> {
     Ok(hashmap!{})
   }
+
+  fn teardown(self: &Self) -> bool {
+    false
+  }
 }
 
 // Structure to hold the data we receive from the Pact verifier
@@ -197,7 +201,8 @@ async fn verify_plugin() {
 
   // Execute the verification
   let result = verify_provider_async(provider_info, vec![source], FilterInfo::None,
-                               vec![], options, &Arc::new(ps_executor)).await;
+    vec![], options, &Arc::new(ps_executor), None
+  ).await;
 
   // Need to shutdown all the things, otherwise we could leave hanging plugin processes.
   shutdown.notify();
