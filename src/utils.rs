@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use anyhow::anyhow;
-use prost_types::{DescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorSet, MessageOptions, Type, Value};
+use prost_types::{DescriptorProto, EnumDescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorSet, Value};
 use prost_types::field_descriptor_proto::Label;
 
 use crate::message_decoder::ProtobufField;
@@ -69,6 +69,15 @@ pub(crate) fn as_hex(data: &[u8]) -> String {
   buffer
 }
 
+/// Create a string from the byte array for rendering/displaying
+pub(crate) fn display_bytes(data: &Vec<u8>) -> String {
+  if data.len() > 16 {
+    as_hex(&data[..])
+  } else {
+    format!("{}... ({} bytes)", as_hex(&data[0..16]), data.len())
+  }
+}
+
 /// If the message fields include the field with the given descriptor
 pub fn find_message_field<'a>(message: &'a Vec<ProtobufField>, field_descriptor: &ProtobufField) -> Option<&'a ProtobufField> {
   message.iter().find(|v| v.field_num == field_descriptor.field_num)
@@ -77,6 +86,13 @@ pub fn find_message_field<'a>(message: &'a Vec<ProtobufField>, field_descriptor:
 /// If the field is a repeated field
 pub fn is_repeated(descriptor: &FieldDescriptorProto) -> bool {
   descriptor.label() == Label::Repeated
+}
+
+/// Get the name of the enum value
+pub fn enum_name(enum_value: i32, descriptor: &EnumDescriptorProto) -> String {
+  descriptor.value.iter().find(|v| v.number.unwrap_or(-1) == enum_value)
+    .map(|v| v.name.clone().unwrap_or_else(|| format!("enum {}", enum_value)))
+    .unwrap_or_else(|| format!("Unknown enum {}", enum_value))
 }
 
 #[cfg(test)]

@@ -436,6 +436,7 @@ impl RType {
       RType::Integer64(i) => Ok(i.to_string()),
       RType::Float(f) => Ok(f.to_string()),
       RType::Double(d) => Ok(d.to_string()),
+      RType::Enum(s) => Ok(s.clone()),
       _ => Err(anyhow!("Can't convert {:?} to a string", self))
     }
   }

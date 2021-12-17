@@ -385,7 +385,7 @@ mod tests {
   use maplit::{btreemap, hashmap};
   use pact_plugin_driver::proto::{MatchingRules, MatchingRule};
   use pact_plugin_driver::proto::interaction_response::MarkupType;
-  use prost_types::{DescriptorProto, field_descriptor_proto, FieldDescriptorProto, Value};
+  use prost_types::{DescriptorProto, field_descriptor_proto, FieldDescriptorProto};
   use prost_types::field_descriptor_proto::Type;
   use trim_margin::MarginTrimmable;
 

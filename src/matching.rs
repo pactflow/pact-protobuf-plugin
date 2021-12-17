@@ -1,23 +1,22 @@
 //! Functions for matching Protobuf messages
 
-use std::collections::HashMap;
-
 use anyhow::anyhow;
 use bytes::Bytes;
 use log::{debug, trace, warn};
 use maplit::hashmap;
 use pact_matching::{BodyMatchResult, DiffConfig, MatchingContext, Mismatch};
+use pact_matching::matchers::{match_values, Matches};
 use pact_matching::Mismatch::BodyMismatch;
 use pact_models::content_types::ContentType;
-use pact_models::matchingrules::{MatchingRule, MatchingRules};
-use pact_models::path_exp::DocPath;
+use pact_models::matchingrules::MatchingRule;
+use pact_models::path_exp::{DocPath, PathToken};
 use pact_models::prelude::{MatchingRuleCategory, RuleLogic};
-use pact_plugin_driver::proto::{Body, CompareContentsRequest};
-use pact_plugin_driver::utils::{proto_struct_to_json, proto_value_to_json};
+use pact_plugin_driver::proto::CompareContentsRequest;
+use pact_plugin_driver::utils::proto_struct_to_json;
 use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet};
 
-use crate::message_decoder::{decode_message, ProtobufField};
-use crate::utils::{find_message_field, find_message_type_by_name, is_map_field, is_repeated};
+use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
+use crate::utils::{display_bytes, enum_name, find_message_field, find_message_type_by_name, is_map_field, is_repeated};
 
 /// Match a single Protobuf message
 pub fn match_message(
@@ -238,7 +237,107 @@ fn compare_field(
   actual: &ProtobufField,
   matching_context: &MatchingContext
 ) -> Vec<Mismatch> {
-  todo!()
+  trace!("compare_field({}, {:?}, {:?}, {:?})", path, field, descriptor, actual);
+  //       Descriptors.FieldDescriptor.Type.MESSAGE -> {
+  //         val expected = expectedValue as DynamicMessage
+  //         val actual = actualValue as DynamicMessage
+  //         when (field.messageType.fullName) {
+  //           "google.protobuf.BytesValue" -> {
+  //             logger.debug { "Field is a Protobuf BytesValue" }
+  //             val fieldDescriptor = expected.descriptorForType.findFieldByName("value")
+  //             val expectedByteString = expected.getField(fieldDescriptor) as ByteString
+  //             val actualByteString = actual.getField(fieldDescriptor) as ByteString
+  //             compareValue(path, field, expectedByteString.toByteArray(), actualByteString.toByteArray(), diffCallback,
+  //               context)
+  //           }
+  //           "google.protobuf.Struct" -> {
+  //             logger.debug { "Field is a Struct field" }
+  //             JsonContentMatcher.compare(path, structMessageToJson(expected), structMessageToJson(actual), context)
+  //           }
+  //           else -> compareMessage(path, expectedValue, actualValue, context)
+  //         }
+  //       }
+  //       Descriptors.FieldDescriptor.Type.ENUM -> compareValue(path, field, expectedValue as Descriptors.EnumValueDescriptor,
+  //         actualValue as Descriptors.EnumValueDescriptor, diffCallback, context)
+
+  match (&field.data, &actual.data) {
+    (ProtobufFieldData::String(s1), ProtobufFieldData::String(s2)) => {
+      let s1 = s1.clone();
+      let s2 = s2.clone();
+      compare_value(path, field, &s1, &s2, s1.as_str(), s2.as_str(), matching_context)
+    },
+    (ProtobufFieldData::Boolean(b1), ProtobufFieldData::Boolean(b2)) => compare_value(path, field, *b1, *b2, b1.to_string().as_str(), b2.to_string().as_str(), matching_context),
+    (ProtobufFieldData::UInteger32(n1), ProtobufFieldData::UInteger32(n2)) => compare_value(path, field, *n1 as u64, *n2 as u64, n1.to_string().as_str(), n2.to_string().as_str(), matching_context),
+    (ProtobufFieldData::Integer32(n1), ProtobufFieldData::Integer32(n2)) => compare_value(path, field, *n1, *n2, n1.to_string().as_str(), n2.to_string().as_str(), matching_context),
+    (ProtobufFieldData::UInteger64(n1), ProtobufFieldData::UInteger64(n2)) => compare_value(path, field, *n1, *n2, n1.to_string().as_str(), n2.to_string().as_str(), matching_context),
+    (ProtobufFieldData::Integer64(n1), ProtobufFieldData::Integer64(n2)) => compare_value(path, field, *n1, *n2, n1.to_string().as_str(), n2.to_string().as_str(), matching_context),
+    (ProtobufFieldData::Float(n1), ProtobufFieldData::Float(n2)) => compare_value(path, field, *n1 as f64, *n2 as f64, n1.to_string().as_str(), n2.to_string().as_str(), matching_context),
+    (ProtobufFieldData::Double(n1), ProtobufFieldData::Double(n2)) => compare_value(path, field, *n1, *n2, n1.to_string().as_str(), n2.to_string().as_str(), matching_context),
+    (ProtobufFieldData::Bytes(b1), ProtobufFieldData::Bytes(b2)) => {
+      let b1_str = display_bytes(b1);
+      let b2_str = display_bytes(b2);
+      compare_value(path, field, b1.as_slice(), b2.as_slice(), b1_str.as_str(), b2_str.as_str(), matching_context)
+    },
+    (ProtobufFieldData::Enum(b1, descriptor), ProtobufFieldData::Enum(b2, _)) => {
+      let enum_1 = enum_name(*b1, descriptor);
+      let enum_2 = enum_name(*b2, descriptor);
+      compare_value(path, field, &enum_1, &enum_2, enum_1.as_str(), enum_2.as_str(), matching_context)
+    },
+    (ProtobufFieldData::Message(b1, descriptor), ProtobufFieldData::Message(b2, _)) => { todo!() }
+    _ => vec![
+      BodyMismatch {
+        path: path.to_string(),
+        expected: Some(field.data.to_string().into()),
+        actual: Some(actual.data.to_string().into()),
+        mismatch: format!("Expected and actual messages have different types: {} and {}",
+                          field.data.type_name(), actual.data.type_name())
+      }
+    ]
+  }
+}
+
+/// Compares the actual value to the expected one.
+fn compare_value<T>(
+  path: &DocPath,
+  field: &ProtobufField,
+  expected: T,
+  actual: T,
+  expected_str: &str,
+  actual_str: &str,
+  matching_context: &MatchingContext
+) -> Vec<Mismatch> where T: Clone + Matches<T> {
+  trace!("compare_value({}, {:?}, {}, {}, {:?})", path, field, expected_str, actual_str, matching_context);
+
+  let path_slice = path.tokens().iter().map(|t| match t {
+    PathToken::Root => "$".to_string(),
+    PathToken::Field(n) => n.clone(),
+    PathToken::Index(n) => n.to_string(),
+    PathToken::Star | PathToken::StarIndex => "*".to_string()
+  }).collect::<Vec<String>>();
+  let path_slice = path_slice.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
+  if matching_context.matcher_is_defined(path_slice.as_slice()) {
+    debug!("compareValue: Matcher defined for path {}", path);
+    match match_values(path_slice.as_slice(), matching_context, expected, actual) {
+      Ok(_) => vec![],
+      Err(mismatches) => mismatches.iter().map(|m| BodyMismatch {
+        path: path.to_string(),
+        expected: Some(expected_str.as_bytes().to_vec().into()),
+        actual: Some(actual_str.as_bytes().to_vec().into()),
+        mismatch: m.clone()
+      }).collect()
+    }
+  } else {
+    debug!("compareValue: No matcher defined for path {}, using equality", path);
+    match expected.matches_with(actual, &MatchingRule::Equality, false) {
+      Ok(_) => vec![],
+      Err(err) => vec![BodyMismatch {
+        path: path.to_string(),
+        expected: Some(expected_str.as_bytes().to_vec().into()),
+        actual: Some(actual_str.as_bytes().to_vec().into()),
+        mismatch: err.to_string()
+      }]
+    }
+  }
 }
 
 /// Compare a repeated field

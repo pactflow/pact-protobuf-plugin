@@ -4,7 +4,7 @@ use std::fmt::{Display, Formatter};
 use std::str::from_utf8;
 
 use anyhow::anyhow;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::Buf;
 use itertools::Itertools;
 use prost::encoding::{decode_key, decode_varint, WireType};
 use prost_types::{DescriptorProto, EnumDescriptorProto, FieldDescriptorProto};
@@ -48,6 +48,25 @@ pub enum ProtobufFieldData {
   Enum(i32, EnumDescriptorProto),
   /// Embedded message
   Message(Vec<u8>, DescriptorProto)
+}
+
+impl ProtobufFieldData {
+  /// Returns the type name of the field.
+  pub fn type_name(&self) -> &'static str {
+    match self {
+      ProtobufFieldData::String(_) => "String",
+      ProtobufFieldData::Boolean(_) => "Boolean",
+      ProtobufFieldData::UInteger32(_) => "UInteger32",
+      ProtobufFieldData::Integer32(_) => "Integer32",
+      ProtobufFieldData::UInteger64(_) => "UInteger64",
+      ProtobufFieldData::Integer64(_) => "Integer64",
+      ProtobufFieldData::Float(_) => "Float",
+      ProtobufFieldData::Double(_) => "Double",
+      ProtobufFieldData::Bytes(_) => "Bytes",
+      ProtobufFieldData::Enum(_, _) => "Enum",
+      ProtobufFieldData::Message(_, _) => "Message"
+    }
+  }
 }
 
 impl Display for ProtobufFieldData {
