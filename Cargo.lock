@@ -1338,7 +1338,7 @@ dependencies = [
  "md5",
  "os_info",
  "pact-plugin-driver",
- "pact_matching",
+ "pact_matching 0.11.4",
  "pact_models",
  "pact_verifier",
  "prost",
@@ -1361,6 +1361,41 @@ name = "pact_matching"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8428f0b2334ce31dcbd2fed46fd9daf32ae4f8035c3816cc8b1216b52061a741"
+dependencies = [
+ "ansi_term",
+ "anyhow",
+ "base64",
+ "bytes",
+ "chrono",
+ "difference",
+ "hex",
+ "http",
+ "itertools",
+ "lazy_static",
+ "lenient_semver",
+ "log",
+ "maplit",
+ "md5",
+ "mime",
+ "multipart",
+ "nom",
+ "onig",
+ "pact-plugin-driver",
+ "pact_models",
+ "rand 0.8.4",
+ "reqwest",
+ "semver 0.11.0",
+ "serde",
+ "serde_json",
+ "sxd-document",
+ "tokio",
+ "tree_magic_mini",
+ "uuid",
+]
+
+[[package]]
+name = "pact_matching"
+version = "0.11.4"
 dependencies = [
  "ansi_term",
  "anyhow",
@@ -1451,7 +1486,7 @@ dependencies = [
  "maplit",
  "mime",
  "pact-plugin-driver",
- "pact_matching",
+ "pact_matching 0.11.3",
  "pact_models",
  "regex",
  "reqwest",

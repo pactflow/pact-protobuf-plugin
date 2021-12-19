@@ -1,10 +1,11 @@
 //! Functions for matching Protobuf messages
 
 use anyhow::anyhow;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use log::{debug, trace, warn};
 use maplit::hashmap;
 use pact_matching::{BodyMatchResult, DiffConfig, MatchingContext, Mismatch};
+use pact_matching::json::compare_json;
 use pact_matching::matchers::{match_values, Matches};
 use pact_matching::Mismatch::BodyMismatch;
 use pact_models::content_types::ContentType;
@@ -16,7 +17,7 @@ use pact_plugin_driver::utils::proto_struct_to_json;
 use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
-use crate::utils::{display_bytes, enum_name, find_message_field, find_message_type_by_name, is_map_field, is_repeated};
+use crate::utils::{display_bytes, enum_name, field_data_to_json, find_message_field, find_message_field_by_name, find_message_type_by_name, is_map_field, is_repeated};
 
 /// Match a single Protobuf message
 pub fn match_message(
@@ -238,27 +239,6 @@ fn compare_field(
   matching_context: &MatchingContext
 ) -> Vec<Mismatch> {
   trace!("compare_field({}, {:?}, {:?}, {:?})", path, field, descriptor, actual);
-  //       Descriptors.FieldDescriptor.Type.MESSAGE -> {
-  //         val expected = expectedValue as DynamicMessage
-  //         val actual = actualValue as DynamicMessage
-  //         when (field.messageType.fullName) {
-  //           "google.protobuf.BytesValue" -> {
-  //             logger.debug { "Field is a Protobuf BytesValue" }
-  //             val fieldDescriptor = expected.descriptorForType.findFieldByName("value")
-  //             val expectedByteString = expected.getField(fieldDescriptor) as ByteString
-  //             val actualByteString = actual.getField(fieldDescriptor) as ByteString
-  //             compareValue(path, field, expectedByteString.toByteArray(), actualByteString.toByteArray(), diffCallback,
-  //               context)
-  //           }
-  //           "google.protobuf.Struct" -> {
-  //             logger.debug { "Field is a Struct field" }
-  //             JsonContentMatcher.compare(path, structMessageToJson(expected), structMessageToJson(actual), context)
-  //           }
-  //           else -> compareMessage(path, expectedValue, actualValue, context)
-  //         }
-  //       }
-  //       Descriptors.FieldDescriptor.Type.ENUM -> compareValue(path, field, expectedValue as Descriptors.EnumValueDescriptor,
-  //         actualValue as Descriptors.EnumValueDescriptor, diffCallback, context)
 
   match (&field.data, &actual.data) {
     (ProtobufFieldData::String(s1), ProtobufFieldData::String(s2)) => {
@@ -283,7 +263,128 @@ fn compare_field(
       let enum_2 = enum_name(*b2, descriptor);
       compare_value(path, field, &enum_1, &enum_2, enum_1.as_str(), enum_2.as_str(), matching_context)
     },
-    (ProtobufFieldData::Message(b1, descriptor), ProtobufFieldData::Message(b2, _)) => { todo!() }
+    (ProtobufFieldData::Message(b1, message_descriptor), ProtobufFieldData::Message(b2, _)) => {
+      let mut expected_bytes = BytesMut::from(b1.as_slice());
+      let expected_message = match decode_message(&mut expected_bytes, &message_descriptor) {
+        Ok(message) => message,
+        Err(err) => {
+          return vec![
+            BodyMismatch {
+              path: path.to_string(),
+              expected: Some(field.data.to_string().into()),
+              actual: Some(actual.data.to_string().into()),
+              mismatch: format!("Could not decode expected message field {} - {}", descriptor.name.clone().unwrap_or_else(|| "unknown".to_string()), err)
+            }
+          ];
+        }
+      };
+      let mut actual_bytes = BytesMut::from(b2.as_slice());
+      let actual_message = match decode_message(&mut actual_bytes, &message_descriptor) {
+        Ok(message) => message,
+        Err(err) => {
+          return vec![
+            BodyMismatch {
+              path: path.to_string(),
+              expected: Some(field.data.to_string().into()),
+              actual: Some(actual.data.to_string().into()),
+              mismatch: format!("Could not decode actual message field {} - {}", descriptor.name.clone().unwrap_or_else(|| "unknown".to_string()), err)
+            }
+          ];
+        }
+      };
+      match &message_descriptor.name {
+        Some(name) => match name.as_str() {
+          "google.protobuf.BytesValue" => {
+            debug!("Field is a Protobuf BytesValue");
+            let expected_field_data = find_message_field_by_name(&message_descriptor, expected_message, "value");
+            let actual_field_data = find_message_field_by_name(&message_descriptor, actual_message, "value");
+            let b1 = expected_field_data.map(|f| match f.data {
+              ProtobufFieldData::Bytes(b) => b,
+              _ => vec![]
+            }).unwrap_or_default();
+            let b1_str = display_bytes(&b1);
+            let b2 = actual_field_data.map(|f| match f.data {
+              ProtobufFieldData::Bytes(b) => b,
+              _ => vec![]
+            }).unwrap_or_default();
+            let b2_str = display_bytes(&b2);
+            compare_value(path, field, b1.as_slice(), b2.as_slice(), b1_str.as_str(), b2_str.as_str(), matching_context)
+          }
+          "google.protobuf.Struct" => {
+            debug!("Field is a Protobuf Struct, will compare it as JSON");
+
+            let expected_json = match field_data_to_json(expected_message, message_descriptor) {
+              Ok(j) => j,
+              Err(err) => {
+                return vec![
+                  BodyMismatch {
+                    path: path.to_string(),
+                    expected: Some(field.data.to_string().into()),
+                    actual: Some(actual.data.to_string().into()),
+                    mismatch: format!("Could not decode expected message field {} - {}", descriptor.name.clone().unwrap_or_else(|| "unknown".to_string()), err)
+                  }
+                ];
+              }
+            };
+            let actual_json = match field_data_to_json(actual_message, message_descriptor) {
+              Ok(j) => j,
+              Err(err) => {
+                return vec![
+                  BodyMismatch {
+                    path: path.to_string(),
+                    expected: Some(field.data.to_string().into()),
+                    actual: Some(actual.data.to_string().into()),
+                    mismatch: format!("Could not decode actual message field {} - {}", descriptor.name.clone().unwrap_or_else(|| "unknown".to_string()), err)
+                  }
+                ];
+              }
+            };
+
+            let path_slice = path.tokens().iter().map(|t| match t {
+              PathToken::Root => "$".to_string(),
+              PathToken::Field(n) => n.clone(),
+              PathToken::Index(n) => n.to_string(),
+              PathToken::Star | PathToken::StarIndex => "*".to_string()
+            }).collect::<Vec<String>>();
+            let path_slice = path_slice.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
+            match compare_json(path_slice.as_slice(), &expected_json, &actual_json, matching_context) {
+              Ok(_) => vec![],
+              Err(err) => err
+            }
+          }
+          _ => match compare_message(path.clone(), &expected_message, &actual_message, matching_context, &message_descriptor) {
+            Ok(result) => match result {
+              BodyMatchResult::Ok => vec![],
+              BodyMatchResult::BodyTypeMismatch { message, .. } => vec![
+                BodyMismatch {
+                  path: path.to_string(),
+                  expected: Some(name.clone().into()),
+                  actual: Some(name.clone().into()),
+                  mismatch: message.clone()
+                }
+              ],
+              BodyMatchResult::BodyMismatches(mismatches) => mismatches.values().cloned().flatten().collect()
+            }
+            Err(err) => vec![
+              BodyMismatch {
+                path: path.to_string(),
+                expected: Some(name.clone().into()),
+                actual: Some(name.clone().into()),
+                mismatch: err.to_string()
+              }
+            ]
+          }
+        }
+        None => vec![
+          BodyMismatch {
+            path: path.to_string(),
+            expected: Some(field.data.to_string().into()),
+            actual: Some(actual.data.to_string().into()),
+            mismatch: format!("Message field {} type name is not set, can not compare it", descriptor.name.clone().unwrap_or_else(|| "unknown".to_string()))
+          }
+        ]
+      }
+    }
     _ => vec![
       BodyMismatch {
         path: path.to_string(),

@@ -4,10 +4,15 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use anyhow::anyhow;
+use bytes::BytesMut;
+use log::warn;
+use maplit::hashmap;
 use prost_types::{DescriptorProto, EnumDescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorSet, Value};
 use prost_types::field_descriptor_proto::Label;
+use prost_types::value::Kind;
+use serde_json::json;
 
-use crate::message_decoder::ProtobufField;
+use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
 
 /// Return the last name in a dot separated string
 pub fn last_name(entry_type_name: &str) -> &str {
@@ -83,6 +88,18 @@ pub fn find_message_field<'a>(message: &'a Vec<ProtobufField>, field_descriptor:
   message.iter().find(|v| v.field_num == field_descriptor.field_num)
 }
 
+/// Look for the message field data with the given name
+pub fn find_message_field_by_name(descriptor: &DescriptorProto, field_data: Vec<ProtobufField>, field_name: &str) -> Option<ProtobufField> {
+  let field_num = match descriptor.field.iter()
+    .find(|f| f.name.clone().unwrap_or("".to_string()) == field_name)
+    .map(|f| f.number.unwrap_or(-1)) {
+    Some(n) => n,
+    None => return None
+  };
+
+  field_data.iter().find(|d| d.field_num == field_num as u32).cloned()
+}
+
 /// If the field is a repeated field
 pub fn is_repeated(descriptor: &FieldDescriptorProto) -> bool {
   descriptor.label() == Label::Repeated
@@ -93,6 +110,57 @@ pub fn enum_name(enum_value: i32, descriptor: &EnumDescriptorProto) -> String {
   descriptor.value.iter().find(|v| v.number.unwrap_or(-1) == enum_value)
     .map(|v| v.name.clone().unwrap_or_else(|| format!("enum {}", enum_value)))
     .unwrap_or_else(|| format!("Unknown enum {}", enum_value))
+}
+
+/// Convert the message field data into a JSON value
+pub fn field_data_to_json(field_data: Vec<ProtobufField>, descriptor: &DescriptorProto) -> anyhow::Result<serde_json::Value> {
+  let mut object = hashmap!{};
+
+  for field in field_data {
+    if let Some(value) = descriptor.field.iter().find(|f| f.number.unwrap_or(-1) as u32 == field.field_num) {
+      match &value.name {
+        Some(name) => {
+          object.insert(name.clone(), match &field.data {
+            ProtobufFieldData::String(s) => serde_json::Value::String(s.clone()),
+            ProtobufFieldData::Boolean(b) => serde_json::Value::Bool(*b),
+            ProtobufFieldData::UInteger32(n) => json!(n),
+            ProtobufFieldData::Integer32(n) => json!(n),
+            ProtobufFieldData::UInteger64(n) => json!(n),
+            ProtobufFieldData::Integer64(n) => json!(n),
+            ProtobufFieldData::Float(n) => json!(n),
+            ProtobufFieldData::Double(n) => json!(n),
+            ProtobufFieldData::Bytes(b) => serde_json::Value::Array(b.iter().map(|v| json!(v)).collect()),
+            ProtobufFieldData::Enum(n, descriptor) => serde_json::Value::String(enum_name(*n, descriptor)),
+            ProtobufFieldData::Message(b, descriptor) => {
+              let mut bytes = BytesMut::from(b.as_slice());
+              let message_data = decode_message(&mut bytes, descriptor)?;
+              field_data_to_json(message_data, descriptor)?
+            }
+          });
+        }
+        None => warn!("Did not get the field name for field number {}", field.field_num)
+      }
+    } else {
+      warn!("Did not find the descriptor for field number {}", field.field_num);
+    }
+  }
+
+  Ok(serde_json::Value::Object(object.iter().map(|(k, v)| (k.clone(), v.clone())).collect()))
+}
+
+/// Return the type name of a Prootbuf value
+pub fn proto_type_name(value: &Value) -> String {
+  match &value.kind {
+    Some(kind) => match kind {
+      Kind::NullValue(_) => "Null".to_string(),
+      Kind::NumberValue(_) => "Number".to_string(),
+      Kind::StringValue(_) => "String".to_string(),
+      Kind::BoolValue(_) => "Boolean".to_string(),
+      Kind::StructValue(_) => "Struct".to_string(),
+      Kind::ListValue(_) => "List".to_string(),
+    }
+    None => "Unknown".to_string()
+  }
 }
 
 #[cfg(test)]
