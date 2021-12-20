@@ -32,7 +32,7 @@ use tokio::io::AsyncReadExt;
 
 use crate::message_builder::{MessageBuilder, MessageFieldValue, RType};
 use crate::protoc::Protoc;
-use crate::utils::{find_message_type_by_name, find_message_type_in_file_descriptor, find_nested_type, is_map_field, is_repeated, last_name, proto_struct_to_btreemap, proto_type_name};
+use crate::utils::{find_enum_value_by_name, find_message_type_by_name, find_message_type_in_file_descriptor, find_nested_type, is_map_field, is_repeated, last_name, proto_struct_to_btreemap, proto_type_name};
 
 /// Process the provided protobuf file and configure the interaction
 pub(crate) async fn process_proto(
@@ -323,7 +323,7 @@ fn construct_message_field(
             }
           }
         } else {
-          let field_value = build_field_value(path, field, key, value, &mut matching_rules, &mut generators)?;
+          let field_value = build_field_value(path, message_descriptor, field, key, value, &mut matching_rules, &mut generators)?;
           if let Some(field_value) = field_value {
             debug!("Setting field {:?} to value {:?}", key, field_value);
             message_builder.set_field(field, key, field_value);
@@ -492,7 +492,7 @@ fn build_single_field_value(
         ".google.protobuf.BytesValue" => {
           debug!("Field is a Protobuf BytesValue");
           if let Value::String(_) = value {
-            build_field_value(path, field_descriptor, field, value, matching_rules, generators)
+            build_field_value(path, message_descriptor, field_descriptor, field, value, matching_rules, generators)
           } else {
             Err(anyhow!("Fields of type google.protobuf.BytesValue must be configured with a single string value"))
           }
@@ -545,7 +545,7 @@ fn build_single_field_value(
         }
       }
     }
-    _ => build_field_value(path, field_descriptor, field, value, matching_rules, generators)
+    _ => build_field_value(path, message_descriptor, field_descriptor, field, value, matching_rules, generators)
   }
 }
 
@@ -553,6 +553,7 @@ fn build_single_field_value(
 /// updates the matching rules and generators for it.
 fn build_field_value(
   path: &DocPath,
+  message_descriptor: &DescriptorProto,
   descriptor: &FieldDescriptorProto,
   key: &str,
   value: &Value,
@@ -578,16 +579,23 @@ fn build_field_value(
       if let Some(generator) = mrd.generator {
         generators.insert(field_path.to_string(), generator);
       }
-      value_for_type(key, mrd.value.as_str(), descriptor)
+      value_for_type(key, mrd.value.as_str(), descriptor, message_descriptor)
         .map(Some)
     }
     _ => Err(anyhow!("Field values must be a string, got {:?}", value))
   }
 }
 
-fn value_for_type(field_name: &str, field_value: &str, descriptor: &FieldDescriptorProto) -> anyhow::Result<MessageFieldValue> {
+fn value_for_type(
+  field_name: &str,
+  field_value: &str,
+  descriptor: &FieldDescriptorProto,
+  message_descriptor: &DescriptorProto
+) -> anyhow::Result<MessageFieldValue> {
   trace!("value_for_type({}, {}, _)", field_name, field_value);
-  debug!("Creating value for type {:?} from '{}'", descriptor.type_name, field_value);
+
+  let type_name = descriptor.type_name.clone().unwrap_or_default();
+  debug!("Creating value for type {:?} from '{}'", type_name, field_value);
 
   let t = descriptor.r#type();
   match t {
@@ -600,16 +608,22 @@ fn value_for_type(field_name: &str, field_value: &str, descriptor: &FieldDescrip
     Type::Bool => MessageFieldValue::boolean(field_name, field_value),
     Type::String => Ok(MessageFieldValue::string(field_name, field_value)),
     Type::Message => {
-      let type_name = descriptor.type_name.clone().unwrap_or_default();
       if type_name == ".google.protobuf.BytesValue" {
         Ok(MessageFieldValue::bytes(field_name, field_value))
       } else {
-        Err(anyhow!("Protobuf field {} has an unsupported type {:?} {}", field_name, t, type_name))
+        Err(anyhow!("value_for_type: Protobuf field {} has an unsupported type {:?} {}", field_name, t, type_name))
       }
     }
     Type::Bytes => Ok(MessageFieldValue::bytes(field_name, field_value)),
-    // Type::Enum => {}
-    // Descriptors.FieldDescriptor.JavaType.ENUM -> field.enumType.findValueByName(fieldValue)
+    Type::Enum => if let Some(n) = find_enum_value_by_name(message_descriptor, type_name.as_str(), field_value) {
+      Ok(MessageFieldValue {
+        name: field_name.to_string(),
+        raw_value: Some(field_value.to_string()),
+        rtype: RType::Integer32(n)
+      })
+    } else {
+      Err(anyhow!("Protobuf enum value {} has no value {}", type_name, field_value))
+    }
     _ => Err(anyhow!("Protobuf field {} has an unsupported type {:?}", field_name, t))
   }
 }
@@ -642,7 +656,7 @@ mod tests {
       options: None,
       proto3_optional: None
     };
-    let result = value_for_type("test", "test", &descriptor).unwrap();
+    let result = value_for_type("test", "test", &descriptor, ).unwrap();
     expect!(result.name).to(be_equal_to("test"));
     expect!(result.raw_value).to(be_some().value("test".to_string()));
     expect!(result.rtype).to(be_equal_to(RType::String("test".to_string())));
@@ -660,7 +674,7 @@ mod tests {
       options: None,
       proto3_optional: None
     };
-    let result = value_for_type("test", "100", &descriptor).unwrap();
+    let result = value_for_type("test", "100", &descriptor, ).unwrap();
     expect!(result.name).to(be_equal_to("test"));
     expect!(result.raw_value).to(be_some().value("100".to_string()));
     expect!(result.rtype).to(be_equal_to(RType::UInteger64(100)));

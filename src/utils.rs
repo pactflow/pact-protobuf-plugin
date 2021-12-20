@@ -123,6 +123,34 @@ pub fn enum_name(enum_value: i32, descriptor: &EnumDescriptorProto) -> String {
     .unwrap_or_else(|| format!("Unknown enum {}", enum_value))
 }
 
+/// Find the integer value of the given enum type and name.
+pub fn find_enum_value_by_name(message_descriptor: &DescriptorProto, enum_name: &str, enum_value: &str) -> Option<i32> {
+  trace!(">> find_enum_value_by_name({:?}, {}, {})", message_descriptor.name, enum_name, enum_value);
+  message_descriptor.enum_type.iter()
+    .find_map(|enum_descriptor| {
+      trace!("find_enum_value_by_name: enum type = {:?}", enum_descriptor.name);
+      if let Some(name) = &enum_descriptor.name {
+        if name == last_name(enum_name) {
+          enum_descriptor.value.iter().find_map(|val| {
+            if let Some(name) = &val.name {
+              if name == enum_value {
+                val.number
+              } else {
+                None
+              }
+            } else {
+              None
+            }
+          })
+        } else {
+          None
+        }
+      } else {
+        None
+      }
+    })
+}
+
 /// Convert the message field data into a JSON value
 pub fn field_data_to_json(field_data: Vec<ProtobufField>, descriptor: &DescriptorProto) -> anyhow::Result<serde_json::Value> {
   let mut object = hashmap!{};
