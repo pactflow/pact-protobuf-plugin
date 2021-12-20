@@ -1,6 +1,6 @@
 //! Module for processing and comparing protobuf messages
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::anyhow;
@@ -8,6 +8,7 @@ use itertools::{Either, Itertools};
 use log::{debug, LevelFilter, max_level, trace};
 use maplit::hashmap;
 use pact_models::generators::Generator;
+use pact_models::json_utils::json_to_string;
 use pact_models::matchingrules::MatchingRuleCategory;
 use pact_models::matchingrules::expressions::parse_matcher_def;
 use pact_models::path_exp::DocPath;
@@ -31,10 +32,14 @@ use tokio::io::AsyncReadExt;
 
 use crate::message_builder::{MessageBuilder, MessageFieldValue, RType};
 use crate::protoc::Protoc;
-use crate::utils::{find_nested_type, is_repeated, last_name, proto_struct_to_btreemap, proto_type_name};
+use crate::utils::{find_message_type_by_name, find_message_type_in_file_descriptor, find_nested_type, is_map_field, is_repeated, last_name, proto_struct_to_btreemap, proto_type_name};
 
 /// Process the provided protobuf file and configure the interaction
-pub(crate) async fn process_proto(proto_file: String, protoc: &Protoc, config: BTreeMap<String, prost_types::Value>) -> anyhow::Result<(Vec<InteractionResponse>, PluginConfiguration)> {
+pub(crate) async fn process_proto(
+  proto_file: String,
+  protoc: &Protoc,
+  config: BTreeMap<String, prost_types::Value>
+) -> anyhow::Result<(Vec<InteractionResponse>, PluginConfiguration)> {
   debug!("Parsing proto file '{}'", proto_file);
   let proto_file = Path::new(proto_file.as_str());
   let (descriptors, digest, descriptor_bytes) = protoc.parse_proto_file(proto_file).await?;
@@ -106,7 +111,8 @@ fn configure_protobuf_service(
   let service_descriptor = descriptor.service
     .iter().find(|p| p.name.clone().unwrap_or_default() == service_and_proc.0)
     .ok_or_else(|| anyhow!("Did not find a descriptor for service '{}'", service_name))?;
-  construct_protobuf_interaction_for_service(service_descriptor, config, service_and_proc.0, service_and_proc.1, all_descriptors)
+  construct_protobuf_interaction_for_service(service_descriptor, config, service_and_proc.0,
+    service_and_proc.1, all_descriptors, descriptor)
     .map(|(request, response)| {
       let plugin_configuration = Some(PluginConfiguration {
         interaction_configuration: Some(to_proto_struct(hashmap! {
@@ -128,7 +134,8 @@ fn construct_protobuf_interaction_for_service(
   config: BTreeMap<String, prost_types::Value>,
   service_name: &str,
   method_name: &str,
-  all_descriptors: &HashMap<String, &FileDescriptorProto>
+  all_descriptors: &HashMap<String, &FileDescriptorProto>,
+  file_descriptor: &FileDescriptorProto
 ) -> anyhow::Result<(InteractionResponse, InteractionResponse)> {
   if !config.contains_key("response") {
     return Err(anyhow!("A Protobuf service requires a 'response' configuration"))
@@ -154,7 +161,8 @@ fn construct_protobuf_interaction_for_service(
     }).flatten()
   })
     .flatten()
-    .map(|config| construct_protobuf_interaction_for_message(&request_descriptor, config, input_message_name, "request"))
+    .map(|config| construct_protobuf_interaction_for_message(&request_descriptor,
+      config, input_message_name, "request", file_descriptor))
     .ok_or_else(|| anyhow!("A Protobuf service requires a 'request' configuration in map format"))??;
 
   let response_part = config.get("response").map(|response_config| {
@@ -166,7 +174,8 @@ fn construct_protobuf_interaction_for_service(
     }).flatten()
   })
     .flatten()
-    .map(|config| construct_protobuf_interaction_for_message(&response_descriptor, config, output_message_name, "response"))
+    .map(|config| construct_protobuf_interaction_for_message(&response_descriptor,
+       config, output_message_name, "response", file_descriptor))
     .ok_or_else(|| anyhow!("A Protobuf service requires a 'response' configuration in map format"))??;
 
   Ok((request_part, response_part))
@@ -196,7 +205,7 @@ fn configure_protobuf_message(
   let message_descriptor = descriptor.message_type
     .iter().find(|p| p.name.clone().unwrap_or_default() == message_name)
     .ok_or_else(|| anyhow!("Did not find a descriptor for message '{}'", message_name))?;
-  construct_protobuf_interaction_for_message(message_descriptor, config, message_name, "")
+  construct_protobuf_interaction_for_message(message_descriptor, config, message_name, "", descriptor)
     .map(|interaction| {
       InteractionResponse {
         plugin_configuration: Some(PluginConfiguration {
@@ -216,9 +225,10 @@ fn construct_protobuf_interaction_for_message(
   message_descriptor: &DescriptorProto,
   config: BTreeMap<String, prost_types::Value>,
   message_name: &str,
-  message_part: &str
+  message_part: &str,
+  file_descriptor: &FileDescriptorProto
 ) -> anyhow::Result<InteractionResponse> {
-  trace!("construct_protobuf_interaction_for_message(_, _, {}, {})", message_name, message_part);
+  trace!(">> construct_protobuf_interaction_for_message(_, _, {}, {}, {:?})", message_name, message_part, file_descriptor.name);
   let mut message_builder = MessageBuilder::new(message_descriptor, message_name);
   let mut matching_rules = MatchingRuleCategory::empty("body");
   let mut generators = hashmap!{};
@@ -231,7 +241,7 @@ fn construct_protobuf_interaction_for_message(
   for (key, value) in &config {
     if !key.starts_with("pact:") {
       construct_message_field(message_descriptor, message_name, &mut message_builder,
-                              &mut matching_rules, &mut generators, key, value, &path)?;
+                              &mut matching_rules, &mut generators, key, &proto_value_to_json(value), &path, file_descriptor)?;
     }
   }
 
@@ -288,32 +298,35 @@ fn construct_message_field(
   message_builder: &mut MessageBuilder,
   mut matching_rules: &mut MatchingRuleCategory,
   mut generators: &mut HashMap<String, Generator>,
-  key: &String,
-  value: &prost_types::Value,
-  path: &DocPath
+  key: &str,
+  value: &Value,
+  path: &DocPath,
+  file_descriptor: &FileDescriptorProto
 ) -> anyhow::Result<()> {
   trace!("construct_message_field(_, {}, {:?}, {:?}, {:?}, {}, _, {})",
     message_name, message_builder, matching_rules, generators, key, path);
   if !key.starts_with("pact:") {
-    if let Some(field) = message_descriptor.field.iter().find(|f| f.name.clone().unwrap_or_default() == key.as_str()) {
+    if let Some(field) = message_descriptor.field.iter().find(|f| f.name.clone().unwrap_or_default() == key) {
       match field.r#type {
         Some(r#type) => if r#type == field_descriptor_proto::Type::Message as i32 {
           let (message_value, additional_values) = build_message_field_value(message_descriptor,
-             path, field, key.as_str(), value, &mut matching_rules, &mut generators)?;
-          debug!("Setting field {} to value {:?}", key, message_value);
-          if field.label.unwrap_or_default() == field_descriptor_proto::Label::Repeated as i32 {
-            message_builder.add_repeated_field_value(field, key.as_str(), message_value);
-            for item in additional_values {
-              message_builder.add_repeated_field_value(field, key.as_str(), item);
+             path, field, key, value, &mut matching_rules, &mut generators, file_descriptor)?;
+          if let Some(message_value) = message_value {
+            debug!("Setting field {} to value {:?}", key, message_value);
+            if field.label.unwrap_or_default() == field_descriptor_proto::Label::Repeated as i32 {
+              message_builder.add_repeated_field_value(field, key, message_value);
+              for item in additional_values {
+                message_builder.add_repeated_field_value(field, key, item);
+              }
+            } else {
+              message_builder.set_field(field, key, message_value);
             }
-          } else {
-            message_builder.set_field(field, key.as_str(), message_value);
           }
         } else {
-          let field_value = build_field_value(path, field, key.as_str(), value, &mut matching_rules, &mut generators)?;
+          let field_value = build_field_value(path, field, key, value, &mut matching_rules, &mut generators)?;
           if let Some(field_value) = field_value {
             debug!("Setting field {:?} to value {:?}", key, field_value);
-            message_builder.set_field(field, key.as_str(), field_value);
+            message_builder.set_field(field, key, field_value);
           }
         }
         None => {
@@ -321,7 +334,10 @@ fn construct_message_field(
         }
       }
     } else {
-      return Err(anyhow!("Message {} has no field {}", message_name, key))
+      let fields: HashSet<String> = message_descriptor.field.iter()
+        .map(|field| field.name.clone().unwrap_or_default())
+        .collect();
+      return Err(anyhow!("Message {} has no field {}. Fields are {:?}", message_name, key, fields))
     }
   }
   Ok(())
@@ -333,39 +349,203 @@ fn build_message_field_value(
   path: &DocPath,
   descriptor: &FieldDescriptorProto,
   field: &str,
-  value: &prost_types::Value,
+  value: &Value,
+  matching_rules: &mut MatchingRuleCategory,
+  generators: &mut HashMap<String, Generator>,
+  file_descriptor: &FileDescriptorProto
+) -> anyhow::Result<(Option<MessageFieldValue>, Vec<MessageFieldValue>)> {
+  trace!(">> build_message_field_value({:?}, {}, _, {}, {:?}, {:?}, {:?})", message_descriptor.name, path, field, value, matching_rules, generators);
+
+  // if let Some(val) = &value.kind {
+  //   if let prost_types::value::Kind::StructValue(s) = val {
+  //     let nested_type = find_nested_type(message_descriptor, descriptor)
+  //       .or_else(|| {
+  //         let type_name = descriptor.type_name.clone().unwrap_or_default();
+  //         let message_type = last_name(type_name.as_str());
+  //         find_message_type_in_file_descriptor(message_type, file_descriptor).ok()
+  //       })
+  //       .ok_or_else(|| anyhow!("Did not find the message type for field '{}'", field))?;
+  //     let message_name = nested_type.name.clone().unwrap_or_else(|| "Unknown".to_string());
+  //     let mut builder = MessageBuilder::new(&nested_type, message_name.as_str());
+  //
+  //     if is_repeated(descriptor) {
+  //       todo!()
+  //     } else {
+  //       for (k, v) in &s.fields {
+  //         let mut path = path.clone();
+  //         path.push_field(k);
+  //         construct_message_field(&nested_type, message_name.as_str(),
+  //           &mut builder, matching_rules, generators, k, v, &path,
+  //           file_descriptor
+  //         )?;
+  //       }
+  //     }
+  //
+  //     Ok((MessageFieldValue {
+  //       name: field.to_string(),
+  //       raw_value: None,
+  //       rtype: RType::Message(Box::new(builder))
+  //     }, vec![]))
+  //   } else {
+  //     Err(anyhow!("Message field '{}' must be configured with a map structure, got {}", field, proto_type_name(value)))
+  //   }
+  // } else {
+  //   Err(anyhow!("Field '{}' has an unknown type, can not do anything with it", field))
+  // }
+
+  if is_repeated(descriptor) && !is_map_field(message_descriptor, descriptor) {
+    // logger.debug { "${messageField.name} is a repeated field" }
+    // when (value.kindCase) {
+    //   Value.KindCase.STRUCT_VALUE -> {
+    //     val fieldsMap = value.structValue.fieldsMap
+    //     if (fieldsMap.containsKey("pact:match")) {
+    //       logger.debug { "Configuring repeated field from a matcher definition expression" }
+    //       val expression = fieldsMap["pact:match"]!!.stringValue
+    //       when (val ruleDefinition = MatchingRuleDefinition.parseMatchingRuleDefinition(expression)) {
+    //         is Ok -> {
+    //           logger.debug { "ruleDefinition = $ruleDefinition" }
+    //           if (ruleDefinition.value.rules.any { it is Either.A && it.value is EachValueMatcher }) {
+    //             logger.debug { "Found each like matcher" }
+    //             if (ruleDefinition.value.rules.size > 1) {
+    //               logger.warn { "$path: each value matcher can not be combined with other matchers, ignoring " +
+    //                 "the other ${ruleDefinition.value.rules.size - 1} matching rules" }
+    //             }
+    //             val ruleDef = ruleDefinition.value.rules.find { it is Either.A && it.value is EachValueMatcher } as Either.A
+    //             val matcher = ruleDef.value as EachValueMatcher
+    //             matchingRules.addRule(path, ValuesMatcher)
+    //             matchingRules.addRule("$path.*", TypeMatcher)
+    //             when (val rule = matcher.definition.rules.first()) {
+    //               is Either.A -> {
+    //                 matchingRules.addRule(path, matcher)
+    //                 if (matcher.definition.generator != null) {
+    //                   generators[path] = matcher.definition.generator!!
+    //                 }
+    //                 valueForType(matcher.definition.value, messageField)
+    //               }
+    //               is Either.B -> if (fieldsMap.containsKey(rule.value.name)) {
+    //                 configSingleField(messageField, fieldsMap[rule.value.name]!!, path, matchingRules, generators)
+    //               } else {
+    //                 logger.error { "'$expression' refers to non-existent item '${rule.value.name}'" }
+    //                 throw RuntimeException("'$expression' refers to non-existent item '${rule.value.name}'")
+    //               }
+    //             }
+    //           } else {
+    //             var result: Any? = null
+    //             for (rule in ruleDefinition.value.rules) {
+    //               if (rule is Either.A) {
+    //                 matchingRules.addRule(path, rule.value)
+    //                 if (ruleDefinition.value.generator != null) {
+    //                   generators[path] = ruleDefinition.value.generator!!
+    //                 }
+    //                 if (result == null) {
+    //                   result = valueForType(ruleDefinition.value.value, messageField)
+    //                 }
+    //               } else {
+    //                 logger.error { "References can only be used with an EachValue matcher" }
+    //                 throw RuntimeException("References can only be used with an EachValue matcher")
+    //               }
+    //             }
+    //             result
+    //           }
+    //         }
+    //         is Err -> {
+    //           logger.error { "'$expression' is not a valid matching rule definition - ${ruleDefinition.error}" }
+    //           throw RuntimeException("'$expression' is not a valid matching rule definition - ${ruleDefinition.error}")
+    //         }
+    //       }
+    //     } else {
+    //       configSingleField(messageField, value, path, matchingRules, generators)
+    //     }
+    //   }
+    //   Value.KindCase.LIST_VALUE -> value.listValue.valuesList.map {
+    //     configSingleField(messageField, it, path, matchingRules, generators)
+    //   }
+    //   else -> configSingleField(messageField, value, path, matchingRules, generators)
+    // }
+    todo!()
+  } else {
+    build_single_field_value(path, file_descriptor, message_descriptor, descriptor,
+                             field, value, matching_rules, generators)
+      .map(|val| (val, vec![]))
+  }
+}
+
+/// Construct a non-repeated and non-map field
+fn build_single_field_value(
+  path: &DocPath,
+  file_descriptor: &FileDescriptorProto,
+  message_descriptor: &DescriptorProto,
+  field_descriptor: &FieldDescriptorProto,
+  field: &str,
+  value: &Value,
   matching_rules: &mut MatchingRuleCategory,
   generators: &mut HashMap<String, Generator>
-) -> anyhow::Result<(MessageFieldValue, Vec<MessageFieldValue>)> {
-  trace!("build_message_field_value(_, {}, _, {}, _, {:?}, {:?})", path, field, matching_rules, generators);
-  if let Some(val) = &value.kind {
-    if let prost_types::value::Kind::StructValue(s) = val {
-      let nested_type = find_nested_type(message_descriptor, descriptor)
-        .ok_or_else(|| anyhow!("Did not find the nested type for field '{}'", field))?;
-      let message_name = nested_type.name.clone().unwrap_or_else(|| "Unknown".to_string());
-      let mut builder = MessageBuilder::new(&nested_type, message_name.as_str());
+) -> anyhow::Result<Option<MessageFieldValue>> {
+  trace!(">> build_single_field_value('{}', {:?}, {}, {:?}, {:?}, {:?})", path, field_descriptor.name,
+    field, value, matching_rules, generators);
 
-      if is_repeated(descriptor) {
-        //todo!()
-      } else {
-        for (k, v) in &s.fields {
-          let mut path = path.clone();
-          path.push_field(k);
-          construct_message_field(&nested_type, message_name.as_str(),
-            &mut builder, matching_rules, generators, k, v, &path)?;
+  match field_descriptor.r#type() {
+    Type::Message => {
+      debug!("Configuring message field '{}' (type {:?})", field, field_descriptor.type_name);
+      let type_name = field_descriptor.type_name.clone().unwrap_or_default();
+      match type_name.as_str() {
+        ".google.protobuf.BytesValue" => {
+          debug!("Field is a Protobuf BytesValue");
+          if let Value::String(_) = value {
+            build_field_value(path, field_descriptor, field, value, matching_rules, generators)
+          } else {
+            Err(anyhow!("Fields of type google.protobuf.BytesValue must be configured with a single string value"))
+          }
+        }
+        ".google.protobuf.Struct" => {
+//               logger.debug { "Message field is a Struct field" }
+//               createStructField(value.structValue, path, matchingRules, generators)
+          todo!()
+        }
+        _ => if is_map_field(message_descriptor, field_descriptor) {
+//                 logger.debug { "Message field is a Map field" }
+//                 createMapField(messageField, value, path, matchingRules, generators)
+          todo!()
+        } else {
+          if let Value::Object(config) = value {
+            debug!("Configuring the message from config map {:?}", config);
+            let message_name = last_name(type_name.as_str());
+            let embedded_type = find_message_type_in_file_descriptor(message_name, file_descriptor)?;
+            let mut message_builder = MessageBuilder::new(&embedded_type, message_name);
+
+            if let Some(definition) = config.get("pact:match") {
+              let mrd = parse_matcher_def(json_to_string(definition).as_str())?;
+              // when (val ruleDefinition = MatchingRuleDefinition.parseMatchingRuleDefinition(definition)) {
+              //   is Ok -> for (rule in ruleDefinition.value.rules) {
+              //     when (rule) {
+              //       is Either.A -> TODO()
+              //       is Either.B -> TODO()
+              //     }
+              //   }
+              todo!()
+            } else {
+              for (key, value) in config {
+                if !key.starts_with("pact:") {
+                  let mut field_path = path.clone();
+                  field_path.push_field(key);
+                  construct_message_field(&embedded_type, message_name, &mut message_builder,
+                                          matching_rules, generators, key, value, &field_path, file_descriptor)?;
+                }
+              }
+            }
+
+            Ok(Some(MessageFieldValue {
+              name: field.to_string(),
+              raw_value: None,
+              rtype: RType::Message(Box::new(message_builder))
+            }))
+          } else {
+            Err(anyhow!("For message fields, you need to define a Map of expected fields, got {:?}", value))
+          }
         }
       }
-
-      Ok((MessageFieldValue {
-        name: field.to_string(),
-        raw_value: None,
-        rtype: RType::Message(Box::new(builder))
-      }, vec![]))
-    } else {
-      Err(anyhow!("Message field '{}' must be configured with a map structure", field))
     }
-  } else {
-    Err(anyhow!("Field '{}' has an unknown type, can not do anything with it", field))
+    _ => build_field_value(path, field_descriptor, field, value, matching_rules, generators)
   }
 }
 
@@ -375,18 +555,16 @@ fn build_field_value(
   path: &DocPath,
   descriptor: &FieldDescriptorProto,
   key: &str,
-  value: &prost_types::Value,
+  value: &Value,
   matching_rules: &mut MatchingRuleCategory,
   generators: &mut HashMap<String, Generator>
 ) -> anyhow::Result<Option<MessageFieldValue>> {
-  trace!("build_field_value({}, {}, {:?})", path, key, proto_value_to_json(&value));
+  trace!(">> build_field_value({}, {}, {:?})", path, key, value);
 
-  if let Some(val) = &value.kind {
-    if let prost_types::value::Kind::NullValue(_) = val {
-      Ok(None)
-    } else {
-      let mrd = parse_matcher_def(proto_value_to_string(&value)
-        .ok_or_else(|| anyhow!("Field values must be a string, got {:?}", proto_type_name(value)))?.as_str())?;
+  match value {
+    Value::Null => Ok(None),
+    Value::String(s) => {
+      let mrd = parse_matcher_def(s.as_str())?;
       let mut field_path = path.clone();
       field_path.push_field(key);
       if !mrd.rules.is_empty() {
@@ -403,23 +581,14 @@ fn build_field_value(
       value_for_type(key, mrd.value.as_str(), descriptor)
         .map(Some)
     }
-  } else {
-    Err(anyhow!("Field '{}' has an unknown type, can not do anything with it", key))
+    _ => Err(anyhow!("Field values must be a string, got {:?}", value))
   }
 }
 
 fn value_for_type(field_name: &str, field_value: &str, descriptor: &FieldDescriptorProto) -> anyhow::Result<MessageFieldValue> {
   trace!("value_for_type({}, {}, _)", field_name, field_value);
   debug!("Creating value for type {:?} from '{}'", descriptor.type_name, field_value);
-  //         Descriptors.FieldDescriptor.JavaType.ENUM -> field.enumType.findValueByName(fieldValue)
-  //         Descriptors.FieldDescriptor.JavaType.MESSAGE -> {
-  //           if (field.messageType.fullName == "google.protobuf.BytesValue") {
-  //             BytesValue.newBuilder().setValue(ByteString.copyFromUtf8(fieldValue ?: "")).build()
-  //           } else {
-  //             logger.error { "field ${field.name} is a Message type" }
-  //             throw RuntimeException("field ${field.name} is a Message type")
-  //           }
-  //         }
+
   let t = descriptor.r#type();
   match t {
     Type::Double => MessageFieldValue::double(field_name, field_value),
@@ -430,9 +599,17 @@ fn value_for_type(field_name: &str, field_value: &str, descriptor: &FieldDescrip
     Type::Uint32 | Type::Fixed32 => MessageFieldValue::uinteger_32(field_name, field_value),
     Type::Bool => MessageFieldValue::boolean(field_name, field_value),
     Type::String => Ok(MessageFieldValue::string(field_name, field_value)),
-    // Type::Message => {}
+    Type::Message => {
+      let type_name = descriptor.type_name.clone().unwrap_or_default();
+      if type_name == ".google.protobuf.BytesValue" {
+        Ok(MessageFieldValue::bytes(field_name, field_value))
+      } else {
+        Err(anyhow!("Protobuf field {} has an unsupported type {:?} {}", field_name, t, type_name))
+      }
+    }
     Type::Bytes => Ok(MessageFieldValue::bytes(field_name, field_value)),
     // Type::Enum => {}
+    // Descriptors.FieldDescriptor.JavaType.ENUM -> field.enumType.findValueByName(fieldValue)
     _ => Err(anyhow!("Protobuf field {} has an unsupported type {:?}", field_name, t))
   }
 }
@@ -562,7 +739,7 @@ mod tests {
       "hash".to_string() => prost_types::Value { kind: Some(prost_types::value::Kind::StringValue("matching(integer, 1234)".to_string())) }
     };
 
-    let result = construct_protobuf_interaction_for_message(&message_descriptor, config, "test_message", "").unwrap();
+    let result = construct_protobuf_interaction_for_message(&message_descriptor, config, "test_message", "", ).unwrap();
 
     let body = result.contents.as_ref().unwrap();
     expect!(body.content_type.as_str()).to(be_equal_to("application/protobuf;message=test_message"));

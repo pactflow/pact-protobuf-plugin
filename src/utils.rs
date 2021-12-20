@@ -5,9 +5,9 @@ use std::fmt::Write;
 
 use anyhow::anyhow;
 use bytes::BytesMut;
-use log::warn;
+use log::{trace, warn};
 use maplit::hashmap;
-use prost_types::{DescriptorProto, EnumDescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorSet, Value};
+use prost_types::{DescriptorProto, EnumDescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet, Value};
 use prost_types::field_descriptor_proto::Label;
 use prost_types::value::Kind;
 use serde_json::json;
@@ -24,14 +24,22 @@ pub fn proto_struct_to_btreemap(val: &prost_types::Struct) -> BTreeMap<String, V
   val.fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
 }
 
-/// Search for a message by type name in the descriptors
+/// Search for a message by type name in all the descriptors
 pub fn find_message_type_by_name(message_name: &str, descriptors: &FileDescriptorSet) -> anyhow::Result<DescriptorProto> {
   descriptors.file.iter()
-    .map(|descriptor| descriptor.message_type.iter().find(|message| message.name.clone().unwrap_or_default() == message_name))
+    .map(|descriptor| find_message_type_in_file_descriptor(message_name, descriptor).ok())
     .find(|result| result.is_some())
     .flatten()
-    .cloned()
     .ok_or_else(|| anyhow!("Did not find a message type '{}' in the descriptors", message_name))
+}
+
+/// Search for a message by type name in the file descriptor
+pub fn find_message_type_in_file_descriptor(message_name: &str, descriptor: &FileDescriptorProto) -> anyhow::Result<DescriptorProto> {
+  descriptor.message_type.iter()
+    .find(|message| message.name.clone().unwrap_or_default() == message_name)
+    .cloned()
+    .ok_or_else(|| anyhow!("Did not find a message type '{}' in the file descriptor '{:?}'",
+      message_name, descriptor.name))
 }
 
 /// If the field is a map field. A field will be a map field if it is a repeated field, the field
@@ -50,12 +58,15 @@ pub fn is_map_field(message_descriptor: &DescriptorProto, field: &FieldDescripto
   }
 }
 
-/// Returns the nested descriptor for this field. Field must be an embedded message.
+/// Returns the nested descriptor for this field.
 pub fn find_nested_type(message_descriptor: &DescriptorProto, field: &FieldDescriptorProto) -> Option<DescriptorProto> {
+  trace!(">> find_nested_type({:?}, {:?}, {:?}, {:?})", message_descriptor.name, field.name, field.r#type(), field.type_name);
   if field.r#type() == field_descriptor_proto::Type::Message {
     let type_name = field.type_name.clone().unwrap_or_default();
     let message_type = last_name(type_name.as_str());
+    trace!("find_nested_type: Looking for nested type '{}'", message_type);
     message_descriptor.nested_type.iter().find(|nested| {
+      trace!("find_nested_type: type = '{:?}'", nested.name);
       nested.name.clone().unwrap_or_default() == message_type
     }).cloned()
   } else {
