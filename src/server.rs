@@ -16,7 +16,6 @@ use pact_plugin_driver::utils::proto_value_to_string;
 use prost::Message;
 use prost_types::{FileDescriptorProto, FileDescriptorSet};
 use prost_types::value::Kind;
-use tonic::Response;
 use crate::matching::{match_message, match_service};
 
 use crate::protobuf::process_proto;
@@ -56,7 +55,7 @@ impl PactPlugin for ProtobufPactPlugin {
     debug!("Init request from {}/{}", message.implementation, message.version);
 
     // Return an entry for a content matcher and content generator for Protobuf messages
-    Ok(Response::new(proto::InitPluginResponse {
+    Ok(tonic::Response::new(proto::InitPluginResponse {
       catalogue: vec![
         proto::CatalogueEntry {
           r#type: EntryType::ContentMatcher as i32,
@@ -84,7 +83,7 @@ impl PactPlugin for ProtobufPactPlugin {
     debug!("Update catalogue request");
 
     // currently a no-op
-    Ok(Response::new(()))
+    Ok(tonic::Response::new(()))
   }
 
   // Request to compare the contents and return the results of the comparison.
@@ -104,7 +103,7 @@ impl PactPlugin for ProtobufPactPlugin {
       Some(config) => config,
       None => {
         error!("Plugin configuration for the interaction is required");
-        return Ok(Response::new(proto::CompareContentsResponse {
+        return Ok(tonic::Response::new(proto::CompareContentsResponse {
           error: "Plugin configuration for the interaction is required".to_string(),
           .. proto::CompareContentsResponse::default()
         }))
@@ -117,7 +116,7 @@ impl PactPlugin for ProtobufPactPlugin {
       Some(key) => key,
       None => {
         error!("Plugin configuration item with key 'descriptorKey' is required");
-        return Ok(Response::new(proto::CompareContentsResponse {
+        return Ok(tonic::Response::new(proto::CompareContentsResponse {
           error: "Plugin configuration item with key 'descriptorKey' is required".to_string(),
           .. proto::CompareContentsResponse::default()
         }))
@@ -139,7 +138,7 @@ impl PactPlugin for ProtobufPactPlugin {
       Some(config) => config,
       None => {
         error!("Did not find the Protobuf config for key {}", message_key);
-        return Ok(Response::new(proto::CompareContentsResponse {
+        return Ok(tonic::Response::new(proto::CompareContentsResponse {
           error: format!("Did not find the Protobuf config for key {}", message_key),
           .. proto::CompareContentsResponse::default()
         }))
@@ -152,7 +151,7 @@ impl PactPlugin for ProtobufPactPlugin {
     let service = interaction_config.get("service").map(|val| proto_value_to_string(val)).flatten();
     if message.is_none() && service.is_none() {
       error!("Plugin configuration item with key 'message' or 'service' is required");
-      return Ok(Response::new(proto::CompareContentsResponse {
+      return Ok(tonic::Response::new(proto::CompareContentsResponse {
         error: "Plugin configuration item with key 'message' or 'service' is required".to_string(),
         .. proto::CompareContentsResponse::default()
       }))
@@ -165,7 +164,7 @@ impl PactPlugin for ProtobufPactPlugin {
       .unwrap_or_default();
     if descriptor_bytes_encoded.is_empty() {
       error!("Plugin configuration item with key '{}' is required", message_key);
-      return Ok(Response::new(proto::CompareContentsResponse {
+      return Ok(tonic::Response::new(proto::CompareContentsResponse {
         error: format!("Plugin configuration item with key '{}' is required", message_key),
         .. proto::CompareContentsResponse::default()
       }))
@@ -176,7 +175,7 @@ impl PactPlugin for ProtobufPactPlugin {
       Ok(bytes) => Bytes::from(bytes),
       Err(err) => {
         error!("Failed to decode the Protobuf descriptor - {}", err);
-        return Ok(Response::new(proto::CompareContentsResponse {
+        return Ok(tonic::Response::new(proto::CompareContentsResponse {
           error: format!("Failed to decode the Protobuf descriptor - {}", err),
           .. proto::CompareContentsResponse::default()
         }))
@@ -189,7 +188,7 @@ impl PactPlugin for ProtobufPactPlugin {
     let descriptor_hash = format!("{:x}", digest);
     if descriptor_hash != message_key {
       error!("Protobuf descriptors checksum failed. Expected {} but got {}", message_key, descriptor_hash);
-      return Ok(Response::new(proto::CompareContentsResponse {
+      return Ok(tonic::Response::new(proto::CompareContentsResponse {
         error: format!("Protobuf descriptors checksum failed. Expected {} but got {}", message_key, descriptor_hash),
         .. proto::CompareContentsResponse::default()
       }))
@@ -200,7 +199,7 @@ impl PactPlugin for ProtobufPactPlugin {
       Ok(descriptors) => descriptors,
       Err(err) => {
         error!("Failed to decode the Protobuf descriptors - {}", err);
-        return Ok(Response::new(proto::CompareContentsResponse {
+        return Ok(tonic::Response::new(proto::CompareContentsResponse {
           error: format!("Failed to decode the Protobuf descriptors - {}", err),
           .. proto::CompareContentsResponse::default()
         }))
@@ -255,7 +254,7 @@ impl PactPlugin for ProtobufPactPlugin {
       Some(pf) => pf,
       None => {
         error!("Config item with key 'pact:proto' and path to the proto file is required");
-        return Ok(Response::new(proto::ConfigureInteractionResponse {
+        return Ok(tonic::Response::new(proto::ConfigureInteractionResponse {
           error: "Config item with key 'pact:proto' and path to the proto file is required".to_string(),
           .. proto::ConfigureInteractionResponse::default()
         }))
@@ -266,7 +265,7 @@ impl PactPlugin for ProtobufPactPlugin {
     if !fields.contains_key("pact:message-type") && !fields.contains_key("pact:proto-service") {
       let message = "Config item with key 'pact:message-type' and the protobuf message name or 'pact:proto-service' and the service name is required".to_string();
       error!("{}", message);
-      return Ok(Response::new(proto::ConfigureInteractionResponse {
+      return Ok(tonic::Response::new(proto::ConfigureInteractionResponse {
         error: message,
         .. proto::ConfigureInteractionResponse::default()
       }))
@@ -277,7 +276,7 @@ impl PactPlugin for ProtobufPactPlugin {
       Ok(protoc) => protoc,
       Err(err) => {
         error!("Failed to invoke protoc: {}", err);
-        return Ok(Response::new(proto::ConfigureInteractionResponse {
+        return Ok(tonic::Response::new(proto::ConfigureInteractionResponse {
           error: format!("Failed to invoke protoc: {}", err),
           .. proto::ConfigureInteractionResponse::default()
         }))
@@ -287,7 +286,7 @@ impl PactPlugin for ProtobufPactPlugin {
     // Process the proto file and configure the interaction
     match process_proto(proto_file, &protoc, fields).await {
       Ok((interactions, plugin_config)) => {
-        Ok(Response::new(proto::ConfigureInteractionResponse {
+        Ok(tonic::Response::new(proto::ConfigureInteractionResponse {
           interaction: interactions,
           plugin_configuration: Some(plugin_config),
           .. proto::ConfigureInteractionResponse::default()
@@ -295,7 +294,7 @@ impl PactPlugin for ProtobufPactPlugin {
       }
       Err(err) => {
         error!("Failed to process protobuf: {}", err);
-        Ok(Response::new(proto::ConfigureInteractionResponse {
+        Ok(tonic::Response::new(proto::ConfigureInteractionResponse {
           error: format!("Failed to process protobuf: {}", err),
           .. proto::ConfigureInteractionResponse::default()
         }))
