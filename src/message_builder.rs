@@ -9,6 +9,7 @@ use itertools::Itertools;
 use log::trace;
 use maplit::btreemap;
 use prost::encoding::{encode_key, encode_varint, string, WireType};
+use prost::Message;
 use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorProto};
 use prost_types::field_descriptor_proto::Type;
 
@@ -146,13 +147,19 @@ impl MessageBuilder {
           Type::Fixed32 => prost::encoding::fixed32::encode(tag as u32, &value.rtype.as_u32()?, &mut buffer),
           Type::Bool => prost::encoding::bool::encode(tag as u32, &value.rtype.as_bool()?, &mut buffer),
           Type::String => string::encode(tag as u32, &value.rtype.as_str()?, &mut buffer),
-          Type::Message => if let RType::Message(m) = &value.rtype {
-            let message_bytes = m.encode_message()?;
-            encode_key(tag as u32, WireType::LengthDelimited, &mut buffer);
-            encode_varint(message_bytes.len() as u64, &mut buffer);
-            buffer.put_slice(&message_bytes);
-          } else {
-            return Err(anyhow!("Mismatched types, expected a message builder but got {:?}", value.rtype));
+          Type::Message => match &value.rtype {
+            RType::Message(m) => {
+              let message_bytes = m.encode_message()?;
+              encode_key(tag as u32, WireType::LengthDelimited, &mut buffer);
+              encode_varint(message_bytes.len() as u64, &mut buffer);
+              buffer.put_slice(&message_bytes);
+            }
+            RType::Struct(s) => {
+              s.encode(&mut buffer)?;
+            }
+            _ => {
+              return Err(anyhow!("Mismatched types, expected a message builder but got {:?}", value.rtype));
+            }
           }
           Type::Bytes => if let RType::Bytes(b) = &value.rtype {
             prost::encoding::bytes::encode(tag as u32, b, &mut buffer);
@@ -341,7 +348,9 @@ pub enum RType {
   /// Enum value
   Enum(String),
   /// Embedded message
-  Message(Box<MessageBuilder>)
+  Message(Box<MessageBuilder>),
+  /// Embedded google.protobuf.Struct
+  Struct(prost_types::Struct)
 }
 
 impl RType {

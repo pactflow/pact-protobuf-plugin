@@ -6,11 +6,11 @@ use std::path::Path;
 use anyhow::anyhow;
 use itertools::{Either, Itertools};
 use log::{debug, LevelFilter, max_level, trace};
-use maplit::hashmap;
+use maplit::{btreemap, hashmap};
 use pact_models::generators::Generator;
 use pact_models::json_utils::json_to_string;
 use pact_models::matchingrules::MatchingRuleCategory;
-use pact_models::matchingrules::expressions::{is_matcher_def, parse_matcher_def};
+use pact_models::matchingrules::expressions::{is_matcher_def, parse_matcher_def, ValueType};
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::RuleLogic;
 use pact_plugin_driver::proto::{
@@ -460,6 +460,7 @@ fn build_embedded_message_field_value(
     todo!()
   } else {
     build_single_embedded_field_value(path, message_builder, field_descriptor, field, value, matching_rules, generators)
+      .map(|_| ())
   }
 }
 
@@ -472,7 +473,7 @@ fn build_single_embedded_field_value(
   value: &Value,
   matching_rules: &mut MatchingRuleCategory,
   generators: &mut HashMap<String, Generator>
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<MessageFieldValue>> {
   trace!(">> build_single_embedded_field_value('{}', {:?}, {}, {:?}, {:?}, {:?})", path, field_descriptor.name,
     field, value, matching_rules, generators);
 
@@ -483,20 +484,18 @@ fn build_single_embedded_field_value(
       debug!("Field is a Protobuf BytesValue");
       if let Value::String(_) = value {
         build_field_value(path, message_builder, field_descriptor, field, value, matching_rules, generators)
-          .map(|_| ())
       } else {
         Err(anyhow!("Fields of type google.protobuf.BytesValue must be configured with a single string value"))
       }
     }
     ".google.protobuf.Struct" => {
-//               logger.debug { "Message field is a Struct field" }
-//               createStructField(value.structValue, path, matchingRules, generators)
-      todo!()
+      debug!("Field is a Struct field");
+      build_struct_field(path, message_builder, field_descriptor, field, value, matching_rules, generators)
     }
     _ => if is_map_field(&message_builder.descriptor, field_descriptor) {
       debug!("Message field '{}' is a Map field", field);
-      build_map_field(path, message_builder, field_descriptor, field,
-                      value, matching_rules, generators)
+      build_map_field(path, message_builder, field_descriptor, field, value, matching_rules, generators)?;
+      Ok(None)
     } else {
       if let Value::Object(config) = value {
         debug!("Configuring the message from config {:?}", config);
@@ -521,17 +520,164 @@ fn build_single_embedded_field_value(
               construct_message_field(&mut embedded_builder, matching_rules, generators, key, value, &field_path)?;
             }
           }
-          message_builder.set_field_value(field_descriptor, field, MessageFieldValue {
+          let field_value = MessageFieldValue {
             name: field.to_string(),
             raw_value: None,
             rtype: RType::Message(Box::new(embedded_builder))
-          });
+          };
+          message_builder.set_field_value(field_descriptor, field, field_value.clone());
+          Ok(Some(field_value))
         }
-
-        Ok(())
       } else {
         Err(anyhow!("For message fields, you need to define a Map of expected fields, got {:?}", value))
       }
+    }
+  }
+}
+
+/// Create a field value of type google.protobuf.Struct
+fn build_struct_field(
+  path: &DocPath,
+  message_builder: &mut MessageBuilder,
+  field_descriptor: &FieldDescriptorProto,
+  field_name: &str,
+  field_value: &Value,
+  matching_rules: &mut MatchingRuleCategory,
+  generators: &mut HashMap<String, Generator>
+) -> anyhow::Result<Option<MessageFieldValue>> {
+  trace!(">>> build_struct_field('{}', {:?}, {}, {:?}, {:?}, {:?})", path, message_builder,
+    field_name, field_value, matching_rules, generators);
+
+  match field_value {
+    Value::Object(map) => if let Some(matching_def) = map.get("pact:match") {
+      //       if (fieldsMap.containsKey("pact:match")) {
+      //         val expression = fieldsMap["pact:match"]!!.stringValue
+      //         when (val ruleDefinition = MatchingRuleDefinition.parseMatchingRuleDefinition(expression)) {
+      //           is Ok -> TODO()
+      //           is Err -> {
+      //             logger.error { "'$expression' is not a valid matching rule definition - ${ruleDefinition.error}" }
+      //             throw RuntimeException("'$expression' is not a valid matching rule definition - ${ruleDefinition.error}")
+      //           }
+      //         }
+      //       }
+      todo!()
+    } else {
+      let mut fields = btreemap!{};
+      for (key, value) in map {
+        let field_path = path.join(key);
+        let proto_value = build_proto_value(path, value, matching_rules, generators)?;
+      }
+
+      let s = prost_types::Struct { fields };
+      let message_field_value = MessageFieldValue {
+        name: field_name.to_string(),
+        raw_value: None,
+        rtype: RType::Struct(s)
+      };
+      message_builder.set_field_value(field_descriptor, field_name, message_field_value.clone());
+      Ok(Some(message_field_value))
+    }
+    _ => Err(anyhow!("google.protobuf.Struct fields need to be configured with a Map, got {:?}", field_value))
+  }
+
+  //       for ((key, v) in fieldsMap) {
+  //         if (key != "pact:match") {
+  //           when (v.kindCase) {
+  //             Value.KindCase.STRUCT_VALUE -> {
+  //               val field = createStructField(v.structValue, constructValidPath(key, path), matchingRules, generators)
+  //               builder.putFields(key, Value.newBuilder().setStructValue(field).build())
+  //             }
+  //             Value.KindCase.LIST_VALUE -> {
+  //               TODO()
+  //             }
+  //             else -> {
+  //               val fieldPath = constructValidPath(key, path)
+  //               val fieldValue = buildStructValue(fieldPath, v, matchingRules, generators)
+  //               logger.debug { "Setting field to value '$fieldValue' (${fieldValue?.javaClass})" }
+  //               if (fieldValue != null) {
+  //                 builder.putFields(key, fieldValue)
+  //               }
+  //             }
+  //           }
+  //         }
+  //       }
+  //
+  //       return builder.build()
+}
+
+fn build_proto_value(
+  path: &DocPath,
+  value: &Value,
+  matching_rules: &mut MatchingRuleCategory,
+  generators: &mut HashMap<String, Generator>
+) -> anyhow::Result<prost_types::Value> {
+  trace!(">> build_proto_value('{}', {:?}, {:?}, {:?})", path, value, matching_rules, generators);
+  match value {
+    Value::Null => Ok(prost_types::Value { kind: Some(prost_types::value::Kind::NullValue(0)) }),
+    Value::Bool(b) => Ok(prost_types::Value { kind: Some(prost_types::value::Kind::BoolValue(*b)) }),
+    Value::Number(n) => if let Some(f) = n.as_f64() {
+      Ok(prost_types::Value { kind: Some(prost_types::value::Kind::NumberValue(f)) })
+    } else if let Some(f) = n.as_u64() {
+      Ok(prost_types::Value { kind: Some(prost_types::value::Kind::NumberValue(f as f64)) })
+    } else if let Some(f) = n.as_i64() {
+      Ok(prost_types::Value { kind: Some(prost_types::value::Kind::NumberValue(f as f64)) })
+    } else {
+      Err(anyhow!("Got an invalid number (not f64, i64 or u64)"))
+    },
+    Value::String(s) => if is_matcher_def(s.as_str()) {
+      let mrd = parse_matcher_def(s.as_str())?;
+      if !mrd.rules.is_empty() {
+        for rule in &mrd.rules {
+          match rule {
+            Either::Left(rule) => matching_rules.add_rule(path.clone(), rule.clone(), RuleLogic::And),
+            Either::Right(mr) => return Err(anyhow!("Was expecting a value, but got a matching reference {:?}", mr))
+          }
+        }
+      }
+      if let Some(generator) = mrd.generator {
+        generators.insert(path.to_string(), generator);
+      }
+
+      match mrd.value_type {
+        ValueType::Unknown | ValueType::String => Ok(prost_types::Value { kind: Some(prost_types::value::Kind::StringValue(mrd.value.clone())) }),
+        ValueType::Number | ValueType::Decimal => {
+          let num: f64 = mrd.value.parse()?;
+          Ok(prost_types::Value { kind: Some(prost_types::value::Kind::NumberValue(num)) })
+        }
+        ValueType::Integer => {
+          let num: i64 = mrd.value.parse()?;
+          Ok(prost_types::Value { kind: Some(prost_types::value::Kind::NumberValue(num as f64)) })
+        }
+        ValueType::Boolean => {
+          let b: bool = mrd.value.parse()?;
+          Ok(prost_types::Value { kind: Some(prost_types::value::Kind::BoolValue(b)) })
+        }
+      }
+    } else {
+      Ok(prost_types::Value { kind: Some(prost_types::value::Kind::StringValue(s.clone())) })
+    }
+    Value::Array(a) => {
+      let mut values = a.iter().enumerate().map(|(index, v)| {
+        let index_path = path.join(index.to_string());
+        build_proto_value(&index_path, v, matching_rules, generators)
+      });
+      if let Some(err) = values.find_map(|v| v.err()) {
+        return Err(anyhow!("Could not construct a Protobuf list value - {}", err))
+      }
+      // Unwrap here is safe as the previous statement would catch an error
+      let list = prost_types::ListValue { values: values.map(|v| v.unwrap()).collect() };
+      Ok(prost_types::Value { kind: Some(prost_types::value::Kind::ListValue(list)) })
+    }
+    Value::Object(map) => {
+      let mut fields = btreemap!{};
+      for (key, value) in map {
+        let field_path = path.join(key);
+        let proto_value = build_proto_value(path, value, matching_rules, generators)?;
+        fields.insert(key.clone(), proto_value);
+      }
+
+      let s = prost_types::Struct { fields };
+      Ok(prost_types::Value { kind: Some(prost_types::value::Kind::StructValue(s)) })
     }
   }
 }
@@ -611,9 +757,9 @@ fn build_map_field(
         let key_value = build_field_value(&entry_path, &mut embedded_builder,
           &key_descriptor, "key", &Value::String(field.clone()), matching_rules, generators)?
           .ok_or_else(|| anyhow!("Was not able to construct map key value {:?}", key_descriptor.type_name))?;
-        let value_value = build_field_value(&entry_path, &mut embedded_builder,
+        let value_value = build_single_embedded_field_value(&entry_path, &mut embedded_builder,
           &value_descriptor, "value", value, matching_rules, generators)?
-          .ok_or_else(|| anyhow!("Was not able to construct map key value {:?}", key_descriptor.type_name))?;
+          .ok_or_else(|| anyhow!("Was not able to construct map value value {:?}", value_descriptor.type_name))?;
         message_builder.add_map_field_value(field_descriptor, field, key_value, value_value);
       }
       Ok(())
