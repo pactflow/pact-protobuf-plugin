@@ -157,6 +157,21 @@ impl MessageBuilder {
             RType::Struct(s) => {
               s.encode(&mut buffer)?;
             }
+            RType::Bytes(b) => {
+              // Encode a google.protobuf.BytesValue
+              let data = Bytes::from(b.clone());
+
+              // BytesValue field 1 is a byte array
+              let mut buffer2 = BytesMut::new();
+              encode_key(1 as u32, WireType::LengthDelimited, &mut buffer2);
+              encode_varint(data.len() as u64, &mut buffer2);
+              buffer2.put_slice(&data);
+
+              // encode the BytesValue
+              encode_key(tag as u32, WireType::LengthDelimited, &mut buffer);
+              encode_varint(buffer2.len() as u64, &mut buffer);
+              buffer.put_slice(&buffer2);
+            }
             _ => {
               return Err(anyhow!("Mismatched types, expected a message builder but got {:?}", value.rtype));
             }
@@ -168,6 +183,9 @@ impl MessageBuilder {
           }
           Type::Enum => if let RType::Enum(name) = &value.rtype {
             self.encode_enum_value(&field_data.descriptor, &value, tag, name, &mut buffer)?;
+          } else if let RType::Integer32(i) = &value.rtype {
+            encode_key(tag as u32, WireType::Varint, buffer);
+            encode_varint(*i as u64, buffer);
           } else {
             return Err(anyhow!("Mismatched types, expected an enum but got {:?}", value.rtype));
           }

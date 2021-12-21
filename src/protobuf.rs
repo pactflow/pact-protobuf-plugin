@@ -5,12 +5,13 @@ use std::path::Path;
 
 use anyhow::anyhow;
 use itertools::{Either, Itertools};
-use log::{debug, LevelFilter, max_level, trace};
+use log::{debug, LevelFilter, max_level, trace, warn};
 use maplit::{btreemap, hashmap};
 use pact_models::generators::Generator;
 use pact_models::json_utils::json_to_string;
+use pact_models::matchingrules;
 use pact_models::matchingrules::MatchingRuleCategory;
-use pact_models::matchingrules::expressions::{is_matcher_def, parse_matcher_def, ValueType};
+use pact_models::matchingrules::expressions::{is_matcher_def, MatchingReference, parse_matcher_def, ValueType};
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::RuleLogic;
 use pact_plugin_driver::proto::{
@@ -30,7 +31,7 @@ use serde_json::{json, Value};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 
-use crate::message_builder::{MessageBuilder, MessageFieldValue, RType};
+use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValueType, RType};
 use crate::protoc::Protoc;
 use crate::utils::{find_enum_value_by_name, find_message_type_by_name, find_message_type_in_file_descriptor, find_nested_type, is_map_field, is_repeated, last_name, proto_struct_to_btreemap, proto_type_name};
 
@@ -309,7 +310,7 @@ fn construct_message_field(
           build_embedded_message_field_value(message_builder, path, &field, field_name, value, &mut matching_rules, &mut generators)?;
         } else {
           // Non-embedded message field (singular value)
-          build_field_value(path, message_builder, &field, field_name, value, &mut matching_rules, &mut generators)?;
+          build_field_value(path, message_builder, MessageFieldValueType::Normal, &field, field_name, value, &mut matching_rules, &mut generators)?;
         }
         None => {
           return Err(anyhow!("Message {} field {} is of an unknown type", message_builder.message_name, field_name))
@@ -337,129 +338,86 @@ fn build_embedded_message_field_value(
 ) -> anyhow::Result<()> {
   trace!(">> build_embedded_message_field_value({:?}, {}, {}, {:?}, {:?}, {:?})", message_builder, path, field, value, matching_rules, generators);
 
-  // ---
-  // if let Some(message_value) = message_value {
-  //             debug!("Setting field {} to value {:?}", field_name, message_value);
-  //             if field.label.unwrap_or_default() == field_descriptor_proto::Label::Repeated as i32 {
-  //               message_builder.add_repeated_field_value(field, key, message_value);
-  //               for item in additional_values {
-  //                 message_builder.add_repeated_field_value(field, key, item);
-  //               }
-  //             } else {
-  //               message_builder.set_field_value(field, key, message_value);
-  //             }
-  //           }
-  // ---
-
-  // if let Some(val) = &value.kind {
-  //   if let prost_types::value::Kind::StructValue(s) = val {
-  //     let nested_type = find_nested_type(message_descriptor, descriptor)
-  //       .or_else(|| {
-  //         let type_name = descriptor.type_name.clone().unwrap_or_default();
-  //         let message_type = last_name(type_name.as_str());
-  //         find_message_type_in_file_descriptor(message_type, file_descriptor).ok()
-  //       })
-  //       .ok_or_else(|| anyhow!("Did not find the message type for field '{}'", field))?;
-  //     let message_name = nested_type.name.clone().unwrap_or_else(|| "Unknown".to_string());
-  //     let mut builder = MessageBuilder::new(&nested_type, message_name.as_str());
-  //
-  //     if is_repeated(descriptor) {
-  //       todo!()
-  //     } else {
-  //       for (k, v) in &s.fields {
-  //         let mut path = path.clone();
-  //         path.push_field(k);
-  //         construct_message_field(&nested_type, message_name.as_str(),
-  //           &mut builder, matching_rules, generators, k, v, &path,
-  //           file_descriptor
-  //         )?;
-  //       }
-  //     }
-  //
-  //     Ok((MessageFieldValue {
-  //       name: field.to_string(),
-  //       raw_value: None,
-  //       rtype: RType::Message(Box::new(builder))
-  //     }, vec![]))
-  //   } else {
-  //     Err(anyhow!("Message field '{}' must be configured with a map structure, got {}", field, proto_type_name(value)))
-  //   }
-  // } else {
-  //   Err(anyhow!("Field '{}' has an unknown type, can not do anything with it", field))
-  // }
-
   if is_repeated(field_descriptor) && !is_map_field(&message_builder.descriptor, field_descriptor) {
-    // logger.debug { "${messageField.name} is a repeated field" }
-    // when (value.kindCase) {
-    //   Value.KindCase.STRUCT_VALUE -> {
-    //     val fieldsMap = value.structValue.fieldsMap
-    //     if (fieldsMap.containsKey("pact:match")) {
-    //       logger.debug { "Configuring repeated field from a matcher definition expression" }
-    //       val expression = fieldsMap["pact:match"]!!.stringValue
-    //       when (val ruleDefinition = MatchingRuleDefinition.parseMatchingRuleDefinition(expression)) {
-    //         is Ok -> {
-    //           logger.debug { "ruleDefinition = $ruleDefinition" }
-    //           if (ruleDefinition.value.rules.any { it is Either.A && it.value is EachValueMatcher }) {
-    //             logger.debug { "Found each like matcher" }
-    //             if (ruleDefinition.value.rules.size > 1) {
-    //               logger.warn { "$path: each value matcher can not be combined with other matchers, ignoring " +
-    //                 "the other ${ruleDefinition.value.rules.size - 1} matching rules" }
-    //             }
-    //             val ruleDef = ruleDefinition.value.rules.find { it is Either.A && it.value is EachValueMatcher } as Either.A
-    //             val matcher = ruleDef.value as EachValueMatcher
-    //             matchingRules.addRule(path, ValuesMatcher)
-    //             matchingRules.addRule("$path.*", TypeMatcher)
-    //             when (val rule = matcher.definition.rules.first()) {
-    //               is Either.A -> {
-    //                 matchingRules.addRule(path, matcher)
-    //                 if (matcher.definition.generator != null) {
-    //                   generators[path] = matcher.definition.generator!!
-    //                 }
-    //                 valueForType(matcher.definition.value, messageField)
-    //               }
-    //               is Either.B -> if (fieldsMap.containsKey(rule.value.name)) {
-    //                 configSingleField(messageField, fieldsMap[rule.value.name]!!, path, matchingRules, generators)
-    //               } else {
-    //                 logger.error { "'$expression' refers to non-existent item '${rule.value.name}'" }
-    //                 throw RuntimeException("'$expression' refers to non-existent item '${rule.value.name}'")
-    //               }
-    //             }
-    //           } else {
-    //             var result: Any? = null
-    //             for (rule in ruleDefinition.value.rules) {
-    //               if (rule is Either.A) {
-    //                 matchingRules.addRule(path, rule.value)
-    //                 if (ruleDefinition.value.generator != null) {
-    //                   generators[path] = ruleDefinition.value.generator!!
-    //                 }
-    //                 if (result == null) {
-    //                   result = valueForType(ruleDefinition.value.value, messageField)
-    //                 }
-    //               } else {
-    //                 logger.error { "References can only be used with an EachValue matcher" }
-    //                 throw RuntimeException("References can only be used with an EachValue matcher")
-    //               }
-    //             }
-    //             result
-    //           }
-    //         }
-    //         is Err -> {
-    //           logger.error { "'$expression' is not a valid matching rule definition - ${ruleDefinition.error}" }
-    //           throw RuntimeException("'$expression' is not a valid matching rule definition - ${ruleDefinition.error}")
-    //         }
-    //       }
-    //     } else {
-    //       configSingleField(messageField, value, path, matchingRules, generators)
-    //     }
-    //   }
-    //   Value.KindCase.LIST_VALUE -> value.listValue.valuesList.map {
-    //     configSingleField(messageField, it, path, matchingRules, generators)
-    //   }
-    //   else -> configSingleField(messageField, value, path, matchingRules, generators)
-    // }
-    todo!()
+    debug!("{} is a repeated field", field);
+
+    match value {
+      Value::Array(list) => {
+        for (index, item) in list.iter().enumerate() {
+          let index_path = path.join(index.to_string());
+          build_single_embedded_field_value(&index_path, message_builder, MessageFieldValueType::Repeated, field_descriptor, field, item,
+            matching_rules, generators)?;
+        }
+        Ok(())
+      }
+      Value::Object(map) => if let Some(definition) = map.get("pact:match") {
+        let definition = json_to_string(definition);
+        debug!("Configuring repeated field from a matcher definition expression '{}'", definition);
+        let mrd = parse_matcher_def( definition.as_str())?;
+
+        let each_value = mrd.rules.iter()
+          .filter_map(|rule| rule.clone().left())
+          .find_map(|rule| match rule {
+            matchingrules::MatchingRule::EachValue(def) => Some(def),
+            _ => None
+          });
+        if let Some(each_value_def) = &each_value {
+          debug!("Found each like matcher");
+          if mrd.rules.len() > 1 {
+            warn!("{}: each value matcher can not be combined with other matchers, ignoring the other matching rules", path);
+          }
+
+          matching_rules.add_rule(path.clone(), matchingrules::MatchingRule::Values, RuleLogic::And);
+          matching_rules.add_rule(path.join("*"), matchingrules::MatchingRule::Type, RuleLogic::And);
+
+          match each_value_def.rules.first() {
+            Some(either) => match either {
+              Either::Left(_) => {
+                matching_rules.add_rule(path.clone(), matchingrules::MatchingRule::EachValue(each_value_def.clone()), RuleLogic::And);
+                if let Some(generator) = &each_value_def.generator {
+                  generators.insert(path.to_string(), generator.clone());
+                }
+                let constructed_value = value_for_type(field, each_value_def.value.as_str(), field_descriptor, &message_builder.descriptor)?;
+                message_builder.set_field_value(field_descriptor, field, constructed_value);
+                Ok(())
+              }
+              Either::Right(reference) => if let Some(field_value) = map.get(reference.name.as_str()) {
+                build_single_embedded_field_value(&path, message_builder, MessageFieldValueType::Repeated,
+                  field_descriptor, field, field_value, matching_rules, generators).map(|_| ())
+              } else {
+                Err(anyhow!("Expression '{}' refers to non-existent item '{}'", definition, reference.name))
+              }
+            }
+            None => Err(anyhow!("Got an EachValue matcher with no associated matching rules to apply"))
+          }
+        } else {
+          if !mrd.rules.is_empty() {
+            for rule in &mrd.rules {
+              match rule {
+                Either::Left(rule) => matching_rules.add_rule(path.clone(), rule.clone(), RuleLogic::And),
+                Either::Right(mr) => return Err(anyhow!("References can only be used with an EachValue matcher - {:?}", mr))
+              }
+            }
+          }
+          if let Some(generator) = mrd.generator {
+            generators.insert(path.to_string(), generator);
+          }
+
+          let constructed = value_for_type(field, mrd.value.as_str(), field_descriptor, &message_builder.descriptor)?;
+          message_builder.add_repeated_field_value(field_descriptor, field, constructed);
+
+          Ok(())
+        }
+      } else {
+        build_single_embedded_field_value(path, message_builder, MessageFieldValueType::Repeated, field_descriptor, field, value,
+          matching_rules, generators).map(|_| ())
+      }
+      _ => build_single_embedded_field_value(path, message_builder, MessageFieldValueType::Repeated, field_descriptor, field, value,
+        matching_rules, generators).map(|_| ())
+    }
   } else {
-    build_single_embedded_field_value(path, message_builder, field_descriptor, field, value, matching_rules, generators)
+    build_single_embedded_field_value(path, message_builder, MessageFieldValueType::Normal, field_descriptor, field, value,
+      matching_rules, generators)
       .map(|_| ())
   }
 }
@@ -468,6 +426,7 @@ fn build_embedded_message_field_value(
 fn build_single_embedded_field_value(
   path: &DocPath,
   message_builder: &mut MessageBuilder,
+  field_type: MessageFieldValueType,
   field_descriptor: &FieldDescriptorProto,
   field: &str,
   value: &Value,
@@ -483,14 +442,14 @@ fn build_single_embedded_field_value(
     ".google.protobuf.BytesValue" => {
       debug!("Field is a Protobuf BytesValue");
       if let Value::String(_) = value {
-        build_field_value(path, message_builder, field_descriptor, field, value, matching_rules, generators)
+        build_field_value(path, message_builder, field_type, field_descriptor, field, value, matching_rules, generators)
       } else {
         Err(anyhow!("Fields of type google.protobuf.BytesValue must be configured with a single string value"))
       }
     }
     ".google.protobuf.Struct" => {
       debug!("Field is a Struct field");
-      build_struct_field(path, message_builder, field_descriptor, field, value, matching_rules, generators)
+      build_struct_field(path, message_builder, field_type, field_descriptor, field, value, matching_rules, generators)
     }
     _ => if is_map_field(&message_builder.descriptor, field_descriptor) {
       debug!("Message field '{}' is a Map field", field);
@@ -539,6 +498,7 @@ fn build_single_embedded_field_value(
 fn build_struct_field(
   path: &DocPath,
   message_builder: &mut MessageBuilder,
+  field_type: MessageFieldValueType,
   field_descriptor: &FieldDescriptorProto,
   field_name: &str,
   field_value: &Value,
@@ -574,7 +534,10 @@ fn build_struct_field(
         raw_value: None,
         rtype: RType::Struct(s)
       };
-      message_builder.set_field_value(field_descriptor, field_name, message_field_value.clone());
+      match field_type {
+        MessageFieldValueType::Repeated => message_builder.add_repeated_field_value(field_descriptor, field_name, message_field_value.clone()),
+        _ => message_builder.set_field_value(field_descriptor, field_name, message_field_value.clone())
+      };
       Ok(Some(message_field_value))
     }
     _ => Err(anyhow!("google.protobuf.Struct fields need to be configured with a Map, got {:?}", field_value))
@@ -699,49 +662,25 @@ fn build_map_field(
 
   if let Value::Object(config) = value {
     if let Some(definition) = config.get("pact:match") {
-      //         logger.debug { "Parsing matching rule definition $definition" }
-      //         when (val ruleDefinition = MatchingRuleDefinition.parseMatchingRuleDefinition(definition)) {
-      //           is Ok -> {
-      //             val (_, _, rules, _) = ruleDefinition.value
-      //             if (rules.isNotEmpty()) {
-      //               for (rule in rules) {
-      //                 when (rule) {
-      //                   is Either.A -> when (rule.value) {
-      //                     is EachKeyMatcher -> {
-      //                       matchingRules.addRule(path, rule.value)
-      //                     }
-      //                     is EachValueMatcher -> {
-      //                       matchingRules.addRule(path, rule.value)
-      //                     }
-      //                     else -> {
-      //                       matchingRules.addRule(path, rule.value)
-      //                     }
-      //                   }
-      //                   is Either.B -> {
-      //                     TODO()
-      //                   }
-      //                 }
-      //               }
-      //             }
-      //           }
-      //           is Err -> {
-      //             logger.error { "'$definition' is not a valid matching rule definition - ${ruleDefinition.error}" }
-      //             throw RuntimeException("'$definition' is not a valid matching rule definition - ${ruleDefinition.error}")
-      //           }
-      //         }
-      //         return fieldsMap.filter { it.key != "pact:match" }.map { (key, value) ->
-      //           val entryPath = constructValidPath(key, path)
-      //           val messageBuilder = DynamicMessage.newBuilder(messageDescriptor)
-      //           messageBuilder.setField(messageDescriptor.findFieldByName("key"), key)
-      //           val valueDescriptor = messageDescriptor.findFieldByName("value")
-      //           messageBuilder.setField(
-      //             valueDescriptor, configureMessageField(entryPath, valueDescriptor, value, matchingRules, generators)
-      //           )
-      //           messageBuilder.build()
-      //         }
-      todo!()
-    } else if let Some(map_type) = find_nested_type(&message_builder.descriptor, field_descriptor) {
-      // Simple map built from the given map
+      debug!("Parsing matching rule definition {:?}", definition);
+      let definition = json_to_string(definition);
+      let mrd = parse_matcher_def(definition.as_str())?;
+      if !mrd.rules.is_empty() {
+        for rule in &mrd.rules {
+          match rule {
+            Either::Left(rule) => {
+              matching_rules.add_rule(path.clone(), rule.clone(), RuleLogic::And)
+            },
+            Either::Right(mr) => todo!()
+          }
+        }
+      }
+      if let Some(generator) = mrd.generator {
+        generators.insert(path.to_string(), generator);
+      }
+    }
+
+    if let Some(map_type) = find_nested_type(&message_builder.descriptor, field_descriptor) {
       let message_name = map_type.name.clone().unwrap_or_default();
       let key_descriptor = map_type.field.iter()
         .find(|f| f.name.clone().unwrap_or_default() == "key")
@@ -752,15 +691,17 @@ fn build_map_field(
 
       let mut embedded_builder = MessageBuilder::new(&map_type, message_name.as_str(), &message_builder.file_descriptor);
       for (field, value) in config {
-        let entry_path = path.join(field);
+        if field != "pact:match" {
+          let entry_path = path.join(field);
 
-        let key_value = build_field_value(&entry_path, &mut embedded_builder,
-          &key_descriptor, "key", &Value::String(field.clone()), matching_rules, generators)?
-          .ok_or_else(|| anyhow!("Was not able to construct map key value {:?}", key_descriptor.type_name))?;
-        let value_value = build_single_embedded_field_value(&entry_path, &mut embedded_builder,
-          &value_descriptor, "value", value, matching_rules, generators)?
-          .ok_or_else(|| anyhow!("Was not able to construct map value value {:?}", value_descriptor.type_name))?;
-        message_builder.add_map_field_value(field_descriptor, field, key_value, value_value);
+          let key_value = build_field_value(&entry_path, &mut embedded_builder, MessageFieldValueType::Normal,
+            &key_descriptor, "key", &Value::String(field.clone()), matching_rules, generators)?
+            .ok_or_else(|| anyhow!("Was not able to construct map key value {:?}", key_descriptor.type_name))?;
+          let value_value = build_single_embedded_field_value(&entry_path, &mut embedded_builder, MessageFieldValueType::Normal,
+            &value_descriptor, "value", value, matching_rules, generators)?
+            .ok_or_else(|| anyhow!("Was not able to construct map value value {:?}", value_descriptor.type_name))?;
+          message_builder.add_map_field_value(field_descriptor, field, key_value, value_value);
+        }
       }
       Ok(())
     } else {
@@ -776,6 +717,7 @@ fn build_map_field(
 fn build_field_value(
   path: &DocPath,
   message_builder: &mut MessageBuilder,
+  field_type: MessageFieldValueType,
   descriptor: &FieldDescriptorProto,
   field_name: &str,
   value: &Value,
@@ -808,7 +750,10 @@ fn build_field_value(
       };
 
       debug!("Setting field {:?} to value {:?}", field_name, constructed_value);
-      message_builder.set_field_value(descriptor, field_name, constructed_value.clone());
+      match field_type {
+        MessageFieldValueType::Repeated => message_builder.add_repeated_field_value(descriptor, field_name, constructed_value.clone()),
+        _ => message_builder.set_field_value(descriptor, field_name, constructed_value.clone()),
+      };
       Ok(Some(constructed_value))
     }
     _ => Err(anyhow!("Field values must be configured with a string value, got {:?}", value))
@@ -856,6 +801,35 @@ fn value_for_type(
     _ => Err(anyhow!("Protobuf field {} has an unsupported type {:?}", field_name, t))
   }
 }
+
+/*
+  10
+    24,
+      10,
+        16,
+          97, 112, 112, 108, 105, 99, 97, 116, 105, 111, 110, 47, 106, 115, 111, 110,
+        18,
+          2, 123, 125,
+        24, 1,
+  26, 24, 10, 10, 36, 46, 116, 101, 115, 116, 46, 111, 110, 101, 18, 10, 10, 8, 68, 97, 116, 101, 84, 105, 109, 101, 26, 23, 10, 10, 36, 46, 116, 101, 115, 116, 46, 111, 110, 101, 18, 9, 10, 7, 10, 5, 114, 101, 103, 101, 120, 26, 24, 10, 10, 36, 46, 116, 101, 115, 116, 46, 116, 119, 111, 18, 10, 10, 8, 68, 97, 116, 101, 84, 105, 109, 101
+
+ */
+
+/*
+10
+  26
+    10
+      16
+        61 70 70 6c 69 63 61 74 69 6f 6e 2f 6a 73 6f 6e
+      18
+        04
+          10
+            02
+              7b 7d
+      24
+        01
+  12170a0a242e746573742e6f6e65120a070a0572656765781a320a0a242e746573742e74776f12240a084461746554696d6512180a160a06666f726d6174120c1a0a595959592d4d4d2d44441a320a0a242e746573742e6f6e6512240a084461746554696d6512180a160a06666f726d6174120c1a0a595959592d4d4d2d4444
+ */
 
 #[cfg(test)]
 mod tests {
