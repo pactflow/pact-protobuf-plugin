@@ -9,7 +9,7 @@ use itertools::Itertools;
 use log::trace;
 use maplit::btreemap;
 use prost::encoding::{encode_key, encode_varint, string, WireType};
-use prost_types::{DescriptorProto, FieldDescriptorProto};
+use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorProto};
 use prost_types::field_descriptor_proto::Type;
 
 use crate::utils::last_name;
@@ -41,26 +41,35 @@ struct FieldValueInner {
 /// Builder struct for a Protobuf message
 #[derive(Clone, Debug, PartialEq)]
 pub struct MessageBuilder {
+  /// Protobuf descriptor for the file the message belongs to
+  pub file_descriptor: FileDescriptorProto,
   /// Protobuf descriptor for the message
   pub descriptor: DescriptorProto,
   /// Message name
   pub message_name: String,
-
-  fields: BTreeMap<String, FieldValueInner>
+  fields: BTreeMap<String, FieldValueInner>,
 }
 
 impl MessageBuilder {
   /// Create a new message builder for the message
-  pub fn new(descriptor: &DescriptorProto, message_name: &str) -> Self {
+  pub fn new(descriptor: &DescriptorProto, message_name: &str, file_descriptor: &FileDescriptorProto) -> Self {
     MessageBuilder {
+      file_descriptor: file_descriptor.clone(),
       descriptor: descriptor.clone(),
       message_name: message_name.to_string(),
       fields: btreemap!{}
     }
   }
 
+  /// Find the field descriptor for the given name
+  pub fn field_by_name(&self, name: &str) -> Option<FieldDescriptorProto> {
+    self.descriptor.field.iter()
+      .find(|f| f.name.clone().unwrap_or_default() == name)
+      .cloned()
+  }
+
   /// Set the field to the given value
-  pub fn set_field(&mut self, field_descriptor: &FieldDescriptorProto, field_name: &str, field_value: MessageFieldValue) -> &mut Self {
+  pub fn set_field_value(&mut self, field_descriptor: &FieldDescriptorProto, field_name: &str, field_value: MessageFieldValue) -> &mut Self {
     self.fields.insert(field_name.to_string(), FieldValueInner {
       values: vec![ field_value ],
       descriptor: field_descriptor.clone(),
@@ -212,6 +221,7 @@ impl MessageBuilder {
             name: entry_name.to_string(),
             raw_value: None,
             rtype: RType::Message(Box::new(MessageBuilder {
+              file_descriptor: self.file_descriptor.clone(),
               descriptor: entry_proto.clone(),
               message_name: entry_name.to_string(),
               fields: btreemap! {
@@ -704,13 +714,13 @@ mod tests {
       reserved_range: vec![],
       reserved_name: vec![]
     };
-    let mut message = MessageBuilder::new(&descriptor, "InitPluginRequest");
-    message.set_field(&field1, "implementation", MessageFieldValue {
+    let mut message = MessageBuilder::new(&descriptor, "InitPluginRequest", );
+    message.set_field_value(&field1, "implementation", MessageFieldValue {
       name: "implementation".to_string(),
       raw_value: Some("plugin-driver-rust".to_string()),
       rtype: RType::String("plugin-driver-rust".to_string())
     });
-    message.set_field(&field2, "version", MessageFieldValue {
+    message.set_field_value(&field2, "version", MessageFieldValue {
       name: "version".to_string(),
       raw_value: Some("0.0.0".to_string()),
       rtype: RType::String("0.0.0".to_string())
@@ -801,8 +811,8 @@ mod tests {
       reserved_range: vec![],
       reserved_name: vec![]
     };
-    let mut message = MessageBuilder::new(&descriptor, "Body");
-    message.set_field(&field1, "contentType", MessageFieldValue {
+    let mut message = MessageBuilder::new(&descriptor, "Body", );
+    message.set_field_value(&field1, "contentType", MessageFieldValue {
       name: "contentType".to_string(),
       raw_value: Some("application/json".to_string()),
       rtype: RType::String("application/json".to_string())
@@ -823,19 +833,19 @@ mod tests {
       reserved_range: vec![],
       reserved_name: vec![]
     };
-    let mut bytes_message = MessageBuilder::new(&content_descriptor, "BytesValue");
-    bytes_message.set_field(&bytes_field, "value", MessageFieldValue {
+    let mut bytes_message = MessageBuilder::new(&content_descriptor, "BytesValue", );
+    bytes_message.set_field_value(&bytes_field, "value", MessageFieldValue {
       name: "value".to_string(),
       raw_value: Some("{\"test\": true}".to_string()),
       rtype: RType::Bytes("{\"test\": true}".as_bytes().to_vec())
     });
 
-    message.set_field(&field2, "content", MessageFieldValue {
+    message.set_field_value(&field2, "content", MessageFieldValue {
       name: "content".to_string(),
       raw_value: Some("{\"test\": true}".to_string()),
       rtype: RType::Message(Box::new(bytes_message))
     });
-    message.set_field(&field3, "contentTypeHint", MessageFieldValue {
+    message.set_field_value(&field3, "contentTypeHint", MessageFieldValue {
       name: "contentTypeHint".to_string(),
       raw_value: Some("TEXT".to_string()),
       rtype: RType::Enum("TEXT".to_string())
@@ -955,8 +965,8 @@ mod tests {
       reserved_name: vec![]
     };
 
-    let mut message = MessageBuilder::new(&descriptor, "CompareContentsRequest");
-    message.set_field(&field1, "allowUnexpectedKeys", MessageFieldValue {
+    let mut message = MessageBuilder::new(&descriptor, "CompareContentsRequest", );
+    message.set_field_value(&field1, "allowUnexpectedKeys", MessageFieldValue {
       name: "allowUnexpectedKeys".to_string(),
       raw_value: Some("true".to_string()),
       rtype: RType::Boolean(true)
@@ -989,7 +999,7 @@ mod tests {
       reserved_range: vec![],
       reserved_name: vec![],
     };
-    let mut matching_rules = MessageBuilder::new(&rule_descriptor, "MatchingRules");
+    let mut matching_rules = MessageBuilder::new(&rule_descriptor, "MatchingRules", );
 
     let type_field_descriptor = string_field_descriptor!("type", 1);
     let values_field_descriptor = message_field_descriptor!("values", 2, ".google.protobuf.Struct");
@@ -1008,8 +1018,8 @@ mod tests {
       reserved_range: vec![],
       reserved_name: vec![]
     };
-    let mut matching_rule_1 = MessageBuilder::new(&matching_rule_descriptor, "MatchingRule");
-    matching_rule_1.set_field(&type_field_descriptor, "type", MessageFieldValue {
+    let mut matching_rule_1 = MessageBuilder::new(&matching_rule_descriptor, "MatchingRule", );
+    matching_rule_1.set_field_value(&type_field_descriptor, "type", MessageFieldValue {
       name: "type".to_string(),
       raw_value: Some("Type".to_string()),
       rtype: RType::String("Type".to_string())
@@ -1021,9 +1031,9 @@ mod tests {
       rtype: RType::Message(Box::new(matching_rule_1))
     });
 
-    let mut rule2 = MessageBuilder::new(&rule_descriptor, "MatchingRules");
-    let mut matching_rule_2 = MessageBuilder::new(&matching_rule_descriptor, "MatchingRule");
-    matching_rule_2.set_field(&type_field_descriptor, "type", MessageFieldValue {
+    let mut rule2 = MessageBuilder::new(&rule_descriptor, "MatchingRules", );
+    let mut matching_rule_2 = MessageBuilder::new(&matching_rule_descriptor, "MatchingRule", );
+    matching_rule_2.set_field_value(&type_field_descriptor, "type", MessageFieldValue {
       name: "type".to_string(),
       raw_value: Some("Regex".to_string()),
       rtype: RType::String("Regex".to_string())
@@ -1138,14 +1148,14 @@ mod tests {
       reserved_range: vec![],
       reserved_name: vec![]
     };
-    let mut regex_values = MessageBuilder::new(&value_descriptor, "Value");
-    regex_values.set_field(&value_string_field, "string_value", MessageFieldValue {
+    let mut regex_values = MessageBuilder::new(&value_descriptor, "Value", );
+    regex_values.set_field_value(&value_string_field, "string_value", MessageFieldValue {
       name: "string_value".to_string(),
       raw_value: None,
       rtype: RType::String(".*".to_string())
     });
 
-    let mut matching_rule_values = MessageBuilder::new(&struct_descriptor, "Struct");
+    let mut matching_rule_values = MessageBuilder::new(&struct_descriptor, "Struct", );
     matching_rule_values.add_map_field_value(&struct_fields_descriptor, "fields", MessageFieldValue {
       name: "key".to_string(),
       raw_value: None,
@@ -1156,7 +1166,7 @@ mod tests {
       rtype: RType::Message(Box::new(regex_values))
     });
 
-    matching_rule_2.set_field(&values_field_descriptor, "values", MessageFieldValue {
+    matching_rule_2.set_field_value(&values_field_descriptor, "values", MessageFieldValue {
       name: "values".to_string(),
       raw_value: None,
       rtype: RType::Message(Box::new(matching_rule_values))
