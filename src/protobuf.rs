@@ -246,8 +246,9 @@ fn construct_protobuf_interaction_for_message(
 
   for (key, value) in &config {
     if !key.starts_with("pact:") {
-      debug!("Building field for key {}", key);
-      construct_message_field(&mut message_builder, &mut matching_rules, &mut generators, key, &proto_value_to_json(value), &path)?;
+      let field_path = path.join(key);
+      debug!("Building field for key {}, '{}'", key, field_path);
+      construct_message_field(&mut message_builder, &mut matching_rules, &mut generators, key, &proto_value_to_json(value), &field_path)?;
     }
   }
 
@@ -346,7 +347,7 @@ fn build_embedded_message_field_value(
   matching_rules: &mut MatchingRuleCategory,
   generators: &mut HashMap<String, Generator>
 ) -> anyhow::Result<()> {
-  trace!(">> build_embedded_message_field_value({:?}, {}, {}, {:?}, {:?}, {:?})", message_builder, path, field, value, matching_rules, generators);
+  trace!(">> build_embedded_message_field_value({}, {}, {:?}, {:?}, {:?}, {:?})", path, field, value, message_builder, matching_rules, generators);
 
   if is_repeated(field_descriptor) && !is_map_field(&message_builder.descriptor, field_descriptor) {
     debug!("{} is a repeated field", field);
@@ -535,7 +536,7 @@ fn build_struct_field(
       let mut fields = btreemap!{};
       for (key, value) in map {
         let field_path = path.join(key);
-        let proto_value = build_proto_value(path, value, matching_rules, generators)?;
+        let proto_value = build_proto_value(&field_path, value, matching_rules, generators)?;
         fields.insert(key.clone(), proto_value);
       }
 
@@ -622,7 +623,7 @@ fn build_proto_value(
       let mut fields = btreemap!{};
       for (key, value) in map {
         let field_path = path.join(key);
-        let proto_value = build_proto_value(path, value, matching_rules, generators)?;
+        let proto_value = build_proto_value(&field_path, value, matching_rules, generators)?;
         fields.insert(key.clone(), proto_value);
       }
 
@@ -716,14 +717,12 @@ fn build_field_value(
   match value {
     Value::Null => Ok(None),
     Value::String(s) => {
-      let field_path = path.join(field_name);
-
       let constructed_value = if is_matcher_def(s.as_str()) {
         let mrd = parse_matcher_def(s.as_str())?;
         if !mrd.rules.is_empty() {
           for rule in &mrd.rules {
             match rule {
-              Either::Left(rule) => matching_rules.add_rule(field_path.clone(), rule.clone(), RuleLogic::And),
+              Either::Left(rule) => matching_rules.add_rule(path.clone(), rule.clone(), RuleLogic::And),
               Either::Right(mr) => return Err(anyhow!("Was expecting a value for '{}', but got a matching reference {:?}", field_path, mr))
             }
           }
@@ -788,7 +787,6 @@ fn value_for_type(
     _ => Err(anyhow!("Protobuf field {} has an unsupported type {:?}", field_name, t))
   }
 }
-
 
 #[cfg(test)]
 mod tests {
