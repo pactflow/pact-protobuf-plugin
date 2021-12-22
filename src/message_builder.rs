@@ -117,7 +117,7 @@ impl MessageBuilder {
 
   /// Encodes the Protobuf message into a bytes buffer
   pub fn encode_message(&self) -> anyhow::Result<Bytes> {
-    trace!("encode_message");
+    trace!(">> encode_message {}, {} fields", self.message_name, self.fields.len());
     let mut buffer = BytesMut::with_capacity(1024);
 
     for (_, field_data) in self.fields.iter()
@@ -129,11 +129,13 @@ impl MessageBuilder {
       }
     }
 
+    trace!("encode_message: {} bytes", buffer.len());
+
     Ok(buffer.freeze())
   }
 
   fn encode_single_field(&self, mut buffer: &mut BytesMut, field_data: &FieldValueInner, value: Option<MessageFieldValue>) -> anyhow::Result<()> {
-    trace!("encode_single_field({:?}, {:?})", field_data, value);
+    trace!(">> encode_single_field({:?}, {:?}, {:?})", value, field_data.descriptor.number, field_data);
     if let Some(value) = value {
       if let Some(tag) = field_data.descriptor.number {
         match field_data.proto_type {
@@ -155,10 +157,16 @@ impl MessageBuilder {
               buffer.put_slice(&message_bytes);
             }
             RType::Struct(s) => {
-              s.encode(&mut buffer)?;
+              trace!("Encoding a Protobuf Struct");
+              let mut buffer2 = BytesMut::with_capacity(s.encoded_len());
+              s.encode(&mut buffer2)?;
+              encode_key(tag as u32, WireType::LengthDelimited, &mut buffer);
+              encode_varint(buffer2.len() as u64, &mut buffer);
+              buffer.put_slice(&buffer2);
             }
             RType::Bytes(b) => {
               // Encode a google.protobuf.BytesValue
+              trace!("Encoding a Protobuf BytesValue");
               let data = Bytes::from(b.clone());
 
               // BytesValue field 1 is a byte array
@@ -208,7 +216,7 @@ impl MessageBuilder {
     enum_value_name: &str,
     buffer: &mut BytesMut
   ) -> anyhow::Result<()> {
-    trace!("encode_enum_value({:?}, {}, '{}')", field_value, tag, enum_value_name);
+    trace!(">> encode_enum_value({:?}, {}, '{}')", field_value, tag, enum_value_name);
     let enum_type_name = descriptor.type_name.as_ref().ok_or_else(|| anyhow!("Type name is missing from the descriptor for enum field {}", field_value.name))?;
     let enum_name = enum_type_name.split('.').last().unwrap_or(enum_type_name);
     let enum_proto = self.descriptor.enum_type.iter().find(|enum_type| enum_type.name.clone().unwrap_or_default() == enum_name)
@@ -225,7 +233,7 @@ impl MessageBuilder {
   }
 
   fn encode_map_field(&self, buffer: &mut BytesMut, field_value: &FieldValueInner) -> anyhow::Result<()> {
-    trace!("encode_map_field({:?})", field_value);
+    trace!(">> encode_map_field({:?})", field_value);
     if !field_value.values.is_empty() {
       if field_value.values.len() % 2 == 1 {
         return Err(anyhow!("Map fields need to have an even number of field values as key-value pairs, got {} field values", field_value.values.len()));
@@ -279,7 +287,7 @@ impl MessageBuilder {
   }
 
   fn encode_repeated_field(&self, buffer: &mut BytesMut, field_value: &FieldValueInner) -> anyhow::Result<()> {
-    trace!("encode_repeated_field({:?})", field_value);
+    trace!(">> encode_repeated_field({:?})", field_value);
     if !field_value.values.is_empty() {
       for value in &field_value.values {
         self.encode_single_field(buffer, field_value, Some(value.clone()))?;
@@ -597,15 +605,32 @@ impl MessageFieldValue {
 
 #[cfg(test)]
 mod tests {
-  use bytes::BytesMut;
+  use bytes::{Bytes, BytesMut};
   use expectest::prelude::*;
   use itertools::Itertools;
   use maplit::{btreemap, hashmap};
-  use pact_plugin_driver::proto::{Body, CompareContentsRequest, MatchingRule, MatchingRules};
+  use pact_plugin_driver::proto::{
+    Body,
+    CompareContentsRequest,
+    MatchingRule,
+    MatchingRules,
+    InteractionResponse,
+    Generator
+  };
   use pact_plugin_driver::proto::body::ContentTypeHint;
   use prost::encoding::WireType;
   use prost::Message;
-  use prost_types::{DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto, field_descriptor_proto, FieldDescriptorProto, MessageOptions, OneofDescriptorProto};
+  use prost_types::{
+    DescriptorProto,
+    EnumDescriptorProto,
+    EnumValueDescriptorProto,
+    field_descriptor_proto,
+    FieldDescriptorProto,
+    FileDescriptorProto,
+    FileDescriptorSet,
+    MessageOptions,
+    OneofDescriptorProto
+  };
   use prost_types::field_descriptor_proto::Label::Optional;
   use prost_types::value::Kind;
   use trim_margin::MarginTrimmable;
@@ -613,6 +638,93 @@ mod tests {
   use crate::message_builder::{MessageBuilder, MessageFieldValue, RType};
   use crate::message_builder::MessageFieldValueType::Repeated;
   use crate::message_decoder::{decode_message, ProtobufFieldData};
+
+  const ENCODED_MESSAGE: &str = "CuIFChxnb29nbGUvcHJvdG9idWYvc3RydWN0LnByb3RvEg9nb29nbGUucHJv\
+  dG9idWYimAEKBlN0cnVjdBI7CgZmaWVsZHMYASADKAsyIy5nb29nbGUucHJvdG9idWYuU3RydWN0LkZpZWxkc0VudHJ5\
+  UgZmaWVsZHMaUQoLRmllbGRzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSLAoFdmFsdWUYAiABKAsyFi5nb29nbGUucHJvd\
+  G9idWYuVmFsdWVSBXZhbHVlOgI4ASKyAgoFVmFsdWUSOwoKbnVsbF92YWx1ZRgBIAEoDjIaLmdvb2dsZS5wcm90b2J1Zi5\
+  OdWxsVmFsdWVIAFIJbnVsbFZhbHVlEiMKDG51bWJlcl92YWx1ZRgCIAEoAUgAUgtudW1iZXJWYWx1ZRIjCgxzdHJpbmdfd\
+  mFsdWUYAyABKAlIAFILc3RyaW5nVmFsdWUSHwoKYm9vbF92YWx1ZRgEIAEoCEgAUglib29sVmFsdWUSPAoMc3RydWN0X3Z\
+  hbHVlGAUgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdEgAUgtzdHJ1Y3RWYWx1ZRI7CgpsaXN0X3ZhbHVlGAYgASgLM\
+  houZ29vZ2xlLnByb3RvYnVmLkxpc3RWYWx1ZUgAUglsaXN0VmFsdWVCBgoEa2luZCI7CglMaXN0VmFsdWUSLgoGdmFsdWV\
+  zGAEgAygLMhYuZ29vZ2xlLnByb3RvYnVmLlZhbHVlUgZ2YWx1ZXMqGwoJTnVsbFZhbHVlEg4KCk5VTExfVkFMVUUQAEJ/C\
+  hNjb20uZ29vZ2xlLnByb3RvYnVmQgtTdHJ1Y3RQcm90b1ABWi9nb29nbGUuZ29sYW5nLm9yZy9wcm90b2J1Zi90eXBlcy9r\
+  bm93bi9zdHJ1Y3RwYvgBAaICA0dQQqoCHkdvb2dsZS5Qcm90b2J1Zi5XZWxsS25vd25UeXBlc2IGcHJvdG8zCoYECh5nb2\
+  9nbGUvcHJvdG9idWYvd3JhcHBlcnMucHJvdG8SD2dvb2dsZS5wcm90b2J1ZiIjCgtEb3VibGVWYWx1ZRIUCgV2YWx1ZRgB\
+  IAEoAVIFdmFsdWUiIgoKRmxvYXRWYWx1ZRIUCgV2YWx1ZRgBIAEoAlIFdmFsdWUiIgoKSW50NjRWYWx1ZRIUCgV2YWx1ZR\
+  gBIAEoA1IFdmFsdWUiIwoLVUludDY0VmFsdWUSFAoFdmFsdWUYASABKARSBXZhbHVlIiIKCkludDMyVmFsdWUSFAoFdmFs\
+  dWUYASABKAVSBXZhbHVlIiMKC1VJbnQzMlZhbHVlEhQKBXZhbHVlGAEgASgNUgV2YWx1ZSIhCglCb29sVmFsdWUSFAoFdm\
+  FsdWUYASABKAhSBXZhbHVlIiMKC1N0cmluZ1ZhbHVlEhQKBXZhbHVlGAEgASgJUgV2YWx1ZSIiCgpCeXRlc1ZhbHVlEhQKB\
+  XZhbHVlGAEgASgMUgV2YWx1ZUKDAQoTY29tLmdvb2dsZS5wcm90b2J1ZkINV3JhcHBlcnNQcm90b1ABWjFnb29nbGUuZ29\
+  sYW5nLm9yZy9wcm90b2J1Zi90eXBlcy9rbm93bi93cmFwcGVyc3Bi+AEBogIDR1BCqgIeR29vZ2xlLlByb3RvYnVmLldlb\
+  GxLbm93blR5cGVzYgZwcm90bzMKvgEKG2dvb2dsZS9wcm90b2J1Zi9lbXB0eS5wcm90bxIPZ29vZ2xlLnByb3RvYnVmIg\
+  cKBUVtcHR5Qn0KE2NvbS5nb29nbGUucHJvdG9idWZCCkVtcHR5UHJvdG9QAVouZ29vZ2xlLmdvbGFuZy5vcmcvcHJvdG9\
+  idWYvdHlwZXMva25vd24vZW1wdHlwYvgBAaICA0dQQqoCHkdvb2dsZS5Qcm90b2J1Zi5XZWxsS25vd25UeXBlc2IGcHJv\
+  dG8zCv0iCgxwbHVnaW4ucHJvdG8SDmlvLnBhY3QucGx1Z2luGhxnb29nbGUvcHJvdG9idWYvc3RydWN0LnByb3RvGh5nb2\
+  9nbGUvcHJvdG9idWYvd3JhcHBlcnMucHJvdG8aG2dvb2dsZS9wcm90b2J1Zi9lbXB0eS5wcm90byJVChFJbml0UGx1Z2l\
+  uUmVxdWVzdBImCg5pbXBsZW1lbnRhdGlvbhgBIAEoCVIOaW1wbGVtZW50YXRpb24SGAoHdmVyc2lvbhgCIAEoCVIHdmVy\
+  c2lvbiLHAgoOQ2F0YWxvZ3VlRW50cnkSPAoEdHlwZRgBIAEoDjIoLmlvLnBhY3QucGx1Z2luLkNhdGFsb2d1ZUVudHJ5Lk\
+  VudHJ5VHlwZVIEdHlwZRIQCgNrZXkYAiABKAlSA2tleRJCCgZ2YWx1ZXMYAyADKAsyKi5pby5wYWN0LnBsdWdpbi5DYXRh\
+  bG9ndWVFbnRyeS5WYWx1ZXNFbnRyeVIGdmFsdWVzGjkKC1ZhbHVlc0VudHJ5EhAKA2tleRgBIAEoCVIDa2V5EhQKBXZhbH\
+  VlGAIgASgJUgV2YWx1ZToCOAEiZgoJRW50cnlUeXBlEhMKD0NPTlRFTlRfTUFUQ0hFUhAAEhUKEUNPTlRFTlRfR0VORVJ\
+  BVE9SEAESDwoLTU9DS19TRVJWRVIQAhILCgdNQVRDSEVSEAMSDwoLSU5URVJBQ1RJT04QBCJSChJJbml0UGx1Z2luUmVz\
+  cG9uc2USPAoJY2F0YWxvZ3VlGAEgAygLMh4uaW8ucGFjdC5wbHVnaW4uQ2F0YWxvZ3VlRW50cnlSCWNhdGFsb2d1ZSJJC\
+  glDYXRhbG9ndWUSPAoJY2F0YWxvZ3VlGAEgAygLMh4uaW8ucGFjdC5wbHVnaW4uQ2F0YWxvZ3VlRW50cnlSCWNhdGFsb2\
+  d1ZSLlAQoEQm9keRIgCgtjb250ZW50VHlwZRgBIAEoCVILY29udGVudFR5cGUSNQoHY29udGVudBgCIAEoCzIbLmdvb2d\
+  sZS5wcm90b2J1Zi5CeXRlc1ZhbHVlUgdjb250ZW50Ek4KD2NvbnRlbnRUeXBlSGludBgDIAEoDjIkLmlvLnBhY3QucGx1Z\
+  2luLkJvZHkuQ29udGVudFR5cGVIaW50Ug9jb250ZW50VHlwZUhpbnQiNAoPQ29udGVudFR5cGVIaW50EgsKB0RFRkFVTF\
+  QQABIICgRURVhUEAESCgoGQklOQVJZEAIipQMKFkNvbXBhcmVDb250ZW50c1JlcXVlc3QSMAoIZXhwZWN0ZWQYASABKAs\
+  yFC5pby5wYWN0LnBsdWdpbi5Cb2R5UghleHBlY3RlZBIsCgZhY3R1YWwYAiABKAsyFC5pby5wYWN0LnBsdWdpbi5Cb2R5\
+  UgZhY3R1YWwSMgoVYWxsb3dfdW5leHBlY3RlZF9rZXlzGAMgASgIUhNhbGxvd1VuZXhwZWN0ZWRLZXlzEkcKBXJ1bGVzG\
+  AQgAygLMjEuaW8ucGFjdC5wbHVnaW4uQ29tcGFyZUNvbnRlbnRzUmVxdWVzdC5SdWxlc0VudHJ5UgVydWxlcxJVChNwb\
+  HVnaW5Db25maWd1cmF0aW9uGAUgASgLMiMuaW8ucGFjdC5wbHVnaW4uUGx1Z2luQ29uZmlndXJhdGlvblITcGx1Z2luQ2\
+  9uZmlndXJhdGlvbhpXCgpSdWxlc0VudHJ5EhAKA2tleRgBIAEoCVIDa2V5EjMKBXZhbHVlGAIgASgLMh0uaW8ucGFjdC5\
+  wbHVnaW4uTWF0Y2hpbmdSdWxlc1IFdmFsdWU6AjgBIkkKE0NvbnRlbnRUeXBlTWlzbWF0Y2gSGgoIZXhwZWN0ZWQYASAB\
+  KAlSCGV4cGVjdGVkEhYKBmFjdHVhbBgCIAEoCVIGYWN0dWFsIsMBCg9Db250ZW50TWlzbWF0Y2gSNwoIZXhwZWN0ZWQYA\
+  SABKAsyGy5nb29nbGUucHJvdG9idWYuQnl0ZXNWYWx1ZVIIZXhwZWN0ZWQSMwoGYWN0dWFsGAIgASgLMhsuZ29vZ2xlLn\
+  Byb3RvYnVmLkJ5dGVzVmFsdWVSBmFjdHVhbBIaCghtaXNtYXRjaBgDIAEoCVIIbWlzbWF0Y2gSEgoEcGF0aBgEIAEoCVI\
+  EcGF0aBISCgRkaWZmGAUgASgJUgRkaWZmIlQKEUNvbnRlbnRNaXNtYXRjaGVzEj8KCm1pc21hdGNoZXMYASADKAsyHy5p\
+  by5wYWN0LnBsdWdpbi5Db250ZW50TWlzbWF0Y2hSCm1pc21hdGNoZXMipwIKF0NvbXBhcmVDb250ZW50c1Jlc3BvbnNlE\
+  hQKBWVycm9yGAEgASgJUgVlcnJvchJHCgx0eXBlTWlzbWF0Y2gYAiABKAsyIy5pby5wYWN0LnBsdWdpbi5Db250ZW50VH\
+  lwZU1pc21hdGNoUgx0eXBlTWlzbWF0Y2gSTgoHcmVzdWx0cxgDIAMoCzI0LmlvLnBhY3QucGx1Z2luLkNvbXBhcmVDb25\
+  0ZW50c1Jlc3BvbnNlLlJlc3VsdHNFbnRyeVIHcmVzdWx0cxpdCgxSZXN1bHRzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkS\
+  NwoFdmFsdWUYAiABKAsyIS5pby5wYWN0LnBsdWdpbi5Db250ZW50TWlzbWF0Y2hlc1IFdmFsdWU6AjgBIoABChtDb25ma\
+  Wd1cmVJbnRlcmFjdGlvblJlcXVlc3QSIAoLY29udGVudFR5cGUYASABKAlSC2NvbnRlbnRUeXBlEj8KDmNvbnRlbnRzQ2\
+  9uZmlnGAIgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdFIOY29udGVudHNDb25maWciUwoMTWF0Y2hpbmdSdWxlEhI\
+  KBHR5cGUYASABKAlSBHR5cGUSLwoGdmFsdWVzGAIgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdFIGdmFsdWVzIkEK\
+  DU1hdGNoaW5nUnVsZXMSMAoEcnVsZRgBIAMoCzIcLmlvLnBhY3QucGx1Z2luLk1hdGNoaW5nUnVsZVIEcnVsZSJQCglHZ\
+  W5lcmF0b3ISEgoEdHlwZRgBIAEoCVIEdHlwZRIvCgZ2YWx1ZXMYAiABKAsyFy5nb29nbGUucHJvdG9idWYuU3RydWN0U\
+  gZ2YWx1ZXMisQEKE1BsdWdpbkNvbmZpZ3VyYXRpb24SUwoYaW50ZXJhY3Rpb25Db25maWd1cmF0aW9uGAEgASgLMhcuZ2\
+  9vZ2xlLnByb3RvYnVmLlN0cnVjdFIYaW50ZXJhY3Rpb25Db25maWd1cmF0aW9uEkUKEXBhY3RDb25maWd1cmF0aW9uGAI\
+  gASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdFIRcGFjdENvbmZpZ3VyYXRpb24iiAYKE0ludGVyYWN0aW9uUmVzcG9u\
+  c2USMAoIY29udGVudHMYASABKAsyFC5pby5wYWN0LnBsdWdpbi5Cb2R5Ughjb250ZW50cxJECgVydWxlcxgCIAMoCzIuL\
+  mlvLnBhY3QucGx1Z2luLkludGVyYWN0aW9uUmVzcG9uc2UuUnVsZXNFbnRyeVIFcnVsZXMSUwoKZ2VuZXJhdG9ycxgDIA\
+  MoCzIzLmlvLnBhY3QucGx1Z2luLkludGVyYWN0aW9uUmVzcG9uc2UuR2VuZXJhdG9yc0VudHJ5UgpnZW5lcmF0b3JzEkE\
+  KD21lc3NhZ2VNZXRhZGF0YRgEIAEoCzIXLmdvb2dsZS5wcm90b2J1Zi5TdHJ1Y3RSD21lc3NhZ2VNZXRhZGF0YRJVChNw\
+  bHVnaW5Db25maWd1cmF0aW9uGAUgASgLMiMuaW8ucGFjdC5wbHVnaW4uUGx1Z2luQ29uZmlndXJhdGlvblITcGx1Z2luQ\
+  29uZmlndXJhdGlvbhIsChFpbnRlcmFjdGlvbk1hcmt1cBgGIAEoCVIRaW50ZXJhY3Rpb25NYXJrdXASZAoVaW50ZXJhY3\
+  Rpb25NYXJrdXBUeXBlGAcgASgOMi4uaW8ucGFjdC5wbHVnaW4uSW50ZXJhY3Rpb25SZXNwb25zZS5NYXJrdXBUeXBlUhV\
+  pbnRlcmFjdGlvbk1hcmt1cFR5cGUSGgoIcGFydE5hbWUYCCABKAlSCHBhcnROYW1lGlcKClJ1bGVzRW50cnkSEAoDa2V5\
+  GAEgASgJUgNrZXkSMwoFdmFsdWUYAiABKAsyHS5pby5wYWN0LnBsdWdpbi5NYXRjaGluZ1J1bGVzUgV2YWx1ZToCOAEaW\
+  AoPR2VuZXJhdG9yc0VudHJ5EhAKA2tleRgBIAEoCVIDa2V5Ei8KBXZhbHVlGAIgASgLMhkuaW8ucGFjdC5wbHVnaW4uR\
+  2VuZXJhdG9yUgV2YWx1ZToCOAEiJwoKTWFya3VwVHlwZRIPCgtDT01NT05fTUFSSxAAEggKBEhUTUwQASLSAQocQ29uZ\
+  mlndXJlSW50ZXJhY3Rpb25SZXNwb25zZRIUCgVlcnJvchgBIAEoCVIFZXJyb3ISRQoLaW50ZXJhY3Rpb24YAiADKAsyI\
+  y5pby5wYWN0LnBsdWdpbi5JbnRlcmFjdGlvblJlc3BvbnNlUgtpbnRlcmFjdGlvbhJVChNwbHVnaW5Db25maWd1cmF0a\
+  W9uGAMgASgLMiMuaW8ucGFjdC5wbHVnaW4uUGx1Z2luQ29uZmlndXJhdGlvblITcGx1Z2luQ29uZmlndXJhdGlvbiLTA\
+  goWR2VuZXJhdGVDb250ZW50UmVxdWVzdBIwCghjb250ZW50cxgBIAEoCzIULmlvLnBhY3QucGx1Z2luLkJvZHlSCGNvb\
+  nRlbnRzElYKCmdlbmVyYXRvcnMYAiADKAsyNi5pby5wYWN0LnBsdWdpbi5HZW5lcmF0ZUNvbnRlbnRSZXF1ZXN0Lkdlb\
+  mVyYXRvcnNFbnRyeVIKZ2VuZXJhdG9ycxJVChNwbHVnaW5Db25maWd1cmF0aW9uGAMgASgLMiMuaW8ucGFjdC5wbHVna\
+  W4uUGx1Z2luQ29uZmlndXJhdGlvblITcGx1Z2luQ29uZmlndXJhdGlvbhpYCg9HZW5lcmF0b3JzRW50cnkSEAoDa2V5G\
+  AEgASgJUgNrZXkSLwoFdmFsdWUYAiABKAsyGS5pby5wYWN0LnBsdWdpbi5HZW5lcmF0b3JSBXZhbHVlOgI4ASJLChdHZ\
+  W5lcmF0ZUNvbnRlbnRSZXNwb25zZRIwCghjb250ZW50cxgBIAEoCzIULmlvLnBhY3QucGx1Z2luLkJvZHlSCGNvbnRlb\
+  nRzMuIDCgpQYWN0UGx1Z2luElMKCkluaXRQbHVnaW4SIS5pby5wYWN0LnBsdWdpbi5Jbml0UGx1Z2luUmVxdWVzdBoiL\
+  mlvLnBhY3QucGx1Z2luLkluaXRQbHVnaW5SZXNwb25zZRJECg9VcGRhdGVDYXRhbG9ndWUSGS5pby5wYWN0LnBsdWdpb\
+  i5DYXRhbG9ndWUaFi5nb29nbGUucHJvdG9idWYuRW1wdHkSYgoPQ29tcGFyZUNvbnRlbnRzEiYuaW8ucGFjdC5wbHVna\
+  W4uQ29tcGFyZUNvbnRlbnRzUmVxdWVzdBonLmlvLnBhY3QucGx1Z2luLkNvbXBhcmVDb250ZW50c1Jlc3BvbnNlEnEKF\
+  ENvbmZpZ3VyZUludGVyYWN0aW9uEisuaW8ucGFjdC5wbHVnaW4uQ29uZmlndXJlSW50ZXJhY3Rpb25SZXF1ZXN0Giwua\
+  W8ucGFjdC5wbHVnaW4uQ29uZmlndXJlSW50ZXJhY3Rpb25SZXNwb25zZRJiCg9HZW5lcmF0ZUNvbnRlbnQSJi5pby5w\
+  YWN0LnBsdWdpbi5HZW5lcmF0ZUNvbnRlbnRSZXF1ZXN0GicuaW8ucGFjdC5wbHVnaW4uR2VuZXJhdGVDb250ZW50UmV\
+  zcG9uc2VCEFoOaW8ucGFjdC5wbHVnaW5iBnByb3RvMw==";
 
   #[macro_export]
   macro_rules! string_field_descriptor {
@@ -718,10 +830,7 @@ mod tests {
     //   string version = 2;
     // }
 
-    // let bytes = base64::decode("CuIFChxnb29nbGUvcHJvdG9idWYvc3RydWN0LnByb3RvEg9nb29nbGUucHJvdG9idWYimAEKBlN0cnVjdBI7CgZmaWVsZHMYASADKAsyIy5nb29nbGUucHJvdG9idWYuU3RydWN0LkZpZWxkc0VudHJ5UgZmaWVsZHMaUQoLRmllbGRzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSLAoFdmFsdWUYAiABKAsyFi5nb29nbGUucHJvdG9idWYuVmFsdWVSBXZhbHVlOgI4ASKyAgoFVmFsdWUSOwoKbnVsbF92YWx1ZRgBIAEoDjIaLmdvb2dsZS5wcm90b2J1Zi5OdWxsVmFsdWVIAFIJbnVsbFZhbHVlEiMKDG51bWJlcl92YWx1ZRgCIAEoAUgAUgtudW1iZXJWYWx1ZRIjCgxzdHJpbmdfdmFsdWUYAyABKAlIAFILc3RyaW5nVmFsdWUSHwoKYm9vbF92YWx1ZRgEIAEoCEgAUglib29sVmFsdWUSPAoMc3RydWN0X3ZhbHVlGAUgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdEgAUgtzdHJ1Y3RWYWx1ZRI7CgpsaXN0X3ZhbHVlGAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLkxpc3RWYWx1ZUgAUglsaXN0VmFsdWVCBgoEa2luZCI7CglMaXN0VmFsdWUSLgoGdmFsdWVzGAEgAygLMhYuZ29vZ2xlLnByb3RvYnVmLlZhbHVlUgZ2YWx1ZXMqGwoJTnVsbFZhbHVlEg4KCk5VTExfVkFMVUUQAEJ/ChNjb20uZ29vZ2xlLnByb3RvYnVmQgtTdHJ1Y3RQcm90b1ABWi9nb29nbGUuZ29sYW5nLm9yZy9wcm90b2J1Zi90eXBlcy9rbm93bi9zdHJ1Y3RwYvgBAaICA0dQQqoCHkdvb2dsZS5Qcm90b2J1Zi5XZWxsS25vd25UeXBlc2IGcHJvdG8zCoYECh5nb29nbGUvcHJvdG9idWYvd3JhcHBlcnMucHJvdG8SD2dvb2dsZS5wcm90b2J1ZiIjCgtEb3VibGVWYWx1ZRIUCgV2YWx1ZRgBIAEoAVIFdmFsdWUiIgoKRmxvYXRWYWx1ZRIUCgV2YWx1ZRgBIAEoAlIFdmFsdWUiIgoKSW50NjRWYWx1ZRIUCgV2YWx1ZRgBIAEoA1IFdmFsdWUiIwoLVUludDY0VmFsdWUSFAoFdmFsdWUYASABKARSBXZhbHVlIiIKCkludDMyVmFsdWUSFAoFdmFsdWUYASABKAVSBXZhbHVlIiMKC1VJbnQzMlZhbHVlEhQKBXZhbHVlGAEgASgNUgV2YWx1ZSIhCglCb29sVmFsdWUSFAoFdmFsdWUYASABKAhSBXZhbHVlIiMKC1N0cmluZ1ZhbHVlEhQKBXZhbHVlGAEgASgJUgV2YWx1ZSIiCgpCeXRlc1ZhbHVlEhQKBXZhbHVlGAEgASgMUgV2YWx1ZUKDAQoTY29tLmdvb2dsZS5wcm90b2J1ZkINV3JhcHBlcnNQcm90b1ABWjFnb29nbGUuZ29sYW5nLm9yZy9wcm90b2J1Zi90eXBlcy9rbm93bi93cmFwcGVyc3Bi+AEBogIDR1BCqgIeR29vZ2xlLlByb3RvYnVmLldlbGxLbm93blR5cGVzYgZwcm90bzMKvgEKG2dvb2dsZS9wcm90b2J1Zi9lbXB0eS5wcm90bxIPZ29vZ2xlLnByb3RvYnVmIgcKBUVtcHR5Qn0KE2NvbS5nb29nbGUucHJvdG9idWZCCkVtcHR5UHJvdG9QAVouZ29vZ2xlLmdvbGFuZy5vcmcvcHJvdG9idWYvdHlwZXMva25vd24vZW1wdHlwYvgBAaICA0dQQqoCHkdvb2dsZS5Qcm90b2J1Zi5XZWxsS25vd25UeXBlc2IGcHJvdG8zCv0iCgxwbHVnaW4ucHJvdG8SDmlvLnBhY3QucGx1Z2luGhxnb29nbGUvcHJvdG9idWYvc3RydWN0LnByb3RvGh5nb29nbGUvcHJvdG9idWYvd3JhcHBlcnMucHJvdG8aG2dvb2dsZS9wcm90b2J1Zi9lbXB0eS5wcm90byJVChFJbml0UGx1Z2luUmVxdWVzdBImCg5pbXBsZW1lbnRhdGlvbhgBIAEoCVIOaW1wbGVtZW50YXRpb24SGAoHdmVyc2lvbhgCIAEoCVIHdmVyc2lvbiLHAgoOQ2F0YWxvZ3VlRW50cnkSPAoEdHlwZRgBIAEoDjIoLmlvLnBhY3QucGx1Z2luLkNhdGFsb2d1ZUVudHJ5LkVudHJ5VHlwZVIEdHlwZRIQCgNrZXkYAiABKAlSA2tleRJCCgZ2YWx1ZXMYAyADKAsyKi5pby5wYWN0LnBsdWdpbi5DYXRhbG9ndWVFbnRyeS5WYWx1ZXNFbnRyeVIGdmFsdWVzGjkKC1ZhbHVlc0VudHJ5EhAKA2tleRgBIAEoCVIDa2V5EhQKBXZhbHVlGAIgASgJUgV2YWx1ZToCOAEiZgoJRW50cnlUeXBlEhMKD0NPTlRFTlRfTUFUQ0hFUhAAEhUKEUNPTlRFTlRfR0VORVJBVE9SEAESDwoLTU9DS19TRVJWRVIQAhILCgdNQVRDSEVSEAMSDwoLSU5URVJBQ1RJT04QBCJSChJJbml0UGx1Z2luUmVzcG9uc2USPAoJY2F0YWxvZ3VlGAEgAygLMh4uaW8ucGFjdC5wbHVnaW4uQ2F0YWxvZ3VlRW50cnlSCWNhdGFsb2d1ZSJJCglDYXRhbG9ndWUSPAoJY2F0YWxvZ3VlGAEgAygLMh4uaW8ucGFjdC5wbHVnaW4uQ2F0YWxvZ3VlRW50cnlSCWNhdGFsb2d1ZSLlAQoEQm9keRIgCgtjb250ZW50VHlwZRgBIAEoCVILY29udGVudFR5cGUSNQoHY29udGVudBgCIAEoCzIbLmdvb2dsZS5wcm90b2J1Zi5CeXRlc1ZhbHVlUgdjb250ZW50Ek4KD2NvbnRlbnRUeXBlSGludBgDIAEoDjIkLmlvLnBhY3QucGx1Z2luLkJvZHkuQ29udGVudFR5cGVIaW50Ug9jb250ZW50VHlwZUhpbnQiNAoPQ29udGVudFR5cGVIaW50EgsKB0RFRkFVTFQQABIICgRURVhUEAESCgoGQklOQVJZEAIipQMKFkNvbXBhcmVDb250ZW50c1JlcXVlc3QSMAoIZXhwZWN0ZWQYASABKAsyFC5pby5wYWN0LnBsdWdpbi5Cb2R5UghleHBlY3RlZBIsCgZhY3R1YWwYAiABKAsyFC5pby5wYWN0LnBsdWdpbi5Cb2R5UgZhY3R1YWwSMgoVYWxsb3dfdW5leHBlY3RlZF9rZXlzGAMgASgIUhNhbGxvd1VuZXhwZWN0ZWRLZXlzEkcKBXJ1bGVzGAQgAygLMjEuaW8ucGFjdC5wbHVnaW4uQ29tcGFyZUNvbnRlbnRzUmVxdWVzdC5SdWxlc0VudHJ5UgVydWxlcxJVChNwbHVnaW5Db25maWd1cmF0aW9uGAUgASgLMiMuaW8ucGFjdC5wbHVnaW4uUGx1Z2luQ29uZmlndXJhdGlvblITcGx1Z2luQ29uZmlndXJhdGlvbhpXCgpSdWxlc0VudHJ5EhAKA2tleRgBIAEoCVIDa2V5EjMKBXZhbHVlGAIgASgLMh0uaW8ucGFjdC5wbHVnaW4uTWF0Y2hpbmdSdWxlc1IFdmFsdWU6AjgBIkkKE0NvbnRlbnRUeXBlTWlzbWF0Y2gSGgoIZXhwZWN0ZWQYASABKAlSCGV4cGVjdGVkEhYKBmFjdHVhbBgCIAEoCVIGYWN0dWFsIsMBCg9Db250ZW50TWlzbWF0Y2gSNwoIZXhwZWN0ZWQYASABKAsyGy5nb29nbGUucHJvdG9idWYuQnl0ZXNWYWx1ZVIIZXhwZWN0ZWQSMwoGYWN0dWFsGAIgASgLMhsuZ29vZ2xlLnByb3RvYnVmLkJ5dGVzVmFsdWVSBmFjdHVhbBIaCghtaXNtYXRjaBgDIAEoCVIIbWlzbWF0Y2gSEgoEcGF0aBgEIAEoCVIEcGF0aBISCgRkaWZmGAUgASgJUgRkaWZmIlQKEUNvbnRlbnRNaXNtYXRjaGVzEj8KCm1pc21hdGNoZXMYASADKAsyHy5pby5wYWN0LnBsdWdpbi5Db250ZW50TWlzbWF0Y2hSCm1pc21hdGNoZXMipwIKF0NvbXBhcmVDb250ZW50c1Jlc3BvbnNlEhQKBWVycm9yGAEgASgJUgVlcnJvchJHCgx0eXBlTWlzbWF0Y2gYAiABKAsyIy5pby5wYWN0LnBsdWdpbi5Db250ZW50VHlwZU1pc21hdGNoUgx0eXBlTWlzbWF0Y2gSTgoHcmVzdWx0cxgDIAMoCzI0LmlvLnBhY3QucGx1Z2luLkNvbXBhcmVDb250ZW50c1Jlc3BvbnNlLlJlc3VsdHNFbnRyeVIHcmVzdWx0cxpdCgxSZXN1bHRzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSNwoFdmFsdWUYAiABKAsyIS5pby5wYWN0LnBsdWdpbi5Db250ZW50TWlzbWF0Y2hlc1IFdmFsdWU6AjgBIoABChtDb25maWd1cmVJbnRlcmFjdGlvblJlcXVlc3QSIAoLY29udGVudFR5cGUYASABKAlSC2NvbnRlbnRUeXBlEj8KDmNvbnRlbnRzQ29uZmlnGAIgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdFIOY29udGVudHNDb25maWciUwoMTWF0Y2hpbmdSdWxlEhIKBHR5cGUYASABKAlSBHR5cGUSLwoGdmFsdWVzGAIgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdFIGdmFsdWVzIkEKDU1hdGNoaW5nUnVsZXMSMAoEcnVsZRgBIAMoCzIcLmlvLnBhY3QucGx1Z2luLk1hdGNoaW5nUnVsZVIEcnVsZSJQCglHZW5lcmF0b3ISEgoEdHlwZRgBIAEoCVIEdHlwZRIvCgZ2YWx1ZXMYAiABKAsyFy5nb29nbGUucHJvdG9idWYuU3RydWN0UgZ2YWx1ZXMisQEKE1BsdWdpbkNvbmZpZ3VyYXRpb24SUwoYaW50ZXJhY3Rpb25Db25maWd1cmF0aW9uGAEgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdFIYaW50ZXJhY3Rpb25Db25maWd1cmF0aW9uEkUKEXBhY3RDb25maWd1cmF0aW9uGAIgASgLMhcuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdFIRcGFjdENvbmZpZ3VyYXRpb24iiAYKE0ludGVyYWN0aW9uUmVzcG9uc2USMAoIY29udGVudHMYASABKAsyFC5pby5wYWN0LnBsdWdpbi5Cb2R5Ughjb250ZW50cxJECgVydWxlcxgCIAMoCzIuLmlvLnBhY3QucGx1Z2luLkludGVyYWN0aW9uUmVzcG9uc2UuUnVsZXNFbnRyeVIFcnVsZXMSUwoKZ2VuZXJhdG9ycxgDIAMoCzIzLmlvLnBhY3QucGx1Z2luLkludGVyYWN0aW9uUmVzcG9uc2UuR2VuZXJhdG9yc0VudHJ5UgpnZW5lcmF0b3JzEkEKD21lc3NhZ2VNZXRhZGF0YRgEIAEoCzIXLmdvb2dsZS5wcm90b2J1Zi5TdHJ1Y3RSD21lc3NhZ2VNZXRhZGF0YRJVChNwbHVnaW5Db25maWd1cmF0aW9uGAUgASgLMiMuaW8ucGFjdC5wbHVnaW4uUGx1Z2luQ29uZmlndXJhdGlvblITcGx1Z2luQ29uZmlndXJhdGlvbhIsChFpbnRlcmFjdGlvbk1hcmt1cBgGIAEoCVIRaW50ZXJhY3Rpb25NYXJrdXASZAoVaW50ZXJhY3Rpb25NYXJrdXBUeXBlGAcgASgOMi4uaW8ucGFjdC5wbHVnaW4uSW50ZXJhY3Rpb25SZXNwb25zZS5NYXJrdXBUeXBlUhVpbnRlcmFjdGlvbk1hcmt1cFR5cGUSGgoIcGFydE5hbWUYCCABKAlSCHBhcnROYW1lGlcKClJ1bGVzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSMwoFdmFsdWUYAiABKAsyHS5pby5wYWN0LnBsdWdpbi5NYXRjaGluZ1J1bGVzUgV2YWx1ZToCOAEaWAoPR2VuZXJhdG9yc0VudHJ5EhAKA2tleRgBIAEoCVIDa2V5Ei8KBXZhbHVlGAIgASgLMhkuaW8ucGFjdC5wbHVnaW4uR2VuZXJhdG9yUgV2YWx1ZToCOAEiJwoKTWFya3VwVHlwZRIPCgtDT01NT05fTUFSSxAAEggKBEhUTUwQASLSAQocQ29uZmlndXJlSW50ZXJhY3Rpb25SZXNwb25zZRIUCgVlcnJvchgBIAEoCVIFZXJyb3ISRQoLaW50ZXJhY3Rpb24YAiADKAsyIy5pby5wYWN0LnBsdWdpbi5JbnRlcmFjdGlvblJlc3BvbnNlUgtpbnRlcmFjdGlvbhJVChNwbHVnaW5Db25maWd1cmF0aW9uGAMgASgLMiMuaW8ucGFjdC5wbHVnaW4uUGx1Z2luQ29uZmlndXJhdGlvblITcGx1Z2luQ29uZmlndXJhdGlvbiLTAgoWR2VuZXJhdGVDb250ZW50UmVxdWVzdBIwCghjb250ZW50cxgBIAEoCzIULmlvLnBhY3QucGx1Z2luLkJvZHlSCGNvbnRlbnRzElYKCmdlbmVyYXRvcnMYAiADKAsyNi5pby5wYWN0LnBsdWdpbi5HZW5lcmF0ZUNvbnRlbnRSZXF1ZXN0LkdlbmVyYXRvcnNFbnRyeVIKZ2VuZXJhdG9ycxJVChNwbHVnaW5Db25maWd1cmF0aW9uGAMgASgLMiMuaW8ucGFjdC5wbHVnaW4uUGx1Z2luQ29uZmlndXJhdGlvblITcGx1Z2luQ29uZmlndXJhdGlvbhpYCg9HZW5lcmF0b3JzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSLwoFdmFsdWUYAiABKAsyGS5pby5wYWN0LnBsdWdpbi5HZW5lcmF0b3JSBXZhbHVlOgI4ASJLChdHZW5lcmF0ZUNvbnRlbnRSZXNwb25zZRIwCghjb250ZW50cxgBIAEoCzIULmlvLnBhY3QucGx1Z2luLkJvZHlSCGNvbnRlbnRzMuIDCgpQYWN0UGx1Z2luElMKCkluaXRQbHVnaW4SIS5pby5wYWN0LnBsdWdpbi5Jbml0UGx1Z2luUmVxdWVzdBoiLmlvLnBhY3QucGx1Z2luLkluaXRQbHVnaW5SZXNwb25zZRJECg9VcGRhdGVDYXRhbG9ndWUSGS5pby5wYWN0LnBsdWdpbi5DYXRhbG9ndWUaFi5nb29nbGUucHJvdG9idWYuRW1wdHkSYgoPQ29tcGFyZUNvbnRlbnRzEiYuaW8ucGFjdC5wbHVnaW4uQ29tcGFyZUNvbnRlbnRzUmVxdWVzdBonLmlvLnBhY3QucGx1Z2luLkNvbXBhcmVDb250ZW50c1Jlc3BvbnNlEnEKFENvbmZpZ3VyZUludGVyYWN0aW9uEisuaW8ucGFjdC5wbHVnaW4uQ29uZmlndXJlSW50ZXJhY3Rpb25SZXF1ZXN0GiwuaW8ucGFjdC5wbHVnaW4uQ29uZmlndXJlSW50ZXJhY3Rpb25SZXNwb25zZRJiCg9HZW5lcmF0ZUNvbnRlbnQSJi5pby5wYWN0LnBsdWdpbi5HZW5lcmF0ZUNvbnRlbnRSZXF1ZXN0GicuaW8ucGFjdC5wbHVnaW4uR2VuZXJhdGVDb250ZW50UmVzcG9uc2VCEFoOaW8ucGFjdC5wbHVnaW5iBnByb3RvMw==").unwrap();
-    // let bytes1 = Bytes::copy_from_slice(bytes.as_slice());
-    // let fds = FileDescriptorSet::decode(bytes1);
-    // dbg!(fds);
+    let file_descriptor = get_file_descriptor("plugin.proto").unwrap();
 
     let field1 = string_field_descriptor!("implementation", 1);
     let field2 = string_field_descriptor!("version", 2);
@@ -741,7 +850,7 @@ mod tests {
       reserved_range: vec![],
       reserved_name: vec![]
     };
-    let mut message = MessageBuilder::new(&descriptor, "InitPluginRequest", );
+    let mut message = MessageBuilder::new(&descriptor, "InitPluginRequest", &file_descriptor);
     message.set_field_value(&field1, "implementation", MessageFieldValue {
       name: "implementation".to_string(),
       raw_value: Some("plugin-driver-rust".to_string()),
@@ -787,6 +896,8 @@ mod tests {
     //   // will be used
     //   ContentTypeHint contentTypeHint = 3;
     // }
+
+    let file_descriptor = get_file_descriptor("plugin.proto").unwrap();
 
     let body = Body {
       content_type: "application/json".to_string(),
@@ -838,7 +949,7 @@ mod tests {
       reserved_range: vec![],
       reserved_name: vec![]
     };
-    let mut message = MessageBuilder::new(&descriptor, "Body", );
+    let mut message = MessageBuilder::new(&descriptor, "Body", &file_descriptor);
     message.set_field_value(&field1, "contentType", MessageFieldValue {
       name: "contentType".to_string(),
       raw_value: Some("application/json".to_string()),
@@ -860,7 +971,7 @@ mod tests {
       reserved_range: vec![],
       reserved_name: vec![]
     };
-    let mut bytes_message = MessageBuilder::new(&content_descriptor, "BytesValue", );
+    let mut bytes_message = MessageBuilder::new(&content_descriptor, "BytesValue", &file_descriptor);
     bytes_message.set_field_value(&bytes_field, "value", MessageFieldValue {
       name: "value".to_string(),
       raw_value: Some("{\"test\": true}".to_string()),
@@ -893,6 +1004,13 @@ mod tests {
          ".trim_margin().unwrap()));
   }
 
+  fn get_file_descriptor(file_name: &str) -> Option<FileDescriptorProto> {
+    let bytes = base64::decode(ENCODED_MESSAGE).unwrap();
+    let bytes1 = Bytes::from(bytes);
+    let fds = FileDescriptorSet::decode(bytes1).unwrap();
+    fds.file.iter().find(|fd| fd.name.clone().unwrap_or_default() == file_name).cloned()
+  }
+
   #[test_log::test]
   fn encode_message_with_map_field_test() {
     // message CompareContentsRequest {
@@ -908,6 +1026,8 @@ mod tests {
     //   // Additional data added to the Pact/Interaction by the plugin
     //   PluginConfiguration pluginConfiguration = 5;
     // }
+
+    let file_descriptor = get_file_descriptor("plugin.proto").unwrap();
 
     let compare_message = CompareContentsRequest {
       allow_unexpected_keys: true,
@@ -992,7 +1112,7 @@ mod tests {
       reserved_name: vec![]
     };
 
-    let mut message = MessageBuilder::new(&descriptor, "CompareContentsRequest", );
+    let mut message = MessageBuilder::new(&descriptor, "CompareContentsRequest", &file_descriptor);
     message.set_field_value(&field1, "allowUnexpectedKeys", MessageFieldValue {
       name: "allowUnexpectedKeys".to_string(),
       raw_value: Some("true".to_string()),
@@ -1026,7 +1146,7 @@ mod tests {
       reserved_range: vec![],
       reserved_name: vec![],
     };
-    let mut matching_rules = MessageBuilder::new(&rule_descriptor, "MatchingRules", );
+    let mut matching_rules = MessageBuilder::new(&rule_descriptor, "MatchingRules", &file_descriptor);
 
     let type_field_descriptor = string_field_descriptor!("type", 1);
     let values_field_descriptor = message_field_descriptor!("values", 2, ".google.protobuf.Struct");
@@ -1045,7 +1165,7 @@ mod tests {
       reserved_range: vec![],
       reserved_name: vec![]
     };
-    let mut matching_rule_1 = MessageBuilder::new(&matching_rule_descriptor, "MatchingRule", );
+    let mut matching_rule_1 = MessageBuilder::new(&matching_rule_descriptor, "MatchingRule", &file_descriptor);
     matching_rule_1.set_field_value(&type_field_descriptor, "type", MessageFieldValue {
       name: "type".to_string(),
       raw_value: Some("Type".to_string()),
@@ -1058,8 +1178,8 @@ mod tests {
       rtype: RType::Message(Box::new(matching_rule_1))
     });
 
-    let mut rule2 = MessageBuilder::new(&rule_descriptor, "MatchingRules", );
-    let mut matching_rule_2 = MessageBuilder::new(&matching_rule_descriptor, "MatchingRule", );
+    let mut rule2 = MessageBuilder::new(&rule_descriptor, "MatchingRules", &file_descriptor);
+    let mut matching_rule_2 = MessageBuilder::new(&matching_rule_descriptor, "MatchingRule", &file_descriptor);
     matching_rule_2.set_field_value(&type_field_descriptor, "type", MessageFieldValue {
       name: "type".to_string(),
       raw_value: Some("Regex".to_string()),
@@ -1175,14 +1295,14 @@ mod tests {
       reserved_range: vec![],
       reserved_name: vec![]
     };
-    let mut regex_values = MessageBuilder::new(&value_descriptor, "Value", );
+    let mut regex_values = MessageBuilder::new(&value_descriptor, "Value", &file_descriptor);
     regex_values.set_field_value(&value_string_field, "string_value", MessageFieldValue {
       name: "string_value".to_string(),
       raw_value: None,
       rtype: RType::String(".*".to_string())
     });
 
-    let mut matching_rule_values = MessageBuilder::new(&struct_descriptor, "Struct", );
+    let mut matching_rule_values = MessageBuilder::new(&struct_descriptor, "Struct", &file_descriptor);
     matching_rule_values.add_map_field_value(&struct_fields_descriptor, "fields", MessageFieldValue {
       name: "key".to_string(),
       raw_value: None,
@@ -1269,5 +1389,82 @@ mod tests {
          |```
          |
          ".trim_margin().unwrap()));
+  }
+
+  // #[test_log::test]
+  // TODO: replace with a test that uses oneOf
+  fn encode_message_for_interaction_response_test() {
+    // message InteractionResponse {
+    //   // Contents for the interaction
+    //   Body contents = 1;
+    //   // All matching rules to apply
+    //   map<string, MatchingRules> rules = 2;
+    //   // Generators to apply
+    //   map<string, Generator> generators = 3;
+    //   // For message interactions, any metadata to be applied
+    //   google.protobuf.Struct messageMetadata = 4;
+    //   // Plugin specific data to be persisted in the pact file
+    //   PluginConfiguration pluginConfiguration = 5;
+    //   // Markdown/HTML formatted text representation of the interaction
+    //   string interactionMarkup = 6;
+    //   // Type of markup used
+    //   enum MarkupType {
+    //     // CommonMark format
+    //     COMMON_MARK = 0;
+    //     // HTML format
+    //     HTML = 1;
+    //   }
+    //   MarkupType interactionMarkupType = 7;
+    //   // Description of what part this interaction belongs to (in the case of there being more than one, for instance,
+    //   // request/response messages)
+    //   string partName = 8;
+    // }
+
+    let interaction_response = InteractionResponse {
+      contents: Some(Body {
+        content_type: "application/json".to_string(),
+        content: Some("{}".as_bytes().to_vec()),
+        content_type_hint: ContentTypeHint::Text as i32
+      }),
+      rules: hashmap! {
+        "$.test.one".to_string() => MatchingRules {
+          rule: vec![
+            MatchingRule {
+              r#type: "regex".to_string(),
+              values: None
+            }
+          ]
+        }
+      },
+      generators: hashmap! {
+        "$.test.one".to_string() => Generator {
+          r#type: "DateTime".to_string(),
+          values: Some(::prost_types::Struct {
+            fields: btreemap! {
+              "format".to_string() => ::prost_types::Value {
+                kind: Some(::prost_types::value::Kind::StringValue("YYYY-MM-DD".to_string()))
+              }
+            }
+          })
+        },
+        "$.test.two".to_string() => Generator {
+          r#type: "DateTime".to_string(),
+          values: Some(::prost_types::Struct {
+            fields: btreemap! {
+              "format".to_string() => ::prost_types::Value {
+                kind: Some(::prost_types::value::Kind::StringValue("YYYY-MM-DD".to_string()))
+              }
+            }
+          })
+        }
+      },
+      .. InteractionResponse::default()
+    };
+
+    let mut encoded_buf = BytesMut::with_capacity(interaction_response.encoded_len());
+    interaction_response.encode(&mut encoded_buf).unwrap();
+    dbg!(format!("{:0x}", encoded_buf));
+
+    expect!(true).to(be_false());
   }
 }
