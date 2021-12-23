@@ -373,17 +373,14 @@ fn build_embedded_message_field_value(
             _ => None
           });
         if let Some(each_value_def) = &each_value {
-          debug!("Found each like matcher");
+          debug!("Found each value matcher");
           if mrd.rules.len() > 1 {
             warn!("{}: each value matcher can not be combined with other matchers, ignoring the other matching rules", path);
           }
 
-          matching_rules.add_rule(path.clone(), matchingrules::MatchingRule::Values, RuleLogic::And);
-          matching_rules.add_rule(path.join("*"), matchingrules::MatchingRule::Type, RuleLogic::And);
-
           match each_value_def.rules.first() {
             Some(either) => match either {
-              Either::Left(_) => {
+              Either::Left(rule) => {
                 matching_rules.add_rule(path.clone(), matchingrules::MatchingRule::EachValue(each_value_def.clone()), RuleLogic::And);
                 if let Some(generator) = &each_value_def.generator {
                   generators.insert(path.to_string(), generator.clone());
@@ -393,6 +390,8 @@ fn build_embedded_message_field_value(
                 Ok(())
               }
               Either::Right(reference) => if let Some(field_value) = map.get(reference.name.as_str()) {
+                matching_rules.add_rule(path.clone(), matchingrules::MatchingRule::Values, RuleLogic::And);
+                matching_rules.add_rule(path.join("*"), matchingrules::MatchingRule::Type, RuleLogic::And);
                 build_single_embedded_field_value(&path, message_builder, MessageFieldValueType::Repeated,
                   field_descriptor, field, field_value, matching_rules, generators).map(|_| ())
               } else {
@@ -654,6 +653,7 @@ fn build_map_field(
       let definition = json_to_string(definition);
       let mrd = parse_matcher_def(definition.as_str())?;
       if !mrd.rules.is_empty() {
+        trace!("Found matching rules: {:?}", mrd.rules);
         for rule in &mrd.rules {
           match rule {
             Either::Left(rule) => {
@@ -723,12 +723,12 @@ fn build_field_value(
           for rule in &mrd.rules {
             match rule {
               Either::Left(rule) => matching_rules.add_rule(path.clone(), rule.clone(), RuleLogic::And),
-              Either::Right(mr) => return Err(anyhow!("Was expecting a value for '{}', but got a matching reference {:?}", field_path, mr))
+              Either::Right(mr) => return Err(anyhow!("Was expecting a value for '{}', but got a matching reference {:?}", path, mr))
             }
           }
         }
         if let Some(generator) = mrd.generator {
-          generators.insert(field_path.to_string(), generator);
+          generators.insert(path.to_string(), generator);
         }
         value_for_type(field_name, mrd.value.as_str(), descriptor, &message_builder.descriptor)?
       } else {

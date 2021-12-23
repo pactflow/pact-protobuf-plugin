@@ -152,7 +152,11 @@ pub fn find_enum_value_by_name(message_descriptor: &DescriptorProto, enum_name: 
 }
 
 /// Convert the message field data into a JSON value
-pub fn field_data_to_json(field_data: Vec<ProtobufField>, descriptor: &DescriptorProto) -> anyhow::Result<serde_json::Value> {
+pub fn field_data_to_json(
+  field_data: Vec<ProtobufField>,
+  descriptor: &DescriptorProto,
+  descriptors: &FileDescriptorSet
+) -> anyhow::Result<serde_json::Value> {
   let mut object = hashmap!{};
 
   for field in field_data {
@@ -172,8 +176,8 @@ pub fn field_data_to_json(field_data: Vec<ProtobufField>, descriptor: &Descripto
             ProtobufFieldData::Enum(n, descriptor) => serde_json::Value::String(enum_name(*n, descriptor)),
             ProtobufFieldData::Message(b, descriptor) => {
               let mut bytes = BytesMut::from(b.as_slice());
-              let message_data = decode_message(&mut bytes, descriptor)?;
-              field_data_to_json(message_data, descriptor)?
+              let message_data = decode_message(&mut bytes, descriptor, descriptors)?;
+              field_data_to_json(message_data, descriptor, descriptors)?
             }
           });
         }

@@ -8,6 +8,7 @@ use anyhow::anyhow;
 use bytes::Bytes;
 use log::{debug, error, trace};
 use maplit::{btreemap, hashmap};
+use pact_matching::{BodyMatchResult, Mismatch};
 use pact_plugin_driver::plugin_models::PactPluginManifest;
 use pact_plugin_driver::proto;
 use pact_plugin_driver::proto::catalogue_entry::EntryType;
@@ -218,26 +219,37 @@ impl PactPlugin for ProtobufPactPlugin {
       Err(anyhow!("Did not get a message or service to match"))
     };
 
-    //       val response = Plugin.CompareContentsResponse.newBuilder()
-    //       for (item in result.bodyResults) {
-    //         response.putResults(item.key, Plugin.ContentMismatches.newBuilder().addAllMismatches(item.result.map {
-    //           val builder = Plugin.ContentMismatch.newBuilder()
-    //             .setExpected(
-    //               BytesValue.newBuilder().setValue(ByteString.copyFrom(it.expected.toString().toByteArray())).build()
-    //             )
-    //             .setActual(
-    //               BytesValue.newBuilder().setValue(ByteString.copyFrom(it.actual.toString().toByteArray())).build()
-    //             )
-    //             .setMismatch(it.mismatch)
-    //             .setPath(it.path)
-    //           if (it.diff.isNotEmpty()) {
-    //             builder.diff = it.diff
-    //           }
-    //           builder.build()
-    //         }).build())
-    //       }
-
-    unimplemented!()
+    return match result {
+      Ok(result) => match result {
+        BodyMatchResult::Ok => Ok(tonic::Response::new(proto::CompareContentsResponse::default())),
+        BodyMatchResult::BodyTypeMismatch { message, expected_type, actual_type, .. } => {
+          error!("Got a BodyTypeMismatch - {}", message);
+          Ok(tonic::Response::new(proto::CompareContentsResponse {
+            type_mismatch: Some(proto::ContentTypeMismatch {
+              expected: expected_type.clone(),
+              actual: actual_type.clone()
+            }),
+            .. proto::CompareContentsResponse::default()
+          }))
+        }
+        BodyMatchResult::BodyMismatches(mismatches) => {
+          Ok(tonic::Response::new(proto::CompareContentsResponse {
+            results: mismatches.iter().map(|(k, v)| {
+              (k.clone(), proto::ContentMismatches {
+                mismatches: v.iter().map(mismatch_to_proto_mismatch).collect()
+              })
+            }).collect(),
+            .. proto::CompareContentsResponse::default()
+          }))
+        }
+      }
+      Err(err) => {
+        Ok(tonic::Response::new(proto::CompareContentsResponse {
+          error: format!("Failed to compare the Protobuf messages - {}", err),
+          .. proto::CompareContentsResponse::default()
+        }))
+      }
+    }
   }
 
   // Request to configure the expected interaction for a consumer tests.
@@ -308,6 +320,77 @@ impl PactPlugin for ProtobufPactPlugin {
     request: tonic::Request<proto::GenerateContentRequest>,
   ) -> Result<tonic::Response<proto::GenerateContentResponse>, tonic::Status> {
     unimplemented!()
+  }
+}
+
+fn mismatch_to_proto_mismatch(mismatch: &Mismatch) -> proto::ContentMismatch {
+  match mismatch {
+    Mismatch::MethodMismatch { expected, actual } => {
+      proto::ContentMismatch {
+        expected: Some(expected.as_bytes().to_vec()),
+        actual: Some(actual.as_bytes().to_vec()),
+        mismatch: "Method mismatch".to_string(),
+        ..proto::ContentMismatch::default()
+      }
+    }
+    Mismatch::PathMismatch { expected, actual, mismatch } => {
+      proto::ContentMismatch {
+        expected: Some(expected.as_bytes().to_vec()),
+        actual: Some(actual.as_bytes().to_vec()),
+        mismatch: mismatch.clone(),
+        ..proto::ContentMismatch::default()
+      }
+    }
+    Mismatch::StatusMismatch { expected, actual, mismatch } => {
+      proto::ContentMismatch {
+        expected: Some(expected.to_string().as_bytes().to_vec()),
+        actual: Some(actual.to_string().as_bytes().to_vec()),
+        mismatch: mismatch.clone(),
+        ..proto::ContentMismatch::default()
+      }
+    }
+    Mismatch::QueryMismatch { expected, actual, mismatch, .. } => {
+      proto::ContentMismatch {
+        expected: Some(expected.as_bytes().to_vec()),
+        actual: Some(actual.as_bytes().to_vec()),
+        mismatch: mismatch.clone(),
+        ..proto::ContentMismatch::default()
+      }
+    }
+    Mismatch::HeaderMismatch { expected, actual, mismatch, .. } => {
+      proto::ContentMismatch {
+        expected: Some(expected.as_bytes().to_vec()),
+        actual: Some(actual.as_bytes().to_vec()),
+        mismatch: mismatch.clone(),
+        ..proto::ContentMismatch::default()
+      }
+    }
+    Mismatch::BodyTypeMismatch { expected, actual, mismatch, .. } => {
+      proto::ContentMismatch {
+        expected: Some(expected.as_bytes().to_vec()),
+        actual: Some(actual.as_bytes().to_vec()),
+        mismatch: mismatch.clone(),
+        ..proto::ContentMismatch::default()
+      }
+    }
+    Mismatch::BodyMismatch { path, expected, actual, mismatch } => {
+      proto::ContentMismatch {
+        expected: expected.as_ref().map(|v| v.to_vec()),
+        actual: actual.as_ref().map(|v| v.to_vec()),
+        mismatch: mismatch.clone(),
+        path: path.clone(),
+        ..proto::ContentMismatch::default()
+      }
+    }
+    Mismatch::MetadataMismatch { key, expected, actual, mismatch } => {
+      proto::ContentMismatch {
+        expected: Some(expected.as_bytes().to_vec()),
+        actual: Some(actual.as_bytes().to_vec()),
+        mismatch: mismatch.clone(),
+        path: key.clone(),
+        ..proto::ContentMismatch::default()
+      }
+    }
   }
 }
 

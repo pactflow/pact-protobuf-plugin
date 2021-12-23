@@ -7,10 +7,10 @@ use anyhow::anyhow;
 use bytes::Buf;
 use itertools::Itertools;
 use prost::encoding::{decode_key, decode_varint, WireType};
-use prost_types::{DescriptorProto, EnumDescriptorProto, FieldDescriptorProto};
+use prost_types::{DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, FileDescriptorSet};
 use prost_types::field_descriptor_proto::Type;
 
-use crate::utils::{as_hex, last_name};
+use crate::utils::{as_hex, find_message_type_by_name, last_name};
 
 /// Decoded Protobuf field
 #[derive(Clone, Debug, PartialEq)]
@@ -99,7 +99,11 @@ impl Display for ProtobufFieldData {
 }
 
 /// Decodes the Protobuf message using the descriptors
-pub fn decode_message<B>(buffer: &mut B, descriptor: &DescriptorProto) -> anyhow::Result<Vec<ProtobufField>>
+pub fn decode_message<B>(
+  buffer: &mut B,
+  descriptor: &DescriptorProto,
+  descriptors: &FileDescriptorSet
+) -> anyhow::Result<Vec<ProtobufField>>
   where B: Buf {
   let mut fields = vec![];
 
@@ -151,10 +155,13 @@ pub fn decode_message<B>(buffer: &mut B, descriptor: &DescriptorProto) -> anyhow
         match t {
           Type::String => ProtobufFieldData::String(from_utf8(&data_buffer)?.to_string()),
           Type::Message => {
+            let type_name = field_descriptor.type_name.as_ref().map(|v| last_name(v.as_str()).to_string());
             let message_proto = descriptor.nested_type.iter()
-              .find(|message_descriptor|  message_descriptor.name == field_descriptor.type_name.as_ref().map(|v| last_name(v.as_str()).to_string()))
+              .find(|message_descriptor| message_descriptor.name == type_name)
+              .cloned()
+              .or_else(|| find_message_type_by_name(&type_name.unwrap_or_default(), descriptors).ok())
               .ok_or_else(|| anyhow!("Did not find the embedded message {:?} for the field {} in the Protobuf descriptor", field_descriptor.type_name, field_num))?;
-            ProtobufFieldData::Message(data_buffer.to_vec(), message_proto.clone())
+            ProtobufFieldData::Message(data_buffer.to_vec(), message_proto)
           }
           Type::Bytes => ProtobufFieldData::Bytes(data_buffer.to_vec()),
           _ => return Err(anyhow!("Field type {:?} is not a valid length-delimited type", t))
@@ -201,7 +208,7 @@ mod tests {
   use pact_plugin_driver::proto::InitPluginRequest;
   use prost::encoding::WireType;
   use prost::Message;
-  use prost_types::{DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto};
+  use prost_types::{DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto, FileDescriptorSet};
 
   use crate::{bool_field_descriptor, message_field_descriptor, string_field_descriptor};
   use crate::message_decoder::{decode_message, ProtobufFieldData};
@@ -226,7 +233,7 @@ mod tests {
       reserved_name: vec![]
     };
 
-    let result = decode_message(&mut buffer, &descriptor).unwrap();
+    let result = decode_message(&mut buffer, &descriptor, &FileDescriptorSet{ file: vec![] }).unwrap();
     expect!(result.len()).to(be_equal_to(1));
 
     let field_result = result.first().unwrap();
@@ -266,7 +273,7 @@ mod tests {
       reserved_name: vec![]
     };
 
-    let result = decode_message(&mut buffer, &descriptor).unwrap();
+    let result = decode_message(&mut buffer, &descriptor, &FileDescriptorSet{ file: vec![] }).unwrap();
     expect!(result.len()).to(be_equal_to(1));
 
     let field_result = result.first().unwrap();
@@ -306,7 +313,7 @@ mod tests {
       reserved_name: vec![]
     };
 
-    let result = decode_message(&mut buffer, &descriptor).unwrap();
+    let result = decode_message(&mut buffer, &descriptor, &FileDescriptorSet{ file: vec![] }).unwrap();
     expect!(result.len()).to(be_equal_to(1));
 
     let field_result = result.first().unwrap();
@@ -369,7 +376,7 @@ mod tests {
       reserved_name: vec![]
     };
 
-    let result = decode_message(&mut buffer, &descriptor).unwrap();
+    let result = decode_message(&mut buffer, &descriptor, &FileDescriptorSet{ file: vec![] }).unwrap();
     expect!(result.len()).to(be_equal_to(1));
 
     let field_result = result.first().unwrap();
@@ -413,7 +420,7 @@ mod tests {
       reserved_name: vec![]
     };
 
-    let result = decode_message(&mut buffer.freeze(), &descriptor).unwrap();
+    let result = decode_message(&mut buffer.freeze(), &descriptor, &FileDescriptorSet{ file: vec![] }).unwrap();
     expect!(result.len()).to(be_equal_to(1));
 
     let field_result = result.first().unwrap();
@@ -457,7 +464,7 @@ mod tests {
       reserved_name: vec![]
     };
 
-    let result = decode_message(&mut buffer, &descriptor).unwrap();
+    let result = decode_message(&mut buffer, &descriptor, &FileDescriptorSet{ file: vec![] }).unwrap();
     expect!(result.len()).to(be_equal_to(1));
 
     let field_result = result.first().unwrap();
@@ -490,7 +497,7 @@ mod tests {
       reserved_name: vec![]
     };
 
-    let result = decode_message(&mut buffer, &descriptor).unwrap();
+    let result = decode_message(&mut buffer, &descriptor, &FileDescriptorSet{ file: vec![] }).unwrap();
     expect!(result.len()).to(be_equal_to(1));
 
     let field_result = result.first().unwrap();
@@ -548,7 +555,7 @@ mod tests {
       reserved_name: vec![]
     };
 
-    let result = decode_message(&mut buffer, &descriptor).unwrap();
+    let result = decode_message(&mut buffer, &descriptor, &FileDescriptorSet{ file: vec![] }).unwrap();
     expect!(result.len()).to(be_equal_to(1));
 
     let field_result = result.first().unwrap();

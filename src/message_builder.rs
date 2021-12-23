@@ -1344,9 +1344,9 @@ mod tests {
       rtype: RType::Message(Box::new(rule2))
     });
 
-    let encoded_fields = decode_message(&mut encoded_buf, &descriptor).unwrap();
+    let encoded_fields = decode_message(&mut encoded_buf, &descriptor, ).unwrap();
     let mut bytes = message.encode_message().unwrap();
-    let result = decode_message(&mut bytes, &descriptor).unwrap();
+    let result = decode_message(&mut bytes, &descriptor, ).unwrap();
 
     expect!(result.len()).to(be_equal_to(encoded_fields.len()));
 

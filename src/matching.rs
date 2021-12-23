@@ -32,14 +32,14 @@ pub fn match_message(
     .map(|body| body.content.clone().map(|content| Bytes::from(content)))
     .flatten()
     .unwrap_or_default();
-  let expected_message = decode_message(&mut expected_message_bytes, &message_descriptor)?;
+  let expected_message = decode_message(&mut expected_message_bytes, &message_descriptor, descriptors)?;
   debug!("expected message = {:?}", expected_message);
 
   let mut actual_message_bytes = request.actual.as_ref()
     .map(|body| body.content.clone().map(|content| Bytes::from(content)))
     .flatten()
     .unwrap_or_default();
-  let actual_message = decode_message(&mut actual_message_bytes, &message_descriptor)?;
+  let actual_message = decode_message(&mut actual_message_bytes, &message_descriptor, descriptors)?;
   debug!("actual message = {:?}", expected_message);
 
   let mut matching_rules = MatchingRuleCategory::empty("body");
@@ -62,7 +62,7 @@ pub fn match_message(
   let context = MatchingContext::new(diff_config, &matching_rules, &plugin_config);
 
   compare(&message_descriptor, &expected_message, &actual_message, &context,
-          &expected_message_bytes)
+          &expected_message_bytes, descriptors)
 }
 
 /// Match a Protobuf service call, which has an input and output message
@@ -111,7 +111,8 @@ fn compare(
   expected_message: &Vec<ProtobufField>,
   actual_message: &Vec<ProtobufField>,
   matching_context: &MatchingContext,
-  expected_message_bytes: &Bytes
+  expected_message_bytes: &Bytes,
+  descriptors: &FileDescriptorSet
 ) -> anyhow::Result<BodyMatchResult> {
   if expected_message.is_empty() {
     Ok(BodyMatchResult::Ok)
@@ -125,7 +126,7 @@ fn compare(
       }]
     }))
   } else {
-    compare_message(DocPath::root(), expected_message, actual_message, matching_context, message_descriptor)
+    compare_message(DocPath::root(), expected_message, actual_message, matching_context, message_descriptor, descriptors)
   }
 }
 
@@ -136,6 +137,7 @@ fn compare_message(
   actual_message: &Vec<ProtobufField>,
   matching_context: &MatchingContext,
   message_descriptor: &DescriptorProto,
+  descriptors: &FileDescriptorSet,
 ) -> anyhow::Result<BodyMatchResult> {
   trace!("compareMessage({}, {:?}, {:?})", path, expected_message, actual_message);
 
@@ -161,7 +163,7 @@ fn compare_message(
           results.insert(field_path.to_string(), repeated_comparison);
         }
       } else if let Some(actual_field) = find_message_field(actual_message, field) {
-        let comparison = compare_field(&field_path, field, field_descriptor, actual_field, matching_context);
+        let comparison = compare_field(&field_path, field, field_descriptor, actual_field, matching_context, descriptors);
         if !comparison.is_empty() {
           results.insert(field_path.to_string(), comparison);
         }
@@ -236,7 +238,8 @@ fn compare_field(
   field: &ProtobufField,
   descriptor: &FieldDescriptorProto,
   actual: &ProtobufField,
-  matching_context: &MatchingContext
+  matching_context: &MatchingContext,
+  descriptors: &FileDescriptorSet
 ) -> Vec<Mismatch> {
   trace!("compare_field({}, {:?}, {:?}, {:?})", path, field, descriptor, actual);
 
@@ -265,7 +268,7 @@ fn compare_field(
     },
     (ProtobufFieldData::Message(b1, message_descriptor), ProtobufFieldData::Message(b2, _)) => {
       let mut expected_bytes = BytesMut::from(b1.as_slice());
-      let expected_message = match decode_message(&mut expected_bytes, &message_descriptor) {
+      let expected_message = match decode_message(&mut expected_bytes, &message_descriptor, descriptors) {
         Ok(message) => message,
         Err(err) => {
           return vec![
@@ -279,7 +282,7 @@ fn compare_field(
         }
       };
       let mut actual_bytes = BytesMut::from(b2.as_slice());
-      let actual_message = match decode_message(&mut actual_bytes, &message_descriptor) {
+      let actual_message = match decode_message(&mut actual_bytes, &message_descriptor, descriptors) {
         Ok(message) => message,
         Err(err) => {
           return vec![
@@ -313,7 +316,7 @@ fn compare_field(
           "google.protobuf.Struct" => {
             debug!("Field is a Protobuf Struct, will compare it as JSON");
 
-            let expected_json = match field_data_to_json(expected_message, message_descriptor) {
+            let expected_json = match field_data_to_json(expected_message, message_descriptor, descriptors) {
               Ok(j) => j,
               Err(err) => {
                 return vec![
@@ -326,7 +329,7 @@ fn compare_field(
                 ];
               }
             };
-            let actual_json = match field_data_to_json(actual_message, message_descriptor) {
+            let actual_json = match field_data_to_json(actual_message, message_descriptor, descriptors) {
               Ok(j) => j,
               Err(err) => {
                 return vec![
@@ -352,7 +355,7 @@ fn compare_field(
               Err(err) => err
             }
           }
-          _ => match compare_message(path.clone(), &expected_message, &actual_message, matching_context, &message_descriptor) {
+          _ => match compare_message(path.clone(), &expected_message, &actual_message, matching_context, &message_descriptor, descriptors) {
             Ok(result) => match result {
               BodyMatchResult::Ok => vec![],
               BodyMatchResult::BodyTypeMismatch { message, .. } => vec![
