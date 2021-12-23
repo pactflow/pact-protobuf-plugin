@@ -23,6 +23,12 @@ pub struct ProtobufField {
   pub data: ProtobufFieldData
 }
 
+impl Display for ProtobufField {
+  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    write!(f, "field {}:{} = {}", self.field_num, self.data.type_name(), self.data)
+  }
+}
+
 /// Decoded Protobuf field data
 #[derive(Clone, Debug, PartialEq)]
 pub enum ProtobufFieldData {

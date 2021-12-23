@@ -2,11 +2,13 @@
 
 use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
+use itertools::Itertools;
 use log::{debug, trace, warn};
 use maplit::hashmap;
 use pact_matching::{BodyMatchResult, DiffConfig, MatchingContext, Mismatch};
 use pact_matching::json::compare_json;
 use pact_matching::matchers::{match_values, Matches};
+use pact_matching::matchingrules::compare_lists_with_matchingrule;
 use pact_matching::Mismatch::BodyMismatch;
 use pact_models::content_types::ContentType;
 use pact_models::matchingrules::MatchingRule;
@@ -133,16 +135,21 @@ fn compare(
 /// Compare the fields of the expected and actual messages
 fn compare_message(
   path: DocPath,
-  expected_message: &Vec<ProtobufField>,
-  actual_message: &Vec<ProtobufField>,
+  expected_message_fields: &Vec<ProtobufField>,
+  actual_message_fields: &Vec<ProtobufField>,
   matching_context: &MatchingContext,
   message_descriptor: &DescriptorProto,
   descriptors: &FileDescriptorSet,
 ) -> anyhow::Result<BodyMatchResult> {
-  trace!("compareMessage({}, {:?}, {:?})", path, expected_message, actual_message);
+  trace!("compareMessage({}, {:?}, {:?})", path, expected_message_fields, actual_message_fields);
 
   let mut results = hashmap!{};
-  for field in expected_message {
+  let mut expected_fields = expected_message_fields.as_slice();
+
+  while !expected_fields.is_empty() {
+    let (field, remaining_fields) = expected_fields.split_first().unwrap();
+    expected_fields = remaining_fields;
+
     if let Some(field_descriptor) = &find_field_descriptor(field, message_descriptor) {
       let field_name = field_descriptor.name
         .clone()
@@ -150,19 +157,23 @@ fn compare_message(
           warn!("Field number {} does not have a field name in the descriptor, will use the number", field.field_num);
           anyhow!(field.field_num.to_string())
         })?;
-      let mut field_path = path.clone();
-      field_path.push_field(&field_name);
+      let mut field_path = path.join(&field_name);
       if is_map_field(message_descriptor, field_descriptor) {
-        let map_comparison = compare_map_field(&field_path, field, field_descriptor, actual_message, matching_context);
+        let map_comparison = compare_map_field(&field_path, field, field_descriptor, actual_message_fields, matching_context, descriptors);
         if !map_comparison.is_empty() {
           results.insert(field_path.to_string(), map_comparison);
         }
       } else if is_repeated(field_descriptor) {
-        let repeated_comparison = compare_repeated_field(&field_path, field, field_descriptor, actual_message, matching_context);
+        let mut fields = vec![ field.clone() ];
+        let partition_point = remaining_fields.partition_point(|f| f.field_num != field.field_num);
+        fields.extend_from_slice(&remaining_fields[0..partition_point]);
+        expected_fields = &remaining_fields[partition_point..];
+        let repeated_comparison = compare_repeated_field(&field_path, field.clone(),
+          fields, field_descriptor, actual_message_fields, matching_context, descriptors);
         if !repeated_comparison.is_empty() {
           results.insert(field_path.to_string(), repeated_comparison);
         }
-      } else if let Some(actual_field) = find_message_field(actual_message, field) {
+      } else if let Some(actual_field) = find_message_field(actual_message_fields, field) {
         let comparison = compare_field(&field_path, field, field_descriptor, actual_field, matching_context, descriptors);
         if !comparison.is_empty() {
           results.insert(field_path.to_string(), comparison);
@@ -183,12 +194,12 @@ fn compare_message(
   }
 
   if matching_context.config == DiffConfig::NoUnexpectedKeys {
-    for field in actual_message {
+    for field in actual_message_fields {
       if let Some(field_descriptor) = find_field_descriptor(field, message_descriptor) {
         if let Some(field_name) = &field_descriptor.name {
           let mut field_path = path.clone();
           field_path.push_field(field_name);
-          if !is_repeated(&field_descriptor) && find_message_field(expected_message, field).is_none() {
+          if !is_repeated(&field_descriptor) && find_message_field(expected_message_fields, field).is_none() {
             results.insert(field_path.to_string(), vec![
               BodyMismatch {
                 path: field_path.to_string(),
@@ -447,12 +458,68 @@ fn compare_value<T>(
 /// Compare a repeated field
 fn compare_repeated_field(
   path: &DocPath,
-  field: &ProtobufField,
+  field: ProtobufField,
+  expected_fields: Vec<ProtobufField>,
   descriptor: &FieldDescriptorProto,
-  actual_message: &Vec<ProtobufField>,
-  matching_context: &MatchingContext
+  actual_message_fields: &Vec<ProtobufField>,
+  matching_context: &MatchingContext,
+  descriptors: &FileDescriptorSet
 ) -> Vec<Mismatch> {
-  todo!()
+  trace!(">>> compareRepeatedField({}, {:?}, {:?})", path, field, expected_fields);
+
+  let actual_fields = actual_message_fields.iter()
+    .filter(|f| f.field_num == field.field_num)
+    .cloned()
+    .collect_vec();
+  let mut result = vec![];
+
+  let path_vec = path.to_vec();
+  let p = path_vec.iter().map(|p| p.as_str()).collect_vec();
+  if matching_context.matcher_is_defined(p.as_slice()) {
+    debug!("compare_repeated_field: Matcher defined for path '{}'", path);
+    let rules = matching_context.select_best_matcher(p.as_slice());
+    for matcher in &rules.rules {
+      let comparison = compare_lists_with_matchingrule(matcher, p.as_slice(),
+        expected_fields.as_slice(), actual_fields.as_slice(), matching_context, &|field_path, expected, actual, context| {
+          let mut path = DocPath::empty();
+          for p in field_path {
+            path.push_field(*p);
+          }
+          let comparison = compare_field(&path, expected, descriptor, actual, context, descriptors);
+          if comparison.is_empty() {
+            Ok(())
+          } else {
+            Err(comparison)
+          }
+        });
+    }
+  } else if expected_fields.is_empty() && !actual_fields.is_empty() {
+    result.push(Mismatch::BodyMismatch {
+      path: path.to_string(),
+      expected: None,
+      actual: None,
+      mismatch: format!("Expected repeated field '{}' to be empty but received {} values",
+        descriptor.name.clone().unwrap_or_else(|| descriptor.number.unwrap_or_default().to_string()),
+        actual_fields.len()
+      )
+    })
+  } else {
+    result.extend(compare_list_content(path, descriptor, &expected_fields, &actual_fields, matching_context, descriptors));
+    if expected_fields.len() != actual_fields.len() {
+      result.push(Mismatch::BodyMismatch {
+        path: path.to_string(),
+        expected: None,
+        actual: None,
+        mismatch: format!("Expected repeated field '{}' to have {} values but received {} values",
+          descriptor.name.clone().unwrap_or_else(|| descriptor.number.unwrap_or_default().to_string()),
+          expected_fields.len(),
+          actual_fields.len()
+        )
+      })
+    }
+  }
+
+  result
 }
 
 /// Compare a map field
@@ -461,9 +528,40 @@ fn compare_map_field(
   field: &ProtobufField,
   descriptor: &FieldDescriptorProto,
   actual_message: &Vec<ProtobufField>,
-  matching_context: &MatchingContext
+  matching_context: &MatchingContext,
+  descriptors: &FileDescriptorSet
 ) -> Vec<Mismatch> {
   todo!()
+}
+
+/// Compares the items in the actual list against the expected
+fn compare_list_content(
+  path: &DocPath,
+  descriptor: &FieldDescriptorProto,
+  expected: &Vec<ProtobufField>,
+  actual: &Vec<ProtobufField>,
+  matching_context: &MatchingContext,
+  descriptors: &FileDescriptorSet
+) -> Vec<Mismatch> {
+  let mut result = vec![];
+  for (index, value) in expected.iter().enumerate() {
+    let ps = index.to_string();
+    debug!("Comparing list item {} with value '{:?}' to '{:?}'", index, actual.get(index), value);
+    let p = path.join(ps);
+    let p_vec = p.to_vec();
+    let p_vec2 = p_vec.iter().map(|p| p.as_str()).collect_vec();
+    if index < actual.len() {
+      result.extend(compare_field(&p, value, descriptor, &actual.get(index).unwrap(), matching_context, descriptors));
+    } else if !matching_context.matcher_is_defined(&p_vec2.as_slice()) {
+      result.push(Mismatch::BodyMismatch {
+        path: path.to_string(),
+        expected: Some(Bytes::from(value.data.to_string())),
+        actual: None,
+        mismatch: format!("Expected field {}({})={} but was missing", descriptor.name.clone().unwrap_or_default(), value.field_num, value.data)
+      });
+    }
+  }
+  result
 }
 
 /// Find the field descriptor in the message descriptor for the given field value
