@@ -1,7 +1,7 @@
 //! Functions for matching Protobuf messages
 
 use std::collections::{BTreeMap, HashMap};
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
 use itertools::Itertools;
@@ -302,9 +302,9 @@ fn compare_field(
           ];
         }
       };
-      match &message_descriptor.name {
+      match &descriptor.type_name {
         Some(name) => match name.as_str() {
-          "google.protobuf.BytesValue" => {
+          ".google.protobuf.BytesValue" => {
             debug!("Field is a Protobuf BytesValue");
             let expected_field_data = find_message_field_by_name(&message_descriptor, expected_message, "value");
             let actual_field_data = find_message_field_by_name(&message_descriptor, actual_message, "value");
@@ -318,11 +318,10 @@ fn compare_field(
               _ => vec![]
             }).unwrap_or_default();
             let b2_str = display_bytes(&b2);
-            compare_value(path, field, b1.as_slice(), b2.as_slice(), b1_str.as_str(), b2_str.as_str(), matching_context)
+            compare_value(path, field, b1, b2, b1_str.as_str(), b2_str.as_str(), matching_context)
           }
-          "google.protobuf.Struct" => {
+          ".google.protobuf.Struct" => {
             debug!("Field is a Protobuf Struct, will compare it as JSON");
-
             let expected_json = match field_data_to_json(expected_message, message_descriptor, descriptors) {
               Ok(j) => j,
               Err(err) => {
@@ -419,18 +418,13 @@ fn compare_value<T>(
   expected_str: &str,
   actual_str: &str,
   matching_context: &MatchingContext
-) -> Vec<Mismatch> where T: Clone + Matches<T> {
+) -> Vec<Mismatch> where T: Clone + Debug + Matches<T> {
   trace!("compare_value({}, {:?}, {}, {}, {:?})", path, field, expected_str, actual_str, matching_context);
 
-  let path_slice = path.tokens().iter().map(|t| match t {
-    PathToken::Root => "$".to_string(),
-    PathToken::Field(n) => n.clone(),
-    PathToken::Index(n) => n.to_string(),
-    PathToken::Star | PathToken::StarIndex => "*".to_string()
-  }).collect::<Vec<String>>();
+  let path_slice = path.to_vec();
   let path_slice = path_slice.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
   if matching_context.matcher_is_defined(path_slice.as_slice()) {
-    debug!("compareValue: Matcher defined for path {}", path);
+    debug!("compare_value: Matcher defined for path '{}' and values {:?} -> {:?}", path, expected, actual);
     match match_values(path_slice.as_slice(), matching_context, expected, actual) {
       Ok(_) => vec![],
       Err(mismatches) => mismatches.iter().map(|m| BodyMismatch {
@@ -441,7 +435,7 @@ fn compare_value<T>(
       }).collect()
     }
   } else {
-    debug!("compareValue: No matcher defined for path {}, using equality", path);
+    debug!("compare_value: No matcher defined for path '{}', using equality", path);
     match expected.matches_with(actual, &MatchingRule::Equality, false) {
       Ok(_) => vec![],
       Err(err) => vec![BodyMismatch {
