@@ -7,6 +7,7 @@ use anyhow::anyhow;
 use bytes::Buf;
 use itertools::Itertools;
 use prost::encoding::{decode_key, decode_varint, WireType};
+use prost::Message;
 use prost_types::{DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, FileDescriptorSet};
 use prost_types::field_descriptor_proto::Type;
 
@@ -71,6 +72,23 @@ impl ProtobufFieldData {
       ProtobufFieldData::Bytes(_) => "Bytes",
       ProtobufFieldData::Enum(_, _) => "Enum",
       ProtobufFieldData::Message(_, _) => "Message"
+    }
+  }
+
+  /// Converts the data for this value into a byte array
+  pub fn as_bytes(&self) -> Vec<u8> {
+    match self {
+      ProtobufFieldData::String(s) => s.as_bytes().to_vec(),
+      ProtobufFieldData::Boolean(b) => vec![ *b as u8 ],
+      ProtobufFieldData::UInteger32(n) => n.to_le_bytes().to_vec(),
+      ProtobufFieldData::Integer32(n) => n.to_le_bytes().to_vec(),
+      ProtobufFieldData::UInteger64(n) => n.to_le_bytes().to_vec(),
+      ProtobufFieldData::Integer64(n) => n.to_le_bytes().to_vec(),
+      ProtobufFieldData::Float(n) => n.to_le_bytes().to_vec(),
+      ProtobufFieldData::Double(n) => n.to_le_bytes().to_vec(),
+      ProtobufFieldData::Bytes(b) => b.clone(),
+      ProtobufFieldData::Enum(_, _) => self.to_string().as_bytes().to_vec(),
+      ProtobufFieldData::Message(b, _) => b.clone()
     }
   }
 }

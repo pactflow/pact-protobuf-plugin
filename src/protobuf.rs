@@ -33,7 +33,7 @@ use tokio::io::AsyncReadExt;
 
 use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValueType, RType};
 use crate::protoc::Protoc;
-use crate::utils::{find_enum_value_by_name, find_message_type_by_name, find_message_type_in_file_descriptor, find_nested_type, is_map_field, is_repeated, last_name, proto_struct_to_btreemap, proto_type_name};
+use crate::utils::{find_enum_value_by_name, find_message_type_by_name, find_message_type_in_file_descriptor, find_nested_type, is_map_field, is_repeated_field, last_name, proto_struct_to_btreemap, proto_type_name};
 
 /// Process the provided protobuf file and configure the interaction
 pub(crate) async fn process_proto(
@@ -349,7 +349,7 @@ fn build_embedded_message_field_value(
 ) -> anyhow::Result<()> {
   trace!(">> build_embedded_message_field_value({}, {}, {:?}, {:?}, {:?}, {:?})", path, field, value, message_builder, matching_rules, generators);
 
-  if is_repeated(field_descriptor) && !is_map_field(&message_builder.descriptor, field_descriptor) {
+  if is_repeated_field(field_descriptor) && !is_map_field(&message_builder.descriptor, field_descriptor) {
     debug!("{} is a repeated field", field);
 
     match value {

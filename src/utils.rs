@@ -112,7 +112,7 @@ pub fn find_message_field_by_name(descriptor: &DescriptorProto, field_data: Vec<
 }
 
 /// If the field is a repeated field
-pub fn is_repeated(descriptor: &FieldDescriptorProto) -> bool {
+pub fn is_repeated_field(descriptor: &FieldDescriptorProto) -> bool {
   descriptor.label() == Label::Repeated
 }
 

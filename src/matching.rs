@@ -1,5 +1,7 @@
 //! Functions for matching Protobuf messages
 
+use std::collections::{BTreeMap, HashMap};
+use std::fmt::{Display, Formatter};
 use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
 use itertools::Itertools;
@@ -8,7 +10,7 @@ use maplit::hashmap;
 use pact_matching::{BodyMatchResult, DiffConfig, MatchingContext, Mismatch};
 use pact_matching::json::compare_json;
 use pact_matching::matchers::{match_values, Matches};
-use pact_matching::matchingrules::compare_lists_with_matchingrule;
+use pact_matching::matchingrules::{compare_lists_with_matchingrule, compare_maps_with_matchingrule};
 use pact_matching::Mismatch::BodyMismatch;
 use pact_models::content_types::ContentType;
 use pact_models::matchingrules::MatchingRule;
@@ -19,7 +21,7 @@ use pact_plugin_driver::utils::proto_struct_to_json;
 use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
-use crate::utils::{display_bytes, enum_name, field_data_to_json, find_message_field, find_message_field_by_name, find_message_type_by_name, is_map_field, is_repeated};
+use crate::utils::{display_bytes, enum_name, field_data_to_json, find_message_field, find_message_field_by_name, find_message_type_by_name, is_map_field, is_repeated_field};
 
 /// Match a single Protobuf message
 pub fn match_message(
@@ -144,95 +146,63 @@ fn compare_message(
   trace!("compareMessage({}, {:?}, {:?})", path, expected_message_fields, actual_message_fields);
 
   let mut results = hashmap!{};
-  let mut expected_fields = expected_message_fields.as_slice();
 
-  while !expected_fields.is_empty() {
-    let (field, remaining_fields) = expected_fields.split_first().unwrap();
-    expected_fields = remaining_fields;
+  let fields = message_descriptor.field.iter()
+    .map(|field| {
+      field.number.map(|no| {
+        let expected_field_values = expected_message_fields.iter().filter(|value| value.field_num == no as u32)
+          .collect_vec();
+        let actual_field_values = actual_message_fields.iter().filter(|value| value.field_num == no as u32)
+          .collect_vec();
+        (no as u32, (field, expected_field_values, actual_field_values))
+      })
+    })
+    .filter_map(|v| v);
 
-    if let Some(field_descriptor) = &find_field_descriptor(field, message_descriptor) {
-      let field_name = field_descriptor.name
-        .clone()
-        .ok_or_else(|| {
-          warn!("Field number {} does not have a field name in the descriptor, will use the number", field.field_num);
-          anyhow!(field.field_num.to_string())
-        })?;
-      let mut field_path = path.join(&field_name);
-      if is_map_field(message_descriptor, field_descriptor) {
-        let map_comparison = compare_map_field(&field_path, field, field_descriptor, actual_message_fields, matching_context, descriptors);
-        if !map_comparison.is_empty() {
-          results.insert(field_path.to_string(), map_comparison);
-        }
-      } else if is_repeated(field_descriptor) {
-        let mut fields = vec![ field.clone() ];
-        let partition_point = remaining_fields.partition_point(|f| f.field_num != field.field_num);
-        fields.extend_from_slice(&remaining_fields[0..partition_point]);
-        expected_fields = &remaining_fields[partition_point..];
-        let repeated_comparison = compare_repeated_field(&field_path, field.clone(),
-          fields, field_descriptor, actual_message_fields, matching_context, descriptors);
-        if !repeated_comparison.is_empty() {
-          results.insert(field_path.to_string(), repeated_comparison);
-        }
-      } else if let Some(actual_field) = find_message_field(actual_message_fields, field) {
-        let comparison = compare_field(&field_path, field, field_descriptor, actual_field, matching_context, descriptors);
-        if !comparison.is_empty() {
-          results.insert(field_path.to_string(), comparison);
-        }
-      } else {
-        results.insert(field_path.to_string(), vec![
-          BodyMismatch {
-            path: field_path.to_string(),
-            expected: Some(field.data.to_string().into()),
-            actual: None,
-            mismatch: format!("Expected field '{}' but was missing", field_name)
-          }
-        ]);
+  for (field_no, (field_descriptor, expected, actual)) in fields {
+    let field_name = field_descriptor.name
+      .clone()
+      .unwrap_or_else(|| {
+        warn!("Field number {} does not have a field name in the descriptor, will use the number", field_no);
+        field_no.to_string()
+      });
+    let field_path = path.join(&field_name);
+
+    if is_map_field(message_descriptor, field_descriptor) {
+      let map_comparison = compare_map_field(&field_path, field_descriptor, expected, actual, matching_context, descriptors);
+      if !map_comparison.is_empty() {
+        results.insert(field_path.to_string(), map_comparison);
       }
-    } else {
-      warn!("Did not find a field descriptor for field number {} in the expected message, skipping it", field.field_num);
-    }
-  }
-
-  if matching_context.config == DiffConfig::NoUnexpectedKeys {
-    for field in actual_message_fields {
-      if let Some(field_descriptor) = find_field_descriptor(field, message_descriptor) {
-        if let Some(field_name) = &field_descriptor.name {
-          let mut field_path = path.clone();
-          field_path.push_field(field_name);
-          if !is_repeated(&field_descriptor) && find_message_field(expected_message_fields, field).is_none() {
-            results.insert(field_path.to_string(), vec![
-              BodyMismatch {
-                path: field_path.to_string(),
-                expected: Some(field.data.to_string().into()),
-                actual: None,
-                mismatch: format!("Expected field '{}' but was missing", field_name)
-              }
-            ]);
-          }
-        } else {
-          let mut field_path = path.clone();
-          field_path.push_field(field.field_num.to_string());
-          results.insert(field_path.to_string(), vec![
-            BodyMismatch {
-              path: field_path.to_string(),
-              expected: None,
-              actual: Some(field.data.to_string().into()),
-              mismatch: format!("Actual message has field with number {} but the field name in the descriptor is empty", field.field_num)
-            }
-          ]);
-        }
-      } else {
-        let mut field_path = path.clone();
-        field_path.push_field(field.field_num.to_string());
-        results.insert(field_path.to_string(), vec![
-          BodyMismatch {
-            path: field_path.to_string(),
-            expected: None,
-            actual: Some(field.data.to_string().into()),
-            mismatch: format!("Actual message has field with number {} but is not defined in the descriptor", field.field_num)
-          }
-        ]);
+    } else if is_repeated_field(field_descriptor) {
+      let e = expected.iter().map(|f| (*f).clone()).collect();
+      let a = actual.iter().map(|f| (*f).clone()).collect();
+      let repeated_comparison = compare_repeated_field(&field_path, field_descriptor, &e, &a, matching_context, descriptors);
+      if !repeated_comparison.is_empty() {
+        results.insert(field_path.to_string(), repeated_comparison);
       }
+    } else if !expected.is_empty() && actual.is_empty() {
+      results.insert(field_path.to_string(), vec![
+        BodyMismatch {
+          path: field_path.to_string(),
+          expected: expected.first().map(|field_data| Bytes::from(field_data.data.as_bytes())),
+          actual: None,
+          mismatch: format!("Expected message field '{}' but was missing", field_name)
+        }
+      ]);
+    } else if let Some(expected_value) = expected.first() {
+      let comparison = compare_field(&field_path, *expected_value, field_descriptor, *actual.first().unwrap(), matching_context, descriptors);
+      if !comparison.is_empty() {
+        results.insert(field_path.to_string(), comparison);
+      }
+    } else if matching_context.config == DiffConfig::NoUnexpectedKeys {
+      results.insert(field_path.to_string(), vec![
+        BodyMismatch {
+          path: field_path.to_string(),
+          expected: None,
+          actual: actual.first().map(|field_data| Bytes::from(field_data.data.as_bytes())),
+          mismatch: format!("Expected field '{}' to be missing, but received a value for it", field_name)
+        }
+      ]);
     }
   }
 
@@ -458,19 +428,14 @@ fn compare_value<T>(
 /// Compare a repeated field
 fn compare_repeated_field(
   path: &DocPath,
-  field: ProtobufField,
-  expected_fields: Vec<ProtobufField>,
   descriptor: &FieldDescriptorProto,
-  actual_message_fields: &Vec<ProtobufField>,
+  expected_fields: &Vec<ProtobufField>,
+  actual_fields: &Vec<ProtobufField>,
   matching_context: &MatchingContext,
   descriptors: &FileDescriptorSet
 ) -> Vec<Mismatch> {
-  trace!(">>> compareRepeatedField({}, {:?}, {:?})", path, field, expected_fields);
+  trace!(">>> compare_repeated_field({}, {:?}, {:?})", path, expected_fields, actual_fields);
 
-  let actual_fields = actual_message_fields.iter()
-    .filter(|f| f.field_num == field.field_num)
-    .cloned()
-    .collect_vec();
   let mut result = vec![];
 
   let path_vec = path.to_vec();
@@ -525,13 +490,126 @@ fn compare_repeated_field(
 /// Compare a map field
 fn compare_map_field(
   path: &DocPath,
-  field: &ProtobufField,
   descriptor: &FieldDescriptorProto,
-  actual_message: &Vec<ProtobufField>,
+  expected_fields: Vec<&ProtobufField>,
+  actual_fields: Vec<&ProtobufField>,
   matching_context: &MatchingContext,
   descriptors: &FileDescriptorSet
 ) -> Vec<Mismatch> {
-  todo!()
+  trace!(">> compare_map_field('{}', {:?}, {:?})", path, expected_fields, actual_fields);
+
+  let mut result = vec![];
+
+  if expected_fields.is_empty() && !actual_fields.is_empty() && matching_context.config == DiffConfig::NoUnexpectedKeys {
+    result.push(Mismatch::BodyMismatch {
+      path: path.to_string(),
+      expected: None,
+      actual: None,
+      mismatch: format!("Expected repeated field '{}' to be empty but received {} values",
+        descriptor.name.clone().unwrap_or_else(|| descriptor.number.unwrap_or_default().to_string()),
+        actual_fields.len()
+      )
+    });
+  } else {
+    let expected_map = expected_fields.iter()
+      .map(|f| {
+        match &f.data {
+          ProtobufFieldData::Message(d, descriptor) => decode_message_map_entry(descriptor, d, descriptors).ok(),
+          _ => None
+        }
+      })
+      .filter_map(|f| f)
+      .collect::<HashMap<String, MapEntry>>();
+    let actual_map = actual_fields.iter()
+      .map(|f| {
+        match &f.data {
+          ProtobufFieldData::Message(d, descriptor) => decode_message_map_entry(descriptor, d, descriptors).ok(),
+          _ => None
+        }
+      })
+      .filter_map(|f| f)
+      .collect::<HashMap<String, MapEntry>>();
+
+    let path_vec = path.to_vec();
+    let p = path_vec.iter().map(|p| p.as_str()).collect_vec();
+    if matching_context.matcher_is_defined(p.as_slice()) {
+      debug!("compare_map_field: matcher defined for path '{}'", path);
+      let rules = matching_context.select_best_matcher(p.as_slice());
+      for matcher in &rules.rules {
+        let comparison = compare_maps_with_matchingrule(matcher, p.as_slice(),
+          &expected_map, &actual_map, matching_context, &mut |field_path, expected, actual| {
+            let mut path = DocPath::empty();
+            for p in field_path {
+              path.push_field(*p);
+            }
+            let comparison = compare_field(&path, &expected.value, &expected.field_descriptor, &actual.value, matching_context, descriptors);
+            if comparison.is_empty() {
+              Ok(())
+            } else {
+              Err(comparison)
+            }
+          });
+      }
+    } else {
+      debug!("compareMapField: no matcher defined for path '{}'", path);
+      debug!("                   expected keys {:?}", expected_map.keys());
+      debug!("                   actual keys {:?}", actual_map.keys());
+      if let Err(mismatches) = matching_context.match_keys(p.as_slice(), &expected_map, &actual_map) {
+        result.extend(mismatches);
+      }
+      for (key, value) in &expected_map {
+        let entry_path = path.join(key);
+        if let Some(actual) = actual_map.get(key.as_str()) {
+          result.extend(compare_field(&entry_path, &value.value, &value.field_descriptor, &actual.value, matching_context, descriptors));
+        } else {
+          result.push(Mismatch::BodyMismatch {
+            path: path.to_string(),
+            expected: None,
+            actual: None,
+            mismatch: format!("Expected map field '{}' to have entry '{}', but was missing",
+              descriptor.name.clone().unwrap_or_else(|| descriptor.number.unwrap_or_default().to_string()),
+              key
+            )
+          });
+        }
+      }
+    }
+  }
+
+  result
+}
+
+/// Struct to represent a protobuf map entry
+#[derive(Clone, Debug)]
+struct MapEntry {
+  pub field_descriptor: FieldDescriptorProto,
+  pub value: ProtobufField
+}
+
+impl Display for MapEntry {
+  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    write!(f, "{}", self.value.to_string())
+  }
+}
+
+/// Decodes an embedded entry message into a key and value part
+fn decode_message_map_entry(
+  descriptor: &DescriptorProto,
+  data: &Vec<u8>,
+  descriptors: &FileDescriptorSet
+) -> anyhow::Result<(String, MapEntry)> {
+  let message = decode_message(&mut BytesMut::from(data.as_slice()), descriptor, descriptors)?;
+  let key = message.iter().find(|field| field.field_num == 1)
+    .ok_or_else(|| anyhow!("Did not find the key value when decoding map entry {}", descriptor.name.clone().unwrap_or_else(|| "unknown".to_string())))?;
+  let value = message.iter().find(|field| field.field_num == 2)
+    .ok_or_else(|| anyhow!("Did not find the value value when decoding map entry {}", descriptor.name.clone().unwrap_or_else(|| "unknown".to_string())))?;
+  let value_descriptor = find_field_descriptor(value, descriptor)
+    .ok_or_else(|| anyhow!("Did not find the field descriptor for the value field of the map entry"))?;
+  let key_str = match &key.data {
+    ProtobufFieldData::String(s) => s.clone(),
+    _ => key.data.to_string()
+  };
+  Ok((key_str, MapEntry { field_descriptor: value_descriptor, value: value.clone() } ))
 }
 
 /// Compares the items in the actual list against the expected
