@@ -143,7 +143,7 @@ fn compare_message(
   message_descriptor: &DescriptorProto,
   descriptors: &FileDescriptorSet,
 ) -> anyhow::Result<BodyMatchResult> {
-  trace!("compareMessage({}, {:?}, {:?})", path, expected_message_fields, actual_message_fields);
+  trace!("compare_message({}, {:?}, {:?})", path, expected_message_fields, actual_message_fields);
 
   let mut results = hashmap!{};
 
@@ -167,6 +167,7 @@ fn compare_message(
         field_no.to_string()
       });
     let field_path = path.join(&field_name);
+    trace!("Comparing message field {}:{}", field_name, field_no);
 
     if is_map_field(message_descriptor, field_descriptor) {
       let map_comparison = compare_map_field(&field_path, field_descriptor, expected, actual, matching_context, descriptors);
@@ -226,28 +227,53 @@ fn compare_field(
 
   match (&field.data, &actual.data) {
     (ProtobufFieldData::String(s1), ProtobufFieldData::String(s2)) => {
+      trace!("Comparing string values");
       let s1 = s1.clone();
       let s2 = s2.clone();
       compare_value(path, field, &s1, &s2, s1.as_str(), s2.as_str(), matching_context)
     },
-    (ProtobufFieldData::Boolean(b1), ProtobufFieldData::Boolean(b2)) => compare_value(path, field, *b1, *b2, b1.to_string().as_str(), b2.to_string().as_str(), matching_context),
-    (ProtobufFieldData::UInteger32(n1), ProtobufFieldData::UInteger32(n2)) => compare_value(path, field, *n1 as u64, *n2 as u64, n1.to_string().as_str(), n2.to_string().as_str(), matching_context),
-    (ProtobufFieldData::Integer32(n1), ProtobufFieldData::Integer32(n2)) => compare_value(path, field, *n1, *n2, n1.to_string().as_str(), n2.to_string().as_str(), matching_context),
-    (ProtobufFieldData::UInteger64(n1), ProtobufFieldData::UInteger64(n2)) => compare_value(path, field, *n1, *n2, n1.to_string().as_str(), n2.to_string().as_str(), matching_context),
-    (ProtobufFieldData::Integer64(n1), ProtobufFieldData::Integer64(n2)) => compare_value(path, field, *n1, *n2, n1.to_string().as_str(), n2.to_string().as_str(), matching_context),
-    (ProtobufFieldData::Float(n1), ProtobufFieldData::Float(n2)) => compare_value(path, field, *n1 as f64, *n2 as f64, n1.to_string().as_str(), n2.to_string().as_str(), matching_context),
-    (ProtobufFieldData::Double(n1), ProtobufFieldData::Double(n2)) => compare_value(path, field, *n1, *n2, n1.to_string().as_str(), n2.to_string().as_str(), matching_context),
+    (ProtobufFieldData::Boolean(b1), ProtobufFieldData::Boolean(b2)) => {
+      trace!("Comparing boolean values");
+      compare_value(path, field, *b1, *b2, b1.to_string().as_str(), b2.to_string().as_str(), matching_context)
+    },
+    (ProtobufFieldData::UInteger32(n1), ProtobufFieldData::UInteger32(n2)) => {
+      trace!("Comparing UInteger32 values");
+      compare_value(path, field, *n1 as u64, *n2 as u64, n1.to_string().as_str(), n2.to_string().as_str(), matching_context)
+    },
+    (ProtobufFieldData::Integer32(n1), ProtobufFieldData::Integer32(n2)) => {
+      trace!("Comparing Integer32 values");
+      compare_value(path, field, *n1, *n2, n1.to_string().as_str(), n2.to_string().as_str(), matching_context)
+    },
+    (ProtobufFieldData::UInteger64(n1), ProtobufFieldData::UInteger64(n2)) => {
+      trace!("Comparing UInteger64 values");
+      compare_value(path, field, *n1, *n2, n1.to_string().as_str(), n2.to_string().as_str(), matching_context)
+    },
+    (ProtobufFieldData::Integer64(n1), ProtobufFieldData::Integer64(n2)) => {
+      trace!("Comparing Integer64 values");
+      compare_value(path, field, *n1, *n2, n1.to_string().as_str(), n2.to_string().as_str(), matching_context)
+    },
+    (ProtobufFieldData::Float(n1), ProtobufFieldData::Float(n2)) => {
+      trace!("Comparing Float values");
+      compare_value(path, field, *n1 as f64, *n2 as f64, n1.to_string().as_str(), n2.to_string().as_str(), matching_context)
+    },
+    (ProtobufFieldData::Double(n1), ProtobufFieldData::Double(n2)) => {
+      trace!("Comparing Double values");
+      compare_value(path, field, *n1, *n2, n1.to_string().as_str(), n2.to_string().as_str(), matching_context)
+    },
     (ProtobufFieldData::Bytes(b1), ProtobufFieldData::Bytes(b2)) => {
+      trace!("Comparing byte arrays");
       let b1_str = display_bytes(b1);
       let b2_str = display_bytes(b2);
       compare_value(path, field, b1.as_slice(), b2.as_slice(), b1_str.as_str(), b2_str.as_str(), matching_context)
     },
     (ProtobufFieldData::Enum(b1, descriptor), ProtobufFieldData::Enum(b2, _)) => {
+      trace!("Comparing Enum values");
       let enum_1 = enum_name(*b1, descriptor);
       let enum_2 = enum_name(*b2, descriptor);
       compare_value(path, field, &enum_1, &enum_2, enum_1.as_str(), enum_2.as_str(), matching_context)
     },
     (ProtobufFieldData::Message(b1, message_descriptor), ProtobufFieldData::Message(b2, _)) => {
+      trace!("Comparing embedded messages");
       let mut expected_bytes = BytesMut::from(b1.as_slice());
       let expected_message = match decode_message(&mut expected_bytes, &message_descriptor, descriptors) {
         Ok(message) => message,
@@ -336,27 +362,30 @@ fn compare_field(
               Err(err) => err
             }
           }
-          _ => match compare_message(path.clone(), &expected_message, &actual_message, matching_context, &message_descriptor, descriptors) {
-            Ok(result) => match result {
-              BodyMatchResult::Ok => vec![],
-              BodyMatchResult::BodyTypeMismatch { message, .. } => vec![
+          _ => {
+            debug!("Field is a normal message");
+            match compare_message(path.clone(), &expected_message, &actual_message, matching_context, &message_descriptor, descriptors) {
+              Ok(result) => match result {
+                BodyMatchResult::Ok => vec![],
+                BodyMatchResult::BodyTypeMismatch { message, .. } => vec![
+                  BodyMismatch {
+                    path: path.to_string(),
+                    expected: Some(name.clone().into()),
+                    actual: Some(name.clone().into()),
+                    mismatch: message.clone()
+                  }
+                ],
+                BodyMatchResult::BodyMismatches(mismatches) => mismatches.values().cloned().flatten().collect()
+              }
+              Err(err) => vec![
                 BodyMismatch {
                   path: path.to_string(),
                   expected: Some(name.clone().into()),
                   actual: Some(name.clone().into()),
-                  mismatch: message.clone()
+                  mismatch: err.to_string()
                 }
-              ],
-              BodyMatchResult::BodyMismatches(mismatches) => mismatches.values().cloned().flatten().collect()
+              ]
             }
-            Err(err) => vec![
-              BodyMismatch {
-                path: path.to_string(),
-                expected: Some(name.clone().into()),
-                actual: Some(name.clone().into()),
-                mismatch: err.to_string()
-              }
-            ]
           }
         }
         None => vec![
@@ -444,7 +473,7 @@ fn compare_repeated_field(
     debug!("compare_repeated_field: Matcher defined for path '{}'", path);
     let rules = matching_context.select_best_matcher(p.as_slice());
     for matcher in &rules.rules {
-      let comparison = compare_lists_with_matchingrule(matcher, p.as_slice(),
+      if let Err(comparison) = compare_lists_with_matchingrule(matcher, p.as_slice(),
         expected_fields.as_slice(), actual_fields.as_slice(), matching_context, &|field_path, expected, actual, context| {
           let mut path = DocPath::empty();
           for p in field_path {
@@ -456,7 +485,9 @@ fn compare_repeated_field(
           } else {
             Err(comparison)
           }
-        });
+        }) {
+        result.extend(comparison);
+      }
     }
   } else if expected_fields.is_empty() && !actual_fields.is_empty() {
     result.push(Mismatch::BodyMismatch {
@@ -536,7 +567,7 @@ fn compare_map_field(
       debug!("compare_map_field: matcher defined for path '{}'", path);
       let rules = matching_context.select_best_matcher(p.as_slice());
       for matcher in &rules.rules {
-        let comparison = compare_maps_with_matchingrule(matcher, p.as_slice(),
+        if let Err(comparison) = compare_maps_with_matchingrule(matcher, p.as_slice(),
           &expected_map, &actual_map, matching_context, &mut |field_path, expected, actual| {
             let mut path = DocPath::empty();
             for p in field_path {
@@ -548,7 +579,9 @@ fn compare_map_field(
             } else {
               Err(comparison)
             }
-          });
+          }) {
+          result.extend(comparison);
+        }
       }
     } else {
       debug!("compareMapField: no matcher defined for path '{}'", path);

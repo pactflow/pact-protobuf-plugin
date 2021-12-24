@@ -87,7 +87,7 @@ pub(crate) fn as_hex(data: &[u8]) -> String {
 
 /// Create a string from the byte array for rendering/displaying
 pub(crate) fn display_bytes(data: &Vec<u8>) -> String {
-  if data.len() > 16 {
+  if data.len() <= 16 {
     as_hex(&data[..])
   } else {
     format!("{}... ({} bytes)", as_hex(&data[0..16]), data.len())

@@ -147,7 +147,7 @@ pub fn decode_message<B>(
           Type::Uint32 => ProtobufFieldData::UInteger32(varint as u32),
           Type::Enum => {
             let enum_proto = descriptor.enum_type.iter()
-              .find(|enum_type| enum_type.name.clone() == field_descriptor.type_name)
+              .find(|enum_type| enum_type.name.clone().unwrap_or_default() == last_name(field_descriptor.type_name.clone().unwrap_or_default().as_str()))
               .ok_or_else(|| anyhow!("Did not find the enum {:?} for the field {} in the Protobuf descriptor", field_descriptor.type_name, field_num))?;
             ProtobufFieldData::Enum(varint as i32, enum_proto.clone())
           },
