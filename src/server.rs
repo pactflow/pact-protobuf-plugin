@@ -59,14 +59,14 @@ impl PactPlugin for ProtobufPactPlugin {
       catalogue: vec![
         proto::CatalogueEntry {
           r#type: EntryType::ContentMatcher as i32,
-          key: "prototype".to_string(),
+          key: "protobuf".to_string(),
           values: hashmap! {
             "content-types".to_string() => "application/protobuf".to_string()
           }
         },
         proto::CatalogueEntry {
           r#type: EntryType::ContentGenerator as i32,
-          key: "prototype".to_string(),
+          key: "protobuf".to_string(),
           values: hashmap! {
             "content-types".to_string() => "application/protobuf".to_string()
           }
@@ -416,12 +416,12 @@ mod tests {
     expect!(response_message.catalogue.iter()).to(have_count(2));
 
     let first = &response_message.catalogue.get(0).unwrap();
-    expect!(first.key.as_str()).to(be_equal_to("prototype"));
+    expect!(first.key.as_str()).to(be_equal_to("protobuf"));
     expect!(first.r#type).to(be_equal_to(EntryType::ContentMatcher as i32));
     expect!(first.values.get("content-types")).to(be_some().value(&"application/protobuf".to_string()));
 
     let second = &response_message.catalogue.get(1).unwrap();
-    expect!(second.key.as_str()).to(be_equal_to("prototype"));
+    expect!(second.key.as_str()).to(be_equal_to("protobuf"));
     expect!(second.r#type).to(be_equal_to(EntryType::ContentGenerator as i32));
     expect!(second.values.get("content-types")).to(be_some().value(&"application/protobuf".to_string()));
   }
