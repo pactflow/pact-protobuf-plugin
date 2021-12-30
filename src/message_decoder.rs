@@ -7,7 +7,6 @@ use anyhow::anyhow;
 use bytes::Buf;
 use itertools::Itertools;
 use prost::encoding::{decode_key, decode_varint, WireType};
-use prost::Message;
 use prost_types::{DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, FileDescriptorSet};
 use prost_types::field_descriptor_proto::Type;
 

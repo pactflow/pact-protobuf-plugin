@@ -1,6 +1,6 @@
 //! Functions for matching Protobuf messages
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
 use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
@@ -14,14 +14,22 @@ use pact_matching::matchingrules::{compare_lists_with_matchingrule, compare_maps
 use pact_matching::Mismatch::BodyMismatch;
 use pact_models::content_types::ContentType;
 use pact_models::matchingrules::MatchingRule;
-use pact_models::path_exp::{DocPath, PathToken};
+use pact_models::path_exp::DocPath;
 use pact_models::prelude::{MatchingRuleCategory, RuleLogic};
 use pact_plugin_driver::proto::CompareContentsRequest;
 use pact_plugin_driver::utils::proto_struct_to_json;
 use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
-use crate::utils::{display_bytes, enum_name, field_data_to_json, find_message_field, find_message_field_by_name, find_message_type_by_name, is_map_field, is_repeated_field};
+use crate::utils::{
+  display_bytes,
+  enum_name,
+  field_data_to_json,
+  find_message_field_by_name,
+  find_message_type_by_name,
+  is_map_field,
+  is_repeated_field
+};
 
 /// Match a single Protobuf message
 pub fn match_message(

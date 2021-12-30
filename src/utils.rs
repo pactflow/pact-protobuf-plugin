@@ -211,7 +211,7 @@ mod tests {
   use bytes::Bytes;
   use expectest::prelude::*;
   use prost::Message;
-  use prost_types::{DescriptorProto, field, FieldDescriptorProto, FileDescriptorSet, MessageOptions};
+  use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet, MessageOptions};
   use prost_types::field_descriptor_proto::{Label, Type};
 
   use crate::utils::{as_hex, find_message_type_by_name, find_nested_type, is_map_field, last_name};

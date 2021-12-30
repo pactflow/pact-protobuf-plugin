@@ -1,6 +1,5 @@
 //! Module provides the main gRPC server for the plugin process
 
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
 use anyhow::anyhow;
@@ -15,7 +14,7 @@ use pact_plugin_driver::proto::catalogue_entry::EntryType;
 use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
 use pact_plugin_driver::utils::proto_value_to_string;
 use prost::Message;
-use prost_types::{FileDescriptorProto, FileDescriptorSet};
+use prost_types::FileDescriptorSet;
 use prost_types::value::Kind;
 use crate::matching::{match_message, match_service};
 
@@ -206,8 +205,6 @@ impl PactPlugin for ProtobufPactPlugin {
         }))
       }
     };
-    let descriptor_map: HashMap<String, FileDescriptorProto> = descriptors.file.iter()
-      .map(|descriptor| (descriptor.name.clone().unwrap_or_default(), descriptor.clone())).collect();
 
     let result = if let Some(message_name) = message {
       debug!("Received compareContents request for message {}", message_name);

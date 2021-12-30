@@ -11,7 +11,7 @@ use pact_models::generators::Generator;
 use pact_models::json_utils::json_to_string;
 use pact_models::matchingrules;
 use pact_models::matchingrules::MatchingRuleCategory;
-use pact_models::matchingrules::expressions::{is_matcher_def, MatchingReference, parse_matcher_def, ValueType};
+use pact_models::matchingrules::expressions::{is_matcher_def, parse_matcher_def, ValueType};
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::RuleLogic;
 use pact_plugin_driver::proto::{
@@ -33,7 +33,15 @@ use tokio::io::AsyncReadExt;
 
 use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValueType, RType};
 use crate::protoc::Protoc;
-use crate::utils::{find_enum_value_by_name, find_message_type_by_name, find_message_type_in_file_descriptor, find_nested_type, is_map_field, is_repeated_field, last_name, proto_struct_to_btreemap, proto_type_name};
+use crate::utils::{
+  find_enum_value_by_name,
+  find_message_type_in_file_descriptor,
+  find_nested_type,
+  is_map_field,
+  is_repeated_field,
+  last_name,
+  proto_struct_to_btreemap
+};
 
 /// Process the provided protobuf file and configure the interaction
 pub(crate) async fn process_proto(
@@ -70,13 +78,15 @@ pub(crate) async fn process_proto(
     let message = proto_value_to_string(message_type)
       .ok_or_else(|| anyhow!("Did not get a valid value for 'pact:message-type'. It should be a string"))?;
     debug!("Configuring a Protobuf message {}", message);
-    let result = configure_protobuf_message(message.as_str(), config, descriptor, &file_descriptors, proto_file, descriptor_hash.as_str())?;
+    let result = configure_protobuf_message(message.as_str(), config, descriptor,
+      descriptor_hash.as_str())?;
     interactions.push(result);
   } else if let Some(service_name) = config.get("pact:proto-service") {
     let service_name = proto_value_to_string(service_name)
       .ok_or_else(|| anyhow!("Did not get a valid value for 'pact:proto-service'. It should be a string"))?;
     debug!("Configuring a Protobuf service {}", service_name);
-    let (request_part, response_part) = configure_protobuf_service(service_name, config, descriptor, &file_descriptors, proto_file, descriptor_hash.as_str())?;
+    let (request_part, response_part) = configure_protobuf_service(service_name, config, descriptor,
+      &file_descriptors, descriptor_hash.as_str())?;
     interactions.push(request_part);
     interactions.push(response_part);
   }
@@ -105,7 +115,6 @@ fn configure_protobuf_service(
   config: BTreeMap<String, prost_types::Value>,
   descriptor: &FileDescriptorProto,
   all_descriptors: &HashMap<String, &FileDescriptorProto>,
-  proto_file: &Path,
   descriptor_hash: &str
 ) -> anyhow::Result<(InteractionResponse, InteractionResponse)> {
   debug!("Looking for service and method with name '{}'", service_name);
@@ -199,11 +208,9 @@ fn configure_protobuf_message(
   message_name: &str,
   config: BTreeMap<String, prost_types::Value>,
   descriptor: &FileDescriptorProto,
-  all_descriptors: &HashMap<String, &FileDescriptorProto>,
-  proto_file: &Path,
   descriptor_hash: &str
 ) -> anyhow::Result<InteractionResponse> {
-  trace!(">> configure_protobuf_message({}, {:?}, {})", message_name, proto_file, descriptor_hash);
+  trace!(">> configure_protobuf_message({}, {:?})", message_name, descriptor_hash);
   debug!("Looking for message of type '{}'", message_name);
   let message_descriptor = descriptor.message_type
     .iter().find(|p| p.name.clone().unwrap_or_default() == message_name)
@@ -380,7 +387,7 @@ fn build_embedded_message_field_value(
 
           match each_value_def.rules.first() {
             Some(either) => match either {
-              Either::Left(rule) => {
+              Either::Left(_) => {
                 matching_rules.add_rule(path.clone(), matchingrules::MatchingRule::EachValue(each_value_def.clone()), RuleLogic::And);
                 if let Some(generator) = &each_value_def.generator {
                   generators.insert(path.to_string(), generator.clone());

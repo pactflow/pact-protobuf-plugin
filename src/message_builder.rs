@@ -1028,6 +1028,9 @@ mod tests {
     // }
 
     let file_descriptor = get_file_descriptor("plugin.proto").unwrap();
+    let file_descriptor_set = FileDescriptorSet {
+      file: vec![ file_descriptor.clone() ]
+    };
 
     let compare_message = CompareContentsRequest {
       allow_unexpected_keys: true,
@@ -1344,9 +1347,9 @@ mod tests {
       rtype: RType::Message(Box::new(rule2))
     });
 
-    let encoded_fields = decode_message(&mut encoded_buf, &descriptor, ).unwrap();
+    let encoded_fields = decode_message(&mut encoded_buf, &descriptor, &file_descriptor_set).unwrap();
     let mut bytes = message.encode_message().unwrap();
-    let result = decode_message(&mut bytes, &descriptor, ).unwrap();
+    let result = decode_message(&mut bytes, &descriptor, &file_descriptor_set).unwrap();
 
     expect!(result.len()).to(be_equal_to(encoded_fields.len()));
 
