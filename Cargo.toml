@@ -21,7 +21,7 @@ uuid = { version = "0.8", features = ["v4"] }
 log = "0.4"
 env_logger = "0.8"
 maplit = "1.0.2"
-pact_matching = { version = "0.12", path = "../pact-reference/rust/pact_matching" }
+pact_matching = "0.12"
 pact_models = "0.2.5"
 pact-plugin-driver = "0.0.14"
 anyhow = "1.0.42"
