@@ -7,7 +7,7 @@ use bytes::{Bytes, BytesMut};
 use itertools::Itertools;
 use log::{debug, trace, warn};
 use maplit::hashmap;
-use pact_matching::{BodyMatchResult, DiffConfig, MatchingContext, Mismatch};
+use pact_matching::{BodyMatchResult, CoreMatchingContext, DiffConfig, MatchingContext, Mismatch};
 use pact_matching::json::compare_json;
 use pact_matching::matchers::{match_values, Matches};
 use pact_matching::matchingrules::{compare_lists_with_matchingrule, compare_maps_with_matchingrule};
@@ -63,7 +63,7 @@ pub fn match_message(
   } else {
     DiffConfig::NoUnexpectedKeys
   };
-  let context = MatchingContext::new(diff_config, &matching_rules, &plugin_config);
+  let context = CoreMatchingContext::new(diff_config, &matching_rules, &plugin_config);
 
   compare(&message_descriptor, &expected_message, &actual_message, &context,
           &expected_message_bytes, descriptors)
@@ -114,7 +114,7 @@ fn compare(
   message_descriptor: &DescriptorProto,
   expected_message: &Vec<ProtobufField>,
   actual_message: &Vec<ProtobufField>,
-  matching_context: &MatchingContext,
+  matching_context: &dyn MatchingContext,
   expected_message_bytes: &Bytes,
   descriptors: &FileDescriptorSet
 ) -> anyhow::Result<BodyMatchResult> {
@@ -139,7 +139,7 @@ fn compare_message(
   path: DocPath,
   expected_message_fields: &Vec<ProtobufField>,
   actual_message_fields: &Vec<ProtobufField>,
-  matching_context: &MatchingContext,
+  matching_context: &dyn MatchingContext,
   message_descriptor: &DescriptorProto,
   descriptors: &FileDescriptorSet,
 ) -> anyhow::Result<BodyMatchResult> {
@@ -195,7 +195,7 @@ fn compare_message(
       if !comparison.is_empty() {
         results.insert(field_path.to_string(), comparison);
       }
-    } else if matching_context.config == DiffConfig::NoUnexpectedKeys {
+    } else if matching_context.config() == DiffConfig::NoUnexpectedKeys {
       results.insert(field_path.to_string(), vec![
         BodyMismatch {
           path: field_path.to_string(),
@@ -220,7 +220,7 @@ fn compare_field(
   field: &ProtobufField,
   descriptor: &FieldDescriptorProto,
   actual: &ProtobufField,
-  matching_context: &MatchingContext,
+  matching_context: &dyn MatchingContext,
   descriptors: &FileDescriptorSet
 ) -> Vec<Mismatch> {
   trace!("compare_field({}, {:?}, {:?}, {:?})", path, field, descriptor, actual);
@@ -349,14 +349,7 @@ fn compare_field(
               }
             };
 
-            let path_slice = path.tokens().iter().map(|t| match t {
-              PathToken::Root => "$".to_string(),
-              PathToken::Field(n) => n.clone(),
-              PathToken::Index(n) => n.to_string(),
-              PathToken::Star | PathToken::StarIndex => "*".to_string()
-            }).collect::<Vec<String>>();
-            let path_slice = path_slice.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
-            match compare_json(path_slice.as_slice(), &expected_json, &actual_json, matching_context) {
+            match compare_json(path, &expected_json, &actual_json, matching_context) {
               Ok(_) => vec![],
               Err(err) => err
             }
@@ -417,15 +410,13 @@ fn compare_value<T>(
   actual: T,
   expected_str: &str,
   actual_str: &str,
-  matching_context: &MatchingContext
+  matching_context: &dyn MatchingContext
 ) -> Vec<Mismatch> where T: Clone + Debug + Matches<T> {
-  trace!("compare_value({}, {:?}, {}, {}, {:?})", path, field, expected_str, actual_str, matching_context);
+  trace!("compare_value({}, {:?}, {}, {})", path, field, expected_str, actual_str);
 
-  let path_slice = path.to_vec();
-  let path_slice = path_slice.iter().map(|s| s.as_str()).collect::<Vec<&str>>();
-  if matching_context.matcher_is_defined(path_slice.as_slice()) {
+  if matching_context.matcher_is_defined(path) {
     debug!("compare_value: Matcher defined for path '{}' and values {:?} -> {:?}", path, expected, actual);
-    match match_values(path_slice.as_slice(), matching_context, expected, actual) {
+    match match_values(path, &matching_context.select_best_matcher(path), expected, actual) {
       Ok(_) => vec![],
       Err(mismatches) => mismatches.iter().map(|m| BodyMismatch {
         path: path.to_string(),
@@ -454,26 +445,20 @@ fn compare_repeated_field(
   descriptor: &FieldDescriptorProto,
   expected_fields: &Vec<ProtobufField>,
   actual_fields: &Vec<ProtobufField>,
-  matching_context: &MatchingContext,
+  matching_context: &dyn MatchingContext,
   descriptors: &FileDescriptorSet
 ) -> Vec<Mismatch> {
   trace!(">>> compare_repeated_field({}, {:?}, {:?})", path, expected_fields, actual_fields);
 
   let mut result = vec![];
 
-  let path_vec = path.to_vec();
-  let p = path_vec.iter().map(|p| p.as_str()).collect_vec();
-  if matching_context.matcher_is_defined(p.as_slice()) {
+  if matching_context.matcher_is_defined(path) {
     debug!("compare_repeated_field: Matcher defined for path '{}'", path);
-    let rules = matching_context.select_best_matcher(p.as_slice());
+    let rules = matching_context.select_best_matcher(path);
     for matcher in &rules.rules {
-      if let Err(comparison) = compare_lists_with_matchingrule(matcher, p.as_slice(),
-        expected_fields.as_slice(), actual_fields.as_slice(), matching_context, &|field_path, expected, actual, context| {
-          let mut path = DocPath::empty();
-          for p in field_path {
-            path.push_field(*p);
-          }
-          let comparison = compare_field(&path, expected, descriptor, actual, context, descriptors);
+      if let Err(comparison) = compare_lists_with_matchingrule(matcher, path,
+        expected_fields.as_slice(), actual_fields.as_slice(), matching_context, rules.cascaded, &mut |field_path, expected, actual, context| {
+          let comparison = compare_field(&field_path, expected, descriptor, actual, context, descriptors);
           if comparison.is_empty() {
             Ok(())
           } else {
@@ -518,14 +503,14 @@ fn compare_map_field(
   descriptor: &FieldDescriptorProto,
   expected_fields: Vec<&ProtobufField>,
   actual_fields: Vec<&ProtobufField>,
-  matching_context: &MatchingContext,
+  matching_context: &dyn MatchingContext,
   descriptors: &FileDescriptorSet
 ) -> Vec<Mismatch> {
   trace!(">> compare_map_field('{}', {:?}, {:?})", path, expected_fields, actual_fields);
 
   let mut result = vec![];
 
-  if expected_fields.is_empty() && !actual_fields.is_empty() && matching_context.config == DiffConfig::NoUnexpectedKeys {
+  if expected_fields.is_empty() && !actual_fields.is_empty() && matching_context.config() == DiffConfig::NoUnexpectedKeys {
     result.push(Mismatch::BodyMismatch {
       path: path.to_string(),
       expected: None,
@@ -544,7 +529,7 @@ fn compare_map_field(
         }
       })
       .filter_map(|f| f)
-      .collect::<HashMap<String, MapEntry>>();
+      .collect::<BTreeMap<String, MapEntry>>();
     let actual_map = actual_fields.iter()
       .map(|f| {
         match &f.data {
@@ -553,21 +538,16 @@ fn compare_map_field(
         }
       })
       .filter_map(|f| f)
-      .collect::<HashMap<String, MapEntry>>();
+      .collect::<BTreeMap<String, MapEntry>>();
 
-    let path_vec = path.to_vec();
-    let p = path_vec.iter().map(|p| p.as_str()).collect_vec();
-    if matching_context.matcher_is_defined(p.as_slice()) {
+    if matching_context.matcher_is_defined(path) {
       debug!("compare_map_field: matcher defined for path '{}'", path);
-      let rules = matching_context.select_best_matcher(p.as_slice());
+      let rules = matching_context.select_best_matcher(path);
       for matcher in &rules.rules {
-        if let Err(comparison) = compare_maps_with_matchingrule(matcher, p.as_slice(),
+        trace!("compare_map_field: matcher = {:?}", matcher);
+        if let Err(comparison) = compare_maps_with_matchingrule(matcher, rules.cascaded, path,
           &expected_map, &actual_map, matching_context, &mut |field_path, expected, actual| {
-            let mut path = DocPath::empty();
-            for p in field_path {
-              path.push_field(*p);
-            }
-            let comparison = compare_field(&path, &expected.value, &expected.field_descriptor, &actual.value, matching_context, descriptors);
+            let comparison = compare_field(&field_path, &expected.value, &expected.field_descriptor, &actual.value, matching_context, descriptors);
             if comparison.is_empty() {
               Ok(())
             } else {
@@ -578,10 +558,12 @@ fn compare_map_field(
         }
       }
     } else {
-      debug!("compareMapField: no matcher defined for path '{}'", path);
+      debug!("compare_map_field: no matcher defined for path '{}'", path);
       debug!("                   expected keys {:?}", expected_map.keys());
       debug!("                   actual keys {:?}", actual_map.keys());
-      if let Err(mismatches) = matching_context.match_keys(p.as_slice(), &expected_map, &actual_map) {
+      let expected_keys = expected_map.keys().cloned().collect();
+      let actual_keys = actual_map.keys().cloned().collect();
+      if let Err(mismatches) = matching_context.match_keys(path, &expected_keys, &actual_keys) {
         result.extend(mismatches);
       }
       for (key, value) in &expected_map {
@@ -645,7 +627,7 @@ fn compare_list_content(
   descriptor: &FieldDescriptorProto,
   expected: &Vec<ProtobufField>,
   actual: &Vec<ProtobufField>,
-  matching_context: &MatchingContext,
+  matching_context: &dyn MatchingContext,
   descriptors: &FileDescriptorSet
 ) -> Vec<Mismatch> {
   let mut result = vec![];
@@ -653,11 +635,9 @@ fn compare_list_content(
     let ps = index.to_string();
     debug!("Comparing list item {} with value '{:?}' to '{:?}'", index, actual.get(index), value);
     let p = path.join(ps);
-    let p_vec = p.to_vec();
-    let p_vec2 = p_vec.iter().map(|p| p.as_str()).collect_vec();
     if index < actual.len() {
       result.extend(compare_field(&p, value, descriptor, &actual.get(index).unwrap(), matching_context, descriptors));
-    } else if !matching_context.matcher_is_defined(&p_vec2.as_slice()) {
+    } else if !matching_context.matcher_is_defined(&p) {
       result.push(Mismatch::BodyMismatch {
         path: path.to_string(),
         expected: Some(Bytes::from(value.data.to_string())),
