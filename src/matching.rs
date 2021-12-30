@@ -21,15 +21,7 @@ use pact_plugin_driver::utils::proto_struct_to_json;
 use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
-use crate::utils::{
-  display_bytes,
-  enum_name,
-  field_data_to_json,
-  find_message_field_by_name,
-  find_message_type_by_name,
-  is_map_field,
-  is_repeated_field
-};
+use crate::utils::{display_bytes, enum_name, field_data_to_json, find_message_field_by_name, find_message_type_by_name, is_map_field, is_repeated_field, last_name};
 
 /// Match a single Protobuf message
 pub fn match_message(
@@ -83,19 +75,20 @@ pub fn match_service(
   descriptors: &FileDescriptorSet,
   request: &CompareContentsRequest
 ) -> anyhow::Result<BodyMatchResult> {
+  debug!("Looking for service '{}'", service_name);
   let (service, method) = service_name.split_once('/')
     .ok_or_else(|| anyhow!("Service name '{}' is not valid, it should be of the form <SERVICE>/<METHOD>", service_name))?;
-  let service_descriptor = descriptors.file.iter().map(|descriptor| {
+  let service_descriptor = descriptors.file.iter().filter_map(|descriptor| {
     descriptor.service.iter().find(|p| p.name.clone().unwrap_or_default() == service)
   })
-    .filter(|result| result.is_some())
     .next()
-    .flatten()
     .ok_or_else(|| anyhow!("Did not find a descriptor for service '{}'", service_name))?;
+  trace!("Found service descriptor with name {:?}", service_descriptor.name);
 
   let method_descriptor = service_descriptor.method.iter().find(|method_desc| {
     method_desc.name.clone().unwrap_or_default() == method
   }).ok_or_else(|| anyhow!("Did not find the method {} in the Protobuf file descriptor for service '{}'", method, service))?;
+  trace!("Found method descriptor with name {:?}", method_descriptor.name);
 
   let expected_content_type = ContentType::parse(
     request.expected.as_ref().map(|body| body.content_type.clone())
@@ -114,7 +107,8 @@ pub fn match_service(
     method_descriptor.output_type.clone().unwrap_or_default()
   };
 
-  match_message(message_type.as_str(), descriptors, request)
+  trace!("Message type = {}", message_type);
+  match_message(last_name(message_type.as_str()), descriptors, request)
 }
 
 /// Compare the expected message to the actual one
