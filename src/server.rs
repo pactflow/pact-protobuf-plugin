@@ -316,7 +316,11 @@ impl PactPlugin for ProtobufPactPlugin {
     &self,
     request: tonic::Request<proto::GenerateContentRequest>,
   ) -> Result<tonic::Response<proto::GenerateContentResponse>, tonic::Status> {
-    unimplemented!()
+    debug!("Generate content request");
+    let message = request.get_ref();
+    Ok(tonic::Response::new(proto::GenerateContentResponse {
+      contents: message.contents.clone()
+    }))
   }
 }
 
