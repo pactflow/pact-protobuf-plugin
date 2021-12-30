@@ -50,3 +50,4 @@ jobs:
         env:
           RUST_LOG: debug
           RUST_BACKTRACE: 1
+          PACTFLOW_TOKEN: ${{ secrets.PACTFLOW_TOKEN }}
