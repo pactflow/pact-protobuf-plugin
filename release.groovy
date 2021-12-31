@@ -97,9 +97,11 @@ ask('Tag and Push commits?: [Y]') {
 def nextVer = Version.valueOf(releaseVer).incrementPatchVersion()
 ask("Bump version to $nextVer?: [Y]") {
   executeOnShell "sed -i -e 's/version = \"${releaseVer}\"/version = \"${nextVer}\"/' Cargo.toml"
+  executeOnShell "sed -i -e 's/\"version\": \"${releaseVer}\",/\"version\": \"${nextVer}\",/' pact-plugin.json"
   executeOnShell("cargo update")
   executeOnShell("git add Cargo.toml")
   executeOnShell("git add Cargo.lock")
+  executeOnShell("git add pact-plugin.json")
   executeOnShell("git diff --cached")
   ask("Commit and push this change?: [Y]") {
     executeOnShell("git commit -m 'bump version to $nextVer'")

@@ -16,6 +16,7 @@ case "$1" in
   Linux)    echo "Building for Linux"
             gzip -c target/release/pact-protobuf-plugin > target/artifacts/pact-protobuf-plugin-linux-x86_64.gz
             openssl dgst -sha256 -r target/artifacts/pact-protobuf-plugin-linux-x86_64.gz > target/artifacts/pact-protobuf-plugin-linux-x86_64.gz.sha256
+            cp pact-plugin.json target/artifacts
             ;;
   Windows)  echo  "Building for Windows"
             gzip -c target/release/pact-protobuf-plugin.exe > target/artifacts/pact-protobuf-plugin-windows-x86_64.exe.gz
@@ -37,5 +38,3 @@ case "$1" in
             exit 1
             ;;
 esac
-
-cp pact-plugin.json target/artifacts
