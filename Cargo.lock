@@ -1309,6 +1309,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "pact-plugin-driver"
+version = "0.0.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15e8fe047c112fdcd98ef78fbc0fde08f920712725d57708fbb3b50ab65e75ad"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "home",
+ "itertools",
+ "lazy_static",
+ "log",
+ "maplit",
+ "md5",
+ "os_info",
+ "pact_models",
+ "prost",
+ "prost-types",
+ "regex",
+ "reqwest",
+ "semver 1.0.4",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tokio",
+ "tonic",
+ "tonic-build",
+ "uuid",
+]
+
+[[package]]
 name = "pact-protobuf-plugin"
 version = "0.0.1"
 dependencies = [
@@ -1326,7 +1357,7 @@ dependencies = [
  "maplit",
  "md5",
  "os_info",
- "pact-plugin-driver",
+ "pact-plugin-driver 0.0.15",
  "pact_matching",
  "pact_models",
  "pact_verifier",
@@ -1369,7 +1400,7 @@ dependencies = [
  "multipart",
  "nom",
  "onig",
- "pact-plugin-driver",
+ "pact-plugin-driver 0.0.14",
  "pact_models",
  "rand 0.8.4",
  "reqwest",
@@ -1439,7 +1470,7 @@ dependencies = [
  "log",
  "maplit",
  "mime",
- "pact-plugin-driver",
+ "pact-plugin-driver 0.0.14",
  "pact_matching",
  "pact_models",
  "regex",
