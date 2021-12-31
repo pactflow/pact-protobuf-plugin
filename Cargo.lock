@@ -1452,9 +1452,9 @@ dependencies = [
 
 [[package]]
 name = "pact_verifier"
-version = "0.12.1"
+version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c45421fa895d6c64cae2985f904fd4674dedcb1d4c96e52da2ea376b98afaced"
+checksum = "fc893e54995d36d91137b4b72e595b930d3dd81643add47a2c7852dcb01eb4e5"
 dependencies = [
  "ansi_term",
  "anyhow",
@@ -1470,7 +1470,7 @@ dependencies = [
  "log",
  "maplit",
  "mime",
- "pact-plugin-driver 0.0.14",
+ "pact-plugin-driver 0.0.15",
  "pact_matching",
  "pact_models",
  "regex",
