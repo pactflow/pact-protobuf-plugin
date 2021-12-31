@@ -606,10 +606,10 @@ impl Display for MapEntry {
 /// Decodes an embedded entry message into a key and value part
 fn decode_message_map_entry(
   descriptor: &DescriptorProto,
-  data: &Vec<u8>,
+  data: &[u8],
   descriptors: &FileDescriptorSet
 ) -> anyhow::Result<(String, MapEntry)> {
-  let message = decode_message(&mut BytesMut::from(data.as_slice()), descriptor, descriptors)?;
+  let message = decode_message(&mut BytesMut::from(data), descriptor, descriptors)?;
   let key = message.iter().find(|field| field.field_num == 1)
     .ok_or_else(|| anyhow!("Did not find the key value when decoding map entry {}", descriptor.name.clone().unwrap_or_else(|| "unknown".to_string())))?;
   let value = message.iter().find(|field| field.field_num == 2)
@@ -627,8 +627,8 @@ fn decode_message_map_entry(
 fn compare_list_content(
   path: &DocPath,
   descriptor: &FieldDescriptorProto,
-  expected: &Vec<ProtobufField>,
-  actual: &Vec<ProtobufField>,
+  expected: &[ProtobufField],
+  actual: &[ProtobufField],
   matching_context: &dyn MatchingContext,
   descriptors: &FileDescriptorSet
 ) -> Vec<Mismatch> {
@@ -638,7 +638,7 @@ fn compare_list_content(
     debug!("Comparing list item {} with value '{:?}' to '{:?}'", index, actual.get(index), value);
     let p = path.join(ps);
     if index < actual.len() {
-      result.extend(compare_field(&p, value, descriptor, &actual.get(index).unwrap(), matching_context, descriptors));
+      result.extend(compare_field(&p, value, descriptor, actual.get(index).unwrap(), matching_context, descriptors));
     } else if !matching_context.matcher_is_defined(&p) {
       result.push(Mismatch::BodyMismatch {
         path: path.to_string(),

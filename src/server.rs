@@ -112,7 +112,7 @@ impl PactPlugin for ProtobufPactPlugin {
 
     // From the plugin configuration for the interaction, get the descriptor key. This key is used
     // to lookup the encoded Protobuf descriptors in the Pact level plugin configuration
-    let message_key = match interaction_config.get("descriptorKey").map(|key| proto_value_to_string(key)).flatten() {
+    let message_key = match interaction_config.get("descriptorKey").map(proto_value_to_string).flatten() {
       Some(key) => key,
       None => {
         error!("Plugin configuration item with key 'descriptorKey' is required");
@@ -223,8 +223,8 @@ impl PactPlugin for ProtobufPactPlugin {
           error!("Got a BodyTypeMismatch - {}", message);
           Ok(tonic::Response::new(proto::CompareContentsResponse {
             type_mismatch: Some(proto::ContentTypeMismatch {
-              expected: expected_type.clone(),
-              actual: actual_type.clone()
+              expected: expected_type,
+              actual: actual_type
             }),
             .. proto::CompareContentsResponse::default()
           }))

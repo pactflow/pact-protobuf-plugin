@@ -472,41 +472,39 @@ fn build_single_embedded_field_value(
       debug!("Message field '{}' is a Map field", field);
       build_map_field(path, message_builder, field_descriptor, field, value, matching_rules, generators)?;
       Ok(None)
-    } else {
-      if let Value::Object(config) = value {
-        debug!("Configuring the message from config {:?}", config);
-        let message_name = last_name(type_name.as_str());
-        let embedded_type = find_message_type_in_file_descriptor(message_name, &message_builder.file_descriptor)?;
-        let mut embedded_builder = MessageBuilder::new(&embedded_type, message_name, &message_builder.file_descriptor);
+    } else if let Value::Object(config) = value {
+      debug!("Configuring the message from config {:?}", config);
+      let message_name = last_name(type_name.as_str());
+      let embedded_type = find_message_type_in_file_descriptor(message_name, &message_builder.file_descriptor)?;
+      let mut embedded_builder = MessageBuilder::new(&embedded_type, message_name, &message_builder.file_descriptor);
 
-        if let Some(definition) = config.get("pact:match") {
-          let mrd = parse_matcher_def(json_to_string(definition).as_str())?;
-          // when (val ruleDefinition = MatchingRuleDefinition.parseMatchingRuleDefinition(definition)) {
-          //   is Ok -> for (rule in ruleDefinition.value.rules) {
-          //     when (rule) {
-          //       is Either.A -> TODO()
-          //       is Either.B -> TODO()
-          //     }
-          //   }
-          todo!()
-        } else {
-          for (key, value) in config {
-            if !key.starts_with("pact:") {
-              let field_path = path.join(key);
-              construct_message_field(&mut embedded_builder, matching_rules, generators, key, value, &field_path)?;
-            }
-          }
-          let field_value = MessageFieldValue {
-            name: field.to_string(),
-            raw_value: None,
-            rtype: RType::Message(Box::new(embedded_builder))
-          };
-          message_builder.set_field_value(field_descriptor, field, field_value.clone());
-          Ok(Some(field_value))
-        }
+      if let Some(definition) = config.get("pact:match") {
+        let mrd = parse_matcher_def(json_to_string(definition).as_str())?;
+        // when (val ruleDefinition = MatchingRuleDefinition.parseMatchingRuleDefinition(definition)) {
+        //   is Ok -> for (rule in ruleDefinition.value.rules) {
+        //     when (rule) {
+        //       is Either.A -> TODO()
+        //       is Either.B -> TODO()
+        //     }
+        //   }
+        todo!()
       } else {
-        Err(anyhow!("For message fields, you need to define a Map of expected fields, got {:?}", value))
+        for (key, value) in config {
+          if !key.starts_with("pact:") {
+            let field_path = path.join(key);
+            construct_message_field(&mut embedded_builder, matching_rules, generators, key, value, &field_path)?;
+          }
+        }
+        let field_value = MessageFieldValue {
+          name: field.to_string(),
+          raw_value: None,
+          rtype: RType::Message(Box::new(embedded_builder))
+        };
+        message_builder.set_field_value(field_descriptor, field, field_value.clone());
+        Ok(Some(field_value))
       }
+    } else {
+      Err(anyhow!("For message fields, you need to define a Map of expected fields, got {:?}", value))
     }
   }
 }
