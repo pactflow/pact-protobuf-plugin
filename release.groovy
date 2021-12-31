@@ -40,7 +40,7 @@ executeOnShell 'git pull'
 ask('Execute Build?: [Y]') {
   executeOnShell 'cargo clean'
   executeOnShell 'cargo build'
-  executeOnShell 'cargo test'
+  executeOnShell 'cargo test --lib'
 }
 
 def projectProps = new File('Cargo.toml').text
