@@ -16,7 +16,7 @@ use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
 
 /// Return the last name in a dot separated string
 pub fn last_name(entry_type_name: &str) -> &str {
-  entry_type_name.split('.').last().unwrap_or_else(|| entry_type_name)
+  entry_type_name.split('.').last().unwrap_or(entry_type_name)
 }
 
 /// Convert a Protobuf Struct to a BTree Map
@@ -86,23 +86,23 @@ pub(crate) fn as_hex(data: &[u8]) -> String {
 }
 
 /// Create a string from the byte array for rendering/displaying
-pub(crate) fn display_bytes(data: &Vec<u8>) -> String {
+pub(crate) fn display_bytes(data: &[u8]) -> String {
   if data.len() <= 16 {
-    as_hex(&data[..])
+    as_hex(data)
   } else {
     format!("{}... ({} bytes)", as_hex(&data[0..16]), data.len())
   }
 }
 
 /// If the message fields include the field with the given descriptor
-pub fn find_message_field<'a>(message: &'a Vec<ProtobufField>, field_descriptor: &ProtobufField) -> Option<&'a ProtobufField> {
+pub fn find_message_field<'a>(message: &'a [ProtobufField], field_descriptor: &ProtobufField) -> Option<&'a ProtobufField> {
   message.iter().find(|v| v.field_num == field_descriptor.field_num)
 }
 
 /// Look for the message field data with the given name
 pub fn find_message_field_by_name(descriptor: &DescriptorProto, field_data: Vec<ProtobufField>, field_name: &str) -> Option<ProtobufField> {
   let field_num = match descriptor.field.iter()
-    .find(|f| f.name.clone().unwrap_or("".to_string()) == field_name)
+    .find(|f| f.name.clone().unwrap_or_default() == field_name)
     .map(|f| f.number.unwrap_or(-1)) {
     Some(n) => n,
     None => return None

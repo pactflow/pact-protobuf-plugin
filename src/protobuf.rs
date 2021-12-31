@@ -312,8 +312,8 @@ fn construct_protobuf_interaction_for_message(
 /// Construct a single field for a message from the provided config
 fn construct_message_field(
   message_builder: &mut MessageBuilder,
-  mut matching_rules: &mut MatchingRuleCategory,
-  mut generators: &mut HashMap<String, Generator>,
+  matching_rules: &mut MatchingRuleCategory,
+  generators: &mut HashMap<String, Generator>,
   field_name: &str,
   value: &Value,
   path: &DocPath
@@ -324,10 +324,10 @@ fn construct_message_field(
       match field.r#type {
         Some(r#type) => if r#type == field_descriptor_proto::Type::Message as i32 {
           // Embedded message
-          build_embedded_message_field_value(message_builder, path, &field, field_name, value, &mut matching_rules, &mut generators)?;
+          build_embedded_message_field_value(message_builder, path, &field, field_name, value, matching_rules, generators)?;
         } else {
           // Non-embedded message field (singular value)
-          build_field_value(path, message_builder, MessageFieldValueType::Normal, &field, field_name, value, &mut matching_rules, &mut generators)?;
+          build_field_value(path, message_builder, MessageFieldValueType::Normal, &field, field_name, value, matching_rules, generators)?;
         }
         None => {
           return Err(anyhow!("Message {} field {} is of an unknown type", message_builder.message_name, field_name))
@@ -399,7 +399,7 @@ fn build_embedded_message_field_value(
               Either::Right(reference) => if let Some(field_value) = map.get(reference.name.as_str()) {
                 matching_rules.add_rule(path.clone(), matchingrules::MatchingRule::Values, RuleLogic::And);
                 matching_rules.add_rule(path.join("*"), matchingrules::MatchingRule::Type, RuleLogic::And);
-                build_single_embedded_field_value(&path, message_builder, MessageFieldValueType::Repeated,
+                build_single_embedded_field_value(path, message_builder, MessageFieldValueType::Repeated,
                   field_descriptor, field, field_value, matching_rules, generators).map(|_| ())
               } else {
                 Err(anyhow!("Expression '{}' refers to non-existent item '{}'", definition, reference.name))
@@ -688,10 +688,10 @@ fn build_map_field(
           let entry_path = path.join(inner_field);
 
           let key_value = build_field_value(&entry_path, &mut embedded_builder, MessageFieldValueType::Normal,
-            &key_descriptor, "key", &Value::String(inner_field.clone()), matching_rules, generators)?
+            key_descriptor, "key", &Value::String(inner_field.clone()), matching_rules, generators)?
             .ok_or_else(|| anyhow!("Was not able to construct map key value {:?}", key_descriptor.type_name))?;
           let value_value = build_single_embedded_field_value(&entry_path, &mut embedded_builder, MessageFieldValueType::Normal,
-            &value_descriptor, "value", value, matching_rules, generators)?
+            value_descriptor, "value", value, matching_rules, generators)?
             .ok_or_else(|| anyhow!("Was not able to construct map value value {:?}", value_descriptor.type_name))?;
           message_builder.add_map_field_value(field_descriptor, field, key_value, value_value);
         }

@@ -129,11 +129,8 @@ impl PactPlugin for ProtobufPactPlugin {
 
     let config_for_interaction = match pact_configuration.fields.get(&message_key)
       .map(|config| match &config.kind {
-        Some(kind) => match kind {
-          Kind::StructValue(s) => s.fields.clone(),
-          _ => btreemap!{}
-        }
-        None => btreemap!{}
+        Some(Kind::StructValue(s)) => s.fields.clone(),
+        _ => btreemap!{}
       }) {
       Some(config) => config,
       None => {
@@ -147,8 +144,8 @@ impl PactPlugin for ProtobufPactPlugin {
 
     // From the plugin configuration for the interaction, there should be either a message type name
     // or a service name. Check for either.
-    let message = interaction_config.get("message").map(|val| proto_value_to_string(val)).flatten();
-    let service = interaction_config.get("service").map(|val| proto_value_to_string(val)).flatten();
+    let message = interaction_config.get("message").map(proto_value_to_string).flatten();
+    let service = interaction_config.get("service").map(proto_value_to_string).flatten();
     if message.is_none() && service.is_none() {
       error!("Plugin configuration item with key 'message' or 'service' is required");
       return Ok(tonic::Response::new(proto::CompareContentsResponse {
@@ -159,7 +156,7 @@ impl PactPlugin for ProtobufPactPlugin {
 
     // Get the encoded Protobuf descriptors from the Pact level configuration
     let descriptor_bytes_encoded = config_for_interaction.get("protoDescriptors")
-      .map(|val| proto_value_to_string(val))
+      .map(proto_value_to_string)
       .flatten()
       .unwrap_or_default();
     if descriptor_bytes_encoded.is_empty() {
@@ -208,10 +205,10 @@ impl PactPlugin for ProtobufPactPlugin {
 
     let result = if let Some(message_name) = message {
       debug!("Received compareContents request for message {}", message_name);
-      match_message(message_name.as_str(), &descriptors, &request)
+      match_message(message_name.as_str(), &descriptors, request)
     } else if let Some(service_name) = service {
       debug!("Received compareContents request for service {}", service_name);
-      match_service(service_name.as_str(), &descriptors, &request)
+      match_service(service_name.as_str(), &descriptors, request)
     } else {
       Err(anyhow!("Did not get a message or service to match"))
     };
@@ -259,7 +256,7 @@ impl PactPlugin for ProtobufPactPlugin {
 
     // Check for the "pact:proto" key
     let fields = message.contents_config.as_ref().map(|config| config.fields.clone()).unwrap_or_default();
-    let proto_file = match fields.get("pact:proto").and_then(|file| proto_value_to_string(file)) {
+    let proto_file = match fields.get("pact:proto").and_then(proto_value_to_string) {
       Some(pf) => pf,
       None => {
         error!("Config item with key 'pact:proto' and path to the proto file is required");

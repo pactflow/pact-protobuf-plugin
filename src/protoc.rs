@@ -122,7 +122,7 @@ pub(crate) async fn setup_protoc(config: &HashMap<String, Value>) -> anyhow::Res
 async fn download_protoc(config: &HashMap<String, Value>, os_info: &Info) -> anyhow::Result<Protoc> {
   trace!("download_protoc: config = {:?}", config);
   let protoc_version = config.get("protocVersion")
-    .map(|v| json_to_string(v))
+    .map(json_to_string)
     .ok_or_else(|| anyhow!("Could not get the protoc version from the manifest"))?;
   let download_url = config.get("downloadUrl")
     .map(|v| {
@@ -193,7 +193,7 @@ async fn local_protoc() -> anyhow::Result<Protoc> {
 
 async fn unpack_protoc(config: &HashMap<String, Value>, os_info: &Info) -> anyhow::Result<Protoc> {
   let protoc_version = config.get("protocVersion")
-    .map(|v| json_to_string(v))
+    .map(json_to_string)
     .ok_or_else(|| anyhow!("Could not get the protoc version from the manifest"))?;
   let protoc_file = format!("./protoc-{}-{}.zip", protoc_version, os_type(os_info.bitness(), ARCH, OS));
   trace!("Looking for protoc zip archive '{}'", protoc_file);

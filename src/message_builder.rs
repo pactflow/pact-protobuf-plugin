@@ -171,7 +171,7 @@ impl MessageBuilder {
 
               // BytesValue field 1 is a byte array
               let mut buffer2 = BytesMut::new();
-              encode_key(1 as u32, WireType::LengthDelimited, &mut buffer2);
+              encode_key(1_u32, WireType::LengthDelimited, &mut buffer2);
               encode_varint(data.len() as u64, &mut buffer2);
               buffer2.put_slice(&data);
 
@@ -190,7 +190,7 @@ impl MessageBuilder {
             return Err(anyhow!("Mismatched types, expected a byte array but got {:?}", value.rtype));
           }
           Type::Enum => if let RType::Enum(name) = &value.rtype {
-            self.encode_enum_value(&field_data.descriptor, &value, tag, name, &mut buffer)?;
+            self.encode_enum_value(&field_data.descriptor, &value, tag, name, buffer)?;
           } else if let RType::Integer32(i) = &value.rtype {
             encode_key(tag as u32, WireType::Varint, buffer);
             encode_varint(*i as u64, buffer);
