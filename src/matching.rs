@@ -33,14 +33,14 @@ pub fn match_message(
   let message_descriptor = find_message_type_by_name(message_name, descriptors)?;
 
   let mut expected_message_bytes = request.expected.as_ref()
-    .map(|body| body.content.clone().map(|content| Bytes::from(content)))
+    .map(|body| body.content.clone().map(Bytes::from))
     .flatten()
     .unwrap_or_default();
   let expected_message = decode_message(&mut expected_message_bytes, &message_descriptor, descriptors)?;
   debug!("expected message = {:?}", expected_message);
 
   let mut actual_message_bytes = request.actual.as_ref()
-    .map(|body| body.content.clone().map(|content| Bytes::from(content)))
+    .map(|body| body.content.clone().map(Bytes::from))
     .flatten()
     .unwrap_or_default();
   let actual_message = decode_message(&mut actual_message_bytes, &message_descriptor, descriptors)?;
@@ -49,7 +49,7 @@ pub fn match_message(
   let mut matching_rules = MatchingRuleCategory::empty("body");
   for (key, rules) in &request.rules {
     for rule in &rules.rule {
-      let values = rule.values.as_ref().map(|v| proto_struct_to_json(v)).unwrap_or_default();
+      let values = rule.values.as_ref().map(proto_struct_to_json).unwrap_or_default();
       matching_rules.add_rule(DocPath::new(key)?,
                               MatchingRule::create(&rule.r#type, &values)?,
                               RuleLogic::And
@@ -114,8 +114,8 @@ pub fn match_service(
 /// Compare the expected message to the actual one
 fn compare(
   message_descriptor: &DescriptorProto,
-  expected_message: &Vec<ProtobufField>,
-  actual_message: &Vec<ProtobufField>,
+  expected_message: &[ProtobufField],
+  actual_message: &[ProtobufField],
   matching_context: &dyn MatchingContext,
   expected_message_bytes: &Bytes,
   descriptors: &FileDescriptorSet
@@ -139,8 +139,8 @@ fn compare(
 /// Compare the fields of the expected and actual messages
 fn compare_message(
   path: DocPath,
-  expected_message_fields: &Vec<ProtobufField>,
-  actual_message_fields: &Vec<ProtobufField>,
+  expected_message_fields: &[ProtobufField],
+  actual_message_fields: &[ProtobufField],
   matching_context: &dyn MatchingContext,
   message_descriptor: &DescriptorProto,
   descriptors: &FileDescriptorSet,
@@ -159,7 +159,7 @@ fn compare_message(
         (no as u32, (field, expected_field_values, actual_field_values))
       })
     })
-    .filter_map(|v| v);
+    .flatten();
 
   for (field_no, (field_descriptor, expected, actual)) in fields {
     let field_name = field_descriptor.name
@@ -177,8 +177,8 @@ fn compare_message(
         results.insert(field_path.to_string(), map_comparison);
       }
     } else if is_repeated_field(field_descriptor) {
-      let e = expected.iter().map(|f| (*f).clone()).collect();
-      let a = actual.iter().map(|f| (*f).clone()).collect();
+      let e = expected.iter().map(|f| (*f).clone()).collect_vec();
+      let a = actual.iter().map(|f| (*f).clone()).collect_vec();
       let repeated_comparison = compare_repeated_field(&field_path, field_descriptor, &e, &a, matching_context, descriptors);
       if !repeated_comparison.is_empty() {
         results.insert(field_path.to_string(), repeated_comparison);
@@ -277,7 +277,7 @@ fn compare_field(
     (ProtobufFieldData::Message(b1, message_descriptor), ProtobufFieldData::Message(b2, _)) => {
       trace!("Comparing embedded messages");
       let mut expected_bytes = BytesMut::from(b1.as_slice());
-      let expected_message = match decode_message(&mut expected_bytes, &message_descriptor, descriptors) {
+      let expected_message = match decode_message(&mut expected_bytes, message_descriptor, descriptors) {
         Ok(message) => message,
         Err(err) => {
           return vec![
@@ -291,7 +291,7 @@ fn compare_field(
         }
       };
       let mut actual_bytes = BytesMut::from(b2.as_slice());
-      let actual_message = match decode_message(&mut actual_bytes, &message_descriptor, descriptors) {
+      let actual_message = match decode_message(&mut actual_bytes, message_descriptor, descriptors) {
         Ok(message) => message,
         Err(err) => {
           return vec![
@@ -308,8 +308,8 @@ fn compare_field(
         Some(name) => match name.as_str() {
           ".google.protobuf.BytesValue" => {
             debug!("Field is a Protobuf BytesValue");
-            let expected_field_data = find_message_field_by_name(&message_descriptor, expected_message, "value");
-            let actual_field_data = find_message_field_by_name(&message_descriptor, actual_message, "value");
+            let expected_field_data = find_message_field_by_name(message_descriptor, expected_message, "value");
+            let actual_field_data = find_message_field_by_name(message_descriptor, actual_message, "value");
             let b1 = expected_field_data.map(|f| match f.data {
               ProtobufFieldData::Bytes(b) => b,
               _ => vec![]
@@ -358,7 +358,7 @@ fn compare_field(
           }
           _ => {
             debug!("Field is a normal message");
-            match compare_message(path.clone(), &expected_message, &actual_message, matching_context, &message_descriptor, descriptors) {
+            match compare_message(path.clone(), &expected_message, &actual_message, matching_context, message_descriptor, descriptors) {
               Ok(result) => match result {
                 BodyMatchResult::Ok => vec![],
                 BodyMatchResult::BodyTypeMismatch { message, .. } => vec![
@@ -366,7 +366,7 @@ fn compare_field(
                     path: path.to_string(),
                     expected: Some(name.clone().into()),
                     actual: Some(name.clone().into()),
-                    mismatch: message.clone()
+                    mismatch: message
                   }
                 ],
                 BodyMatchResult::BodyMismatches(mismatches) => mismatches.values().cloned().flatten().collect()
@@ -445,8 +445,8 @@ fn compare_value<T>(
 fn compare_repeated_field(
   path: &DocPath,
   descriptor: &FieldDescriptorProto,
-  expected_fields: &Vec<ProtobufField>,
-  actual_fields: &Vec<ProtobufField>,
+  expected_fields: &[ProtobufField],
+  actual_fields: &[ProtobufField],
   matching_context: &dyn MatchingContext,
   descriptors: &FileDescriptorSet
 ) -> Vec<Mismatch> {
@@ -459,8 +459,8 @@ fn compare_repeated_field(
     let rules = matching_context.select_best_matcher(path);
     for matcher in &rules.rules {
       if let Err(comparison) = compare_lists_with_matchingrule(matcher, path,
-        expected_fields.as_slice(), actual_fields.as_slice(), matching_context, rules.cascaded, &mut |field_path, expected, actual, context| {
-          let comparison = compare_field(&field_path, expected, descriptor, actual, context, descriptors);
+        expected_fields, actual_fields, matching_context, rules.cascaded, &mut |field_path, expected, actual, context| {
+          let comparison = compare_field(field_path, expected, descriptor, actual, context, descriptors);
           if comparison.is_empty() {
             Ok(())
           } else {
@@ -481,7 +481,7 @@ fn compare_repeated_field(
       )
     })
   } else {
-    result.extend(compare_list_content(path, descriptor, &expected_fields, &actual_fields, matching_context, descriptors));
+    result.extend(compare_list_content(path, descriptor, expected_fields, actual_fields, matching_context, descriptors));
     if expected_fields.len() != actual_fields.len() {
       result.push(Mismatch::BodyMismatch {
         path: path.to_string(),
@@ -530,7 +530,7 @@ fn compare_map_field(
           _ => None
         }
       })
-      .filter_map(|f| f)
+      .flatten()
       .collect::<BTreeMap<String, MapEntry>>();
     let actual_map = actual_fields.iter()
       .map(|f| {
@@ -539,7 +539,7 @@ fn compare_map_field(
           _ => None
         }
       })
-      .filter_map(|f| f)
+      .flatten()
       .collect::<BTreeMap<String, MapEntry>>();
 
     if matching_context.matcher_is_defined(path) {
@@ -549,7 +549,7 @@ fn compare_map_field(
         trace!("compare_map_field: matcher = {:?}", matcher);
         if let Err(comparison) = compare_maps_with_matchingrule(matcher, rules.cascaded, path,
           &expected_map, &actual_map, matching_context, &mut |field_path, expected, actual| {
-            let comparison = compare_field(&field_path, &expected.value, &expected.field_descriptor, &actual.value, matching_context, descriptors);
+            let comparison = compare_field(field_path, &expected.value, &expected.field_descriptor, &actual.value, matching_context, descriptors);
             if comparison.is_empty() {
               Ok(())
             } else {
