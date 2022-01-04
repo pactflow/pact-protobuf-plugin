@@ -8,7 +8,7 @@
 ## About this plugin
 
 This plugin provides support for matching and verifying Protobuf messages and gRPC service calls. It fits into the
-[Pact testing framework](https://docs.pact.io) and extends Pact testing for [Protocol buffer](https://developers.google.com/protocol-buffers) payloads. 
+[Pact contract testing framework](https://docs.pact.io) and extends Pact testing for [Protocol buffer](https://developers.google.com/protocol-buffers) payloads. 
 
 ## Table of Content
 
@@ -27,7 +27,7 @@ This plugin provides support for matching and verifying Protobuf messages and gR
 
 ## Requirements to use it
 
-This plugin provides matching and verification of Protobuf proto3 encoded messages to the Pact testing framework. It requires a version
+This plugin provides matching and verification of Protobuf proto3 encoded messages to the Pact contract testing framework. It requires a version
 of the Pact framework that supports the [V4 Pact specification](https://github.com/pact-foundation/pact-specification/tree/version-4) 
 as well as the [Pact plugin framework](https://github.com/pact-foundation/pact-plugins).
 
@@ -36,13 +36,13 @@ Supported Pact versions:
 - [Pact-Rust Consumer v0.8.x](https://github.com/pact-foundation/pact-reference/tree/master/rust/pact_consumer)
 - [Pact-Rust Verifier v0.12.x](https://github.com/pact-foundation/pact-reference/tree/master/rust/pact_verifier_cli)
 
-To support compiling Protocol buffer proto files requires a version of the [Protocol buffer compiler](https://github.com/protocolbuffers/protobuf).
+To support compiling Protocol Buffer proto files requires a version of the [Protocol Buffer compiler](https://github.com/protocolbuffers/protobuf).
 
 ## Installation
 
-The executable binaries and plugin manifest file for the plugin can be downloaded from the project [releases page](releases). There will be an executable for each
+The executable binaries and plugin manifest file for the plugin can be downloaded from the project [releases page](../releases). There will be an executable for each
 operating system and architecture. If your particular operating system or architecture is not supported, please send
-a request to [support@pactflow.io](email:support@pactflow.io) with the details.
+a request to [support@pactflow.io](support@pactflow.io) with the details.
 
 ### Installing the plugin
 To install the plugin requires the plugin executable binary as well as the plugin manifest file to be unpacked/copied into
@@ -78,13 +78,40 @@ The plugin executes the following steps:
 
 If the plugin is going to run in an environment that does not allow automatic downloading of files, then you can do any of the following:
 
-1. Download the protoc archive and place it in the plugin installation directory.
-2. Change the `downloadUrl` entry in the plugin manifest to point to a location that the file can be downloaded from.
-3. Install the correct version of the protoc compiler as an operating system package. 
+1. Download the protoc archive and place it in the plugin installation directory. It will need to be the correct version and operating system/architecture.
+2. Download the protoc archive and unpack it into the plugin installation directory. It will need to be in a `protoc` directory. Do this if the current version is not supported for your operating system/architecture.
+3. Change the `downloadUrl` entry in the plugin manifest to point to a location that the file can be downloaded from.
+4. Install the correct version of the protoc compiler as an operating system package. It must then be on the executable path when the plugin runs. For instance, for Alpine Linux this will need to be done as the downloaded versions will not work.
 
 ## Supported features
 
+The plugin currently supports proto3 formatted messages and service calls.
+
+It supports the following:
+* Scalar fields (Double, Float, Int64, Uint64, Int32, Uint32, Fixed64, Fixed32, Bool, Sfixed32, Sfixed64, Sint32, Sint64).
+* Variable length fields (String, Bytes).
+* Enum fields.
+* Embedded messages.
+* Map fields (with a string key).
+* Repeated fields.
+* Service method calls (requires mocking of gRPC methods as gRPC is not currently supported). 
+
 ## Unsupported features
+
+The following features are currently unsupported, but will be supported in a later release:
+* oneOf fields.
+* default values for fields.
+* packed fields.
+* required fields.
+* gRPC service calls (gRPC mock server).
+* Testing/verifying options.
+
+The following features will not be supported by this plugin:
+* proto2
+* Groups
+
+The following features may be supported in a future release, but are not currently planned to be supported:
+* Map fields where the key is not a string
 
 ## Using the plugin
 
@@ -105,6 +132,10 @@ or
 ## Contributing
 
 PRs are always welcome!
+
+For details on the V4 Pact specification, refer to https://github.com/pact-foundation/pact-specification/tree/version-4
+
+For details on the Pact plugin framework, refer to https://github.com/pact-foundation/pact-plugins
 
 ### Raising defects
 
