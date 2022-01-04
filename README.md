@@ -2,17 +2,20 @@
 
 # Pact Protobuf Plugin [![Pact-Protobuf-Plugin Build](https://github.com/pactflow/pact-protobuf-plugin/actions/workflows/build.yml/badge.svg)](https://github.com/pactflow/pact-protobuf-plugin/actions/workflows/build.yml)
 
-> Pact plugin for testing Protobufs and gRPC services with [Pact](https://docs.pact.io)
+> Pact plugin for testing messages and gRPC service calls encoded with as [Protocol buffers](https://developers.google.com/protocol-buffers)
+> using the [Pact](https://docs.pact.io) contract testing framework.
 
 ## About this plugin
 
 This plugin provides support for matching and verifying Protobuf messages and gRPC service calls. It fits into the
-Pact testing framework and extends Pact testing for Protobuf payloads. 
+[Pact testing framework](https://docs.pact.io) and extends Pact testing for [Protocol buffer](https://developers.google.com/protocol-buffers) payloads. 
 
 ## Table of Content
 
 - [Requirements to use it](#requirements-to-use-it)
 - [Installation](#installation)
+  - [Installing the plugin](#installing-the-plugin)
+  - [Installing the Protocol buffer protoc compiler](#installing-the-protocol-buffer-protoc-compiler) 
 - [Supported features](#supported-features)
 - [Unsupported features](#unsupported-features)
 - [Using the plugin](#using-the-plugin)
@@ -24,7 +27,60 @@ Pact testing framework and extends Pact testing for Protobuf payloads.
 
 ## Requirements to use it
 
-## Installation 
+This plugin provides matching and verification of Protobuf proto3 encoded messages to the Pact testing framework. It requires a version
+of the Pact framework that supports the [V4 Pact specification](https://github.com/pact-foundation/pact-specification/tree/version-4) 
+as well as the [Pact plugin framework](https://github.com/pact-foundation/pact-plugins).
+
+Supported Pact versions:
+- [Pact-JVM v4.2.x](https://github.com/pact-foundation/pact-jvm)
+- [Pact-Rust Consumer v0.8.x](https://github.com/pact-foundation/pact-reference/tree/master/rust/pact_consumer)
+- [Pact-Rust Verifier v0.12.x](https://github.com/pact-foundation/pact-reference/tree/master/rust/pact_verifier_cli)
+
+To support compiling Protocol buffer proto files requires a version of the [Protocol buffer compiler](https://github.com/protocolbuffers/protobuf).
+
+## Installation
+
+The executable binaries and plugin manifest file for the plugin can be downloaded from the project [releases page](releases). There will be an executable for each
+operating system and architecture. If your particular operating system or architecture is not supported, please send
+a request to [support@pactflow.io](email:support@pactflow.io) with the details.
+
+### Installing the plugin
+To install the plugin requires the plugin executable binary as well as the plugin manifest file to be unpacked/copied into
+a Pact plugin directory. By default, this will be `.pact/plugins/protobuf-<version>` in the home directory (i.e. `$HOME/.pact/plugins/protobuf-0.0.0`).
+
+Example installation of Linux version 0.0.0: 
+1. Create the plugin directory if needed: `mkdir -p ~/.pact/plugins/protobuf-0.0.0`
+2. Download the plugin manifest into the directory: `wget https://github.com/pactflow/pact-protobuf-plugin/releases/download/v-0.0.0/pact-plugin.json -O ~/.pact/plugins/protobuf-0.0.0/pact-plugin.json`
+3. Download the plugin executable into the directory: `wget https://github.com/pactflow/pact-protobuf-plugin/releases/download/v-0.0.0/pact-protobuf-plugin-linux-x86_64.gz  -O ~/.pact/plugins/protobuf-0.0.0/pact-protobuf-plugin-linux-x86_64.gz`
+4. Unpack the plugin executable: `gunzip -N ~/.pact/plugins/protobuf-0.0.0/pact-protobuf-plugin-linux-x86_64.gz`
+
+**Note:** The unpacked executable name must match the `entryPoint` value in the manifest file. By default this is
+`pact-protobuf-plugin` on unix* and `pact-protobuf-plugin.exe` on Windows.
+
+#### Overriding the default Pact plugin directory
+
+The default plugin directory (`$HOME/.pact/plugins`) can be changed by setting the `PACT_PLUGIN_DIR` environment variable.
+
+### Installing the Protocol buffer protoc compiler
+
+The plugin can automatically download the correct version of the Protocol buffer compiler for the current operating system
+and architecture. By default, it will download the compiler from https://github.com/protocolbuffers/protobuf/releases
+and then unpack it into the plugin's installation directory.
+
+The plugin executes the following steps:
+
+1. Look for a valid `protoc/bin/protoc` in the plugin installation directory
+2. If not found, look for a `protoc-{version}-{OS}.zip` in the plugin installation directory and unpack that (i.e. for Linux it will look for `protoc-3.19.1-linux-x86_64.zip`).
+3. If not found, try download protoc using the `downloadUrl` entry in the plugin manifest file
+4. Otherwise, fallback to using the system installed protoc
+
+#### Dealing with network and firewall issues
+
+If the plugin is going to run in an environment that does not allow automatic downloading of files, then you can do any of the following:
+
+1. Download the protoc archive and place it in the plugin installation directory.
+2. Change the `downloadUrl` entry in the plugin manifest to point to a location that the file can be downloaded from.
+3. Install the correct version of the protoc compiler as an operating system package. 
 
 ## Supported features
 
@@ -86,7 +142,13 @@ and this will need to be copied into the Pact plugin directory. See the installa
 
 You can run all the unit tests by executing `cargo test --lib`.
 
+There is a Pact test that verifies the plugin aqainst the Pact file published to [pact-foundation.pactflow.io](https://pact-foundation.pactflow.io).
+Running this test requires a Pactflow API token and the plugin to be built and installed. See the installation instructions above.
+The test is run using `cargo test --test pact_verify`.
+
 ## Development Roadmap
+
+Pact plugin development board: https://github.com/pact-foundation/pact-plugins/projects/1
 
 ## License and Copyright
 
