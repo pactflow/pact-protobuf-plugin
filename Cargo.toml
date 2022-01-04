@@ -42,10 +42,13 @@ version = "0.11"
 default-features = false
 features = ["rustls-tls", "rustls-tls-native-roots", "json", "gzip", "deflate"]
 
+[patch.crates-io]
+pact_matching = { git = 'https://github.com/pact-foundation/pact-reference' }
+
 [dev-dependencies]
 expectest = "0.12.0"
 env_logger = "0.8"
-pact_verifier = "0.12.2"
+pact_verifier = "0.12.3"
 serde = "1.0.130"
 rocket = "0.5.0-rc.1"
 test-log = "0.2.8"
