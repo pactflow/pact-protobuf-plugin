@@ -114,6 +114,7 @@ The following features will **not** be supported by this plugin:
 
 The following features may be supported in a future release, but are not currently planned to be supported:
 * Map fields where the key is not a string or scalar value.
+* gRPC streaming (either oneway or bidirectional).
 
 ## Using the plugin
 
@@ -150,9 +151,29 @@ from the consumer. There are two main ways of verifying the provider:
 1. Write a test in the provider code base that can call the provider to generate the message. 
 2. Use an HTTP proxy server that can call the provider and return the generated message, and then use a Pact framework verifier to verify it.
 
-For an example of the latter form, see (Simple Example Protobuf provider)[https://github.com/pact-foundation/pact-plugins/tree/main/examples/protobuf/protobuf-provider].
+For an example of the latter form, see [Simple Example Protobuf provider](https://github.com/pact-foundation/pact-plugins/tree/main/examples/protobuf/protobuf-provider).
 
 ### Testing an RPC service method interaction
+
+**NOTE: gRPC service calls are not currently supported directly, but will be supported in a future version.**
+
+With a service method call, the consumer creates an input message, then invokes a service method and gets an output message
+as the response. The most common service call is via the gRPC RPC framework.
+
+#### Protocol Buffer service message consumer
+
+To test the service message consumer, we write a Pact test that defines the expected input (or request) message and the 
+expected output (or response message). The Pact test framework will generate an example input and output message.
+
+To execute the test, we need to intercept the service method call and verify that the message the consumer generated was
+correct, then we return the output message and verify that the consumer processed it correctly. This can be achieved using
+a test mocking library.
+
+For an example:
+* [JVM example service consumer test](https://github.com/pact-foundation/pact-plugins/blob/main/drivers/jvm/core/src/test/groovy/io/pact/plugins/jvm/core/DriverPactTest.groovy#L116)
+* [Rust example service consumer test](https://github.com/pact-foundation/pact-plugins/blob/main/drivers/rust/driver/tests/pact.rs#L43)
+
+#### Protocol Buffer service message provider
 
 ## Support
 
@@ -162,7 +183,6 @@ or
 
     Twitter: @pact_up
     Stack Overflow: stackoverflow.com/questions/tagged/pact
-
 
 ## Contributing
 
