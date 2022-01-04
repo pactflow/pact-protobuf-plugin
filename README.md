@@ -38,7 +38,53 @@ Pact testing framework and extends Pact testing for Protobuf payloads.
 
 ## Support
 
+Join us on slack [![slack](https://slack.pact.io/badge.svg)](https://slack.pact.io) in the **#protobufs** channel
+
+or
+
+    Twitter: @pact_up
+    Stack Overflow: stackoverflow.com/questions/tagged/pact
+
+
 ## Contributing
+
+PRs are always welcome!
+
+### Raising defects
+
+Before raising an issue, make sure you have checked the open and closed issues to see if an answer is provided there.
+There may also be an answer to your question on [stackoverflow](https://stackoverflow.com/questions/tagged/pact).
+
+Please provide the following information with your issue to enable us to respond as quickly as possible.
+
+1. The relevant versions of the packages you are using (plugin and Pact versions).
+1. The steps to recreate your issue.
+1. An executable code example where possible.
+
+### New features / changes
+
+1. Fork it
+1. Create your feature branch (git checkout -b my-new-feature)
+1. Commit your changes (git commit -am 'feat: Add some feature')
+1. Push to the branch (git push origin my-new-feature)
+1. Create new Pull Request
+
+#### Commit messages
+
+We follow the [Conventional Changelog](https://github.com/bcoe/conventional-changelog-standard/blob/master/convention.md)
+message conventions. Please ensure you follow the guidelines.
+
+### Building the plugin
+
+To build the plugin, you need a working Rust environment. Refer to the [Rust Guide](https://www.rust-lang.org/learn/get-started).
+
+The build tool used is `cargo` and you can build the plugin by running `cargo build`. This will compile the plugin and 
+put the generated files in `target/debug`. The main plugin executable is `pact-protobuf-plugin`
+and this will need to be copied into the Pact plugin directory. See the installation instructions above.
+
+### Running the tests
+
+You can run all the unit tests by executing `cargo test --lib`.
 
 ## Development Roadmap
 
