@@ -120,6 +120,9 @@ async fn init_plugin_request(request_message: &MessageRequest) -> (Status, (Cont
     match InitPluginRequest::decode(data) {
       Ok(request) => {
         debug!("Got init plugin request {:?}", request);
+
+        // This is were we call our actual service method, passing in the input message
+        // and getting the output message as the response, which we then return in encoded form
         let plugin = ProtobufPactPlugin::new();
         match plugin.init_plugin(tonic::Request::new(request)).await {
           Ok(response) => {
