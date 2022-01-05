@@ -194,10 +194,13 @@ The consumer tests need to get the plugin loaded and configure the expected mess
 using the `usingPlugin` (or `using_plugin`, depending on the language implementation) followed by the content for the test
 in some type of map form.
 
+For each field of the message that we want in the contract, we define an entry with the field name as the key and
+a matching definition as the value. For documentation on the matching definition format, see [Matching Rule definition expressions](https://github.com/pact-foundation/pact-plugins/blob/main/docs/matching-rule-definition-expressions.md).
+
 For example, for a JVM test (taken from [Protocol Buffer Java examples](https://developers.google.com/protocol-buffers/docs/javatutorial)) we would use the PactBuilder class:
 
 ```protobuf
-// for this example, taken from https://developers.google.com/protocol-buffers/docs/javatutorial#defining-your-protocol-format
+// this example taken from https://developers.google.com/protocol-buffers/docs/javatutorial#defining-your-protocol-format
 message Person {
   string name = 1;
   int32 id = 2;
