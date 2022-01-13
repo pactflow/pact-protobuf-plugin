@@ -68,16 +68,15 @@ ask('Update Changelog?: [Y]') {
   def changeLogFile = new File('CHANGELOG.md')
   def changeLogFileLines = changeLogFile.readLines()
   changeLogFile.withPrintWriter() { p ->
-    p.println(changeLogFileLines[0])
-
-    p.println()
     p.println("# $releaseVer - $releaseDesc")
     p.println()
     changelog.each {
       p.println(it)
     }
 
-    changeLogFileLines[1..-1].each {
+    p.println()
+
+    changeLogFileLines.each {
       p.println(it)
     }
   }
