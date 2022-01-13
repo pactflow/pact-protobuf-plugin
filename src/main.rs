@@ -4,12 +4,20 @@
 
 use std::env;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::pin::Pin;
+use std::str::FromStr;
 
 use clap::{App, ErrorKind};
-use env_logger::Env;
 use futures::Stream;
 use futures::task::{Context, Poll};
+use log4rs;
+use log4rs::append::console::ConsoleAppender;
+use log4rs::append::file::FileAppender;
+use log4rs::{Config, Handle};
+use log4rs::config::{Appender, load_config_file, Logger, Root};
+use log4rs::encode::pattern::PatternEncoder;
+use log::LevelFilter;
 use pact_plugin_driver::proto::pact_plugin_server::PactPluginServer;
 use tokio::net::{TcpListener, TcpStream};
 use tonic::transport::Server;
@@ -44,8 +52,16 @@ impl Stream for TcpIncoming {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Setup the logging system based on the LOG_LEVEL environment variable
-    let env = Env::new().filter("LOG_LEVEL");
-    env_logger::init_from_env(env);
+    let log_config = PathBuf::new().join("./log-config.yaml");
+    let log_level = env::var("LOG_LEVEL").unwrap_or("INFO".to_string());
+    let level = LevelFilter::from_str(log_level.as_str()).unwrap_or(LevelFilter::Info);
+    if log_config.exists() {
+      let mut config = load_config_file(log_config, Default::default())?;
+      config.root_mut().set_level(level);
+      log4rs::init_config(config)?;
+    } else {
+      init_default_logging(level)?;
+    };
 
     let args: Vec<String> = env::args().collect();
     let program = args[0].clone();
@@ -84,4 +100,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       .serve_with_incoming(TcpIncoming { inner: listener }).await?;
 
     Ok(())
+}
+
+fn init_default_logging(log_level: LevelFilter) -> anyhow::Result<Handle> {
+  let encoder = PatternEncoder::new("{d(%Y-%m-%dT%H:%M:%S%Z)} {l} [{T}] {t} - {m}{n}");
+  let stdout = ConsoleAppender::builder()
+    .encoder(Box::new(encoder.clone()))
+    .build();
+  let file = FileAppender::builder()
+    .encoder(Box::new(encoder))
+    .build("plugin.log")?;
+
+  let config = Config::builder()
+    .appender(Appender::builder().build("stdout", Box::new(stdout)))
+    .appender(Appender::builder().build("file", Box::new(file)))
+    .logger(Logger::builder().build("h2", LevelFilter::Info))
+    .logger(Logger::builder().build("hyper", LevelFilter::Info))
+    .logger(Logger::builder().build("tracing", LevelFilter::Warn))
+    .logger(Logger::builder().build("tokio", LevelFilter::Info))
+    .logger(Logger::builder().build("tokio_util", LevelFilter::Info))
+    .logger(Logger::builder().build("mio", LevelFilter::Info))
+    .build(Root::builder()
+      .appender("stdout")
+      .appender("file")
+      .build(log_level))?;
+
+  Ok(log4rs::init_config(config)?)
 }
