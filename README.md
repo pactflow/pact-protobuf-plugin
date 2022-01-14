@@ -108,7 +108,7 @@ root:
   appenders:
     - stdout
     - file
-# set some of the common Rust libraries to error level
+# set some of the common Rust libraries to info level to reduce noise at debug/trace
 loggers:
   h2:
     level: info
