@@ -83,6 +83,47 @@ If the plugin is going to run in an environment that does not allow automatic do
 3. Change the `downloadUrl` entry in the plugin manifest to point to a location that the file can be downloaded from.
 4. Install the correct version of the protoc compiler as an operating system package. It must then be on the executable path when the plugin runs. For instance, for Alpine Linux this will need to be done as the downloaded versions will not work.
 
+## Configuring logging
+
+The plugin will log to both standard output and a file (plugin.log) in the plugin log file. Common Rust library entries
+for debug and trace levels will be filtered out. The log level will be set by the `LOG_LEVEL` environment variable that
+is passed into the plugin process (this should be set by the framework calling it).
+
+The logging can be configured using a YAML file (log-config.yaml) in the plugin installation directory. For documentation
+on the file format, see [Log4rs](https://github.com/estk/log4rs).
+
+An example file which enables trace level logs for the plugin:
+
+```yaml
+appenders:
+  stdout:
+    kind: console
+  file:
+    kind: file
+    path: "plugin.log"
+    encoder:
+      pattern: "{d(%Y-%m-%dT%H:%M:%S%Z)} {l} [{T}] {t} - {m}{n}"
+root:
+  level: warn # This will be replaced at runtime with the current logging level
+  appenders:
+    - stdout
+    - file
+# set some of the common Rust libraries to error level
+loggers:
+  h2:
+    level: info
+  hyper:
+    level: info
+  tracing:
+    level: warn
+  tokio:
+    level: info
+  tokio_util:
+    level: info
+  mio:
+    level: info
+```
+
 ## Supported features
 
 The plugin currently supports proto3 formatted messages and service calls.
