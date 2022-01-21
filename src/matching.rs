@@ -44,7 +44,7 @@ pub fn match_message(
     .flatten()
     .unwrap_or_default();
   let actual_message = decode_message(&mut actual_message_bytes, &message_descriptor, descriptors)?;
-  debug!("actual message = {:?}", expected_message);
+  debug!("actual message = {:?}", actual_message);
 
   let mut matching_rules = MatchingRuleCategory::empty("body");
   for (key, rules) in &request.rules {
