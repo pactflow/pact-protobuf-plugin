@@ -290,7 +290,7 @@ impl PactPlugin for ProtobufPactPlugin {
     };
 
     // Process the proto file and configure the interaction
-    match process_proto(proto_file, &protoc, fields).await {
+    match process_proto(proto_file, &protoc, &fields).await {
       Ok((interactions, plugin_config)) => {
         Ok(tonic::Response::new(proto::ConfigureInteractionResponse {
           interaction: interactions,

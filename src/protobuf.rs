@@ -47,9 +47,11 @@ use crate::utils::{
 pub(crate) async fn process_proto(
   proto_file: String,
   protoc: &Protoc,
-  config: BTreeMap<String, prost_types::Value>
+  config: &BTreeMap<String, prost_types::Value>
 ) -> anyhow::Result<(Vec<InteractionResponse>, PluginConfiguration)> {
   debug!("Parsing proto file '{}'", proto_file);
+  trace!(">> process_proto({proto_file}, {config:?})");
+
   let proto_file = Path::new(proto_file.as_str());
   let (descriptors, digest, descriptor_bytes) = protoc.parse_proto_file(proto_file).await?;
   debug!("Parsed proto file OK, file descriptors = {:?}", descriptors.file.iter().map(|file| file.name.as_ref()).collect_vec());
@@ -85,10 +87,14 @@ pub(crate) async fn process_proto(
     let service_name = proto_value_to_string(service_name)
       .ok_or_else(|| anyhow!("Did not get a valid value for 'pact:proto-service'. It should be a string"))?;
     debug!("Configuring a Protobuf service {}", service_name);
-    let (request_part, response_part) = configure_protobuf_service(service_name, config, descriptor,
+    let (request_part, response_part) = configure_protobuf_service(service_name.as_str(), config, descriptor,
       &file_descriptors, descriptor_hash.as_str())?;
-    interactions.push(request_part);
-    interactions.push(response_part);
+    if let Some(request_part) = request_part {
+      interactions.push(request_part);
+    }
+    if let Some(response_part) = response_part {
+      interactions.push(response_part);
+    }
   }
 
   let mut f = File::open(proto_file).await?;
@@ -111,31 +117,37 @@ pub(crate) async fn process_proto(
 
 /// Configure the interaction for a Protobuf service method, which has an input and output message
 fn configure_protobuf_service(
-  service_name: String,
-  config: BTreeMap<String, prost_types::Value>,
+  service_name: &str,
+  config: &BTreeMap<String, prost_types::Value>,
   descriptor: &FileDescriptorProto,
   all_descriptors: &HashMap<String, &FileDescriptorProto>,
   descriptor_hash: &str
-) -> anyhow::Result<(InteractionResponse, InteractionResponse)> {
+) -> anyhow::Result<(Option<InteractionResponse>, Option<InteractionResponse>)> {
+  trace!(">> configure_protobuf_service({service_name}, {config:?}, {descriptor_hash})");
+
   debug!("Looking for service and method with name '{}'", service_name);
-  let service_and_proc = service_name.split_once('/')
+  let (service, proc_name) = service_name.split_once('/')
     .ok_or_else(|| anyhow!("Service name '{}' is not valid, it should be of the form <SERVICE>/<METHOD>", service_name))?;
   let service_descriptor = descriptor.service
-    .iter().find(|p| p.name.clone().unwrap_or_default() == service_and_proc.0)
+    .iter().find(|p| p.name.clone().unwrap_or_default() == service)
     .ok_or_else(|| anyhow!("Did not find a descriptor for service '{}'", service_name))?;
-  construct_protobuf_interaction_for_service(service_descriptor, config, service_and_proc.0,
-    service_and_proc.1, all_descriptors, descriptor)
+  construct_protobuf_interaction_for_service(service_descriptor, config, service,
+    proc_name, all_descriptors, descriptor)
     .map(|(request, response)| {
       let plugin_configuration = Some(PluginConfiguration {
         interaction_configuration: Some(to_proto_struct(hashmap! {
-            "service".to_string() => Value::String(service_name.to_string()),
+            "service".to_string() => Value::String(
+              service_name.split_once(':').map(|(s, _)| s).unwrap_or(service_name).to_string()
+            ),
             "descriptorKey".to_string() => Value::String(descriptor_hash.to_string())
           })),
         pact_configuration: None
       });
+      trace!("request = {request:?}");
+      trace!("response = {response:?}");
       (
-        InteractionResponse { plugin_configuration: plugin_configuration.clone(), .. request },
-        InteractionResponse { plugin_configuration, .. response }
+        request.map(|r| InteractionResponse { plugin_configuration: plugin_configuration.clone(), .. r }),
+        response.map(|r| InteractionResponse { plugin_configuration, .. r })
       )
     })
 }
@@ -143,16 +155,19 @@ fn configure_protobuf_service(
 /// Constructs an interaction for the given Protobuf service descriptor
 fn construct_protobuf_interaction_for_service(
   descriptor: &ServiceDescriptorProto,
-  config: BTreeMap<String, prost_types::Value>,
+  config: &BTreeMap<String, prost_types::Value>,
   service_name: &str,
   method_name: &str,
   all_descriptors: &HashMap<String, &FileDescriptorProto>,
   file_descriptor: &FileDescriptorProto
-) -> anyhow::Result<(InteractionResponse, InteractionResponse)> {
-  if !config.contains_key("response") {
-    return Err(anyhow!("A Protobuf service requires a 'response' configuration"))
-  }
+) -> anyhow::Result<(Option<InteractionResponse>, Option<InteractionResponse>)> {
+  trace!(">> construct_protobuf_interaction_for_service({config:?}, {service_name}, {method_name})");
 
+  let (method_name, service_part) = if method_name.contains(':') {
+    method_name.split_once(':').unwrap_or((method_name, ""))
+  } else {
+    (method_name, "")
+  };
   let method_descriptor = descriptor.method.iter()
     .find(|m| m.name.clone().unwrap_or_default() == method_name)
     .ok_or_else(|| anyhow!("Did not find a method descriptor for method '{}' in service '{}'", method_name, service_name))?;
@@ -164,31 +179,48 @@ fn construct_protobuf_interaction_for_service(
   let output_message_name = last_name(output_name.as_str());
   let response_descriptor = find_message_descriptor(output_message_name, all_descriptors)?;
 
-  let request_part = config.get("request").map(|request_config| {
-    request_config.kind.as_ref().map(|kind| {
-      match kind {
-        Kind::StructValue(s) => Some(proto_struct_to_btreemap(s)),
-        _ => None
-      }
-    }).flatten()
-  })
+  let request_part_config = if service_part == "request" {
+    config.clone()
+  } else {
+    config.get("request").map(|request_config| {
+      request_config.kind.as_ref().map(|kind| {
+        match kind {
+          Kind::StructValue(s) => Some(proto_struct_to_btreemap(s)),
+          _ => None
+        }
+      }).flatten()
+    })
     .flatten()
-    .map(|config| construct_protobuf_interaction_for_message(&request_descriptor,
-      config, input_message_name, "request", file_descriptor))
-    .ok_or_else(|| anyhow!("A Protobuf service requires a 'request' configuration in map format"))??;
+    .unwrap_or_default()
+  };
+  let request_part = if request_part_config.is_empty() {
+    None
+  } else {
+    construct_protobuf_interaction_for_message(&request_descriptor,
+      &request_part_config, input_message_name, "request", file_descriptor).ok()
+  };
 
-  let response_part = config.get("response").map(|response_config| {
-    response_config.kind.as_ref().map(|kind| {
-      match kind {
-        Kind::StructValue(s) => Some(proto_struct_to_btreemap(s)),
-        _ => None
-      }
-    }).flatten()
-  })
-    .flatten()
-    .map(|config| construct_protobuf_interaction_for_message(&response_descriptor,
-       config, output_message_name, "response", file_descriptor))
-    .ok_or_else(|| anyhow!("A Protobuf service requires a 'response' configuration in map format"))??;
+  let response_part_config = if service_part == "response" {
+    config.clone()
+  } else {
+    config.get("response").map(|response_config| {
+      response_config.kind.as_ref().map(|kind| {
+        match kind {
+          Kind::StructValue(s) => Some(proto_struct_to_btreemap(s)),
+          _ => None
+        }
+      }).flatten()
+    })
+      .flatten()
+      .unwrap_or_default()
+  };
+  let response_part = if response_part_config.is_empty() {
+    None
+  } else {
+    construct_protobuf_interaction_for_message(
+      &response_descriptor, &response_part_config, output_message_name,
+      "response", file_descriptor).ok()
+  };
 
   Ok((request_part, response_part))
 }
@@ -206,7 +238,7 @@ fn find_message_descriptor(message_name: &str, all_descriptors: &HashMap<String,
 /// Configure the interaction for a single Protobuf message
 fn configure_protobuf_message(
   message_name: &str,
-  config: BTreeMap<String, prost_types::Value>,
+  config: &BTreeMap<String, prost_types::Value>,
   descriptor: &FileDescriptorProto,
   descriptor_hash: &str
 ) -> anyhow::Result<InteractionResponse> {
@@ -233,7 +265,7 @@ fn configure_protobuf_message(
 /// Constructs an interaction for the given Protobuf message descriptor
 fn construct_protobuf_interaction_for_message(
   message_descriptor: &DescriptorProto,
-  config: BTreeMap<String, prost_types::Value>,
+  config: &BTreeMap<String, prost_types::Value>,
   message_name: &str,
   message_part: &str,
   file_descriptor: &FileDescriptorProto
@@ -251,7 +283,7 @@ fn construct_protobuf_interaction_for_message(
     path.push_field(message_part);
   }
 
-  for (key, value) in &config {
+  for (key, value) in config {
     if !key.starts_with("pact:") {
       let field_path = path.join(key);
       debug!("Building field for key {}, '{}'", key, field_path);
@@ -944,7 +976,7 @@ mod tests {
       "hash".to_string() => prost_types::Value { kind: Some(prost_types::value::Kind::StringValue("matching(integer, 1234)".to_string())) }
     };
 
-    let result = construct_protobuf_interaction_for_message(&message_descriptor, config, "test_message", "", &file_descriptor).unwrap();
+    let result = construct_protobuf_interaction_for_message(&message_descriptor, &config, "test_message", "", &file_descriptor).unwrap();
 
     let body = result.contents.as_ref().unwrap();
     expect!(body.content_type.as_str()).to(be_equal_to("application/protobuf;message=test_message"));

@@ -85,9 +85,14 @@ pub fn match_service(
     .ok_or_else(|| anyhow!("Did not find a descriptor for service '{}'", service_name))?;
   trace!("Found service descriptor with name {:?}", service_descriptor.name);
 
+  let (method_name, service_part) = if method.contains(':') {
+    method.split_once(':').unwrap_or((method, ""))
+  } else {
+    (method, "")
+  };
   let method_descriptor = service_descriptor.method.iter().find(|method_desc| {
-    method_desc.name.clone().unwrap_or_default() == method
-  }).ok_or_else(|| anyhow!("Did not find the method {} in the Protobuf file descriptor for service '{}'", method, service))?;
+    method_desc.name.clone().unwrap_or_default() == method_name
+  }).ok_or_else(|| anyhow!("Did not find the method {} in the Protobuf file descriptor for service '{}'", method_name, service))?;
   trace!("Found method descriptor with name {:?}", method_descriptor.name);
 
   let expected_content_type = ContentType::parse(
@@ -103,6 +108,8 @@ pub fn match_service(
     } else {
       method_descriptor.output_type.clone().unwrap_or_default()
     }
+  } else if service_part == "request" {
+    method_descriptor.input_type.clone().unwrap_or_default()
   } else {
     method_descriptor.output_type.clone().unwrap_or_default()
   };
@@ -145,7 +152,7 @@ fn compare_message(
   message_descriptor: &DescriptorProto,
   descriptors: &FileDescriptorSet,
 ) -> anyhow::Result<BodyMatchResult> {
-  trace!("compare_message({}, {:?}, {:?})", path, expected_message_fields, actual_message_fields);
+  trace!(">> compare_message({}, {:?}, {:?})", path, expected_message_fields, actual_message_fields);
 
   let mut results = hashmap!{};
 
