@@ -340,7 +340,7 @@ message conventions. Please ensure you follow the guidelines.
 
 ### Building the plugin
 
-To build the plugin, you need a working Rust environment. Refer to the [Rust Guide](https://www.rust-lang.org/learn/get-started).
+To build the plugin, you need a working Rust environment (version 1.58+). Refer to the [Rust Guide](https://www.rust-lang.org/learn/get-started).
 
 The build tool used is `cargo` and you can build the plugin by running `cargo build`. This will compile the plugin and 
 put the generated files in `target/debug`. The main plugin executable is `pact-protobuf-plugin`
