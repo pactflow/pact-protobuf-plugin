@@ -103,7 +103,7 @@ pub fn match_service(
   let expected_message_type = expected_content_type.attributes.get("message");
   let message_type = if let Some(message_type) = expected_message_type {
     let input_type = method_descriptor.input_type.clone().unwrap_or_default();
-    if input_type == message_type.as_str() {
+    if last_name(input_type.as_str()) == message_type.as_str() {
       input_type
     } else {
       method_descriptor.output_type.clone().unwrap_or_default()
