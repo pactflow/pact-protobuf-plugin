@@ -204,7 +204,7 @@ fn compare_message(
       if !comparison.is_empty() {
         results.insert(field_path.to_string(), comparison);
       }
-    } else if matching_context.config() == DiffConfig::NoUnexpectedKeys {
+    } else if !actual.is_empty() && matching_context.config() == DiffConfig::NoUnexpectedKeys {
       results.insert(field_path.to_string(), vec![
         BodyMismatch {
           path: field_path.to_string(),
