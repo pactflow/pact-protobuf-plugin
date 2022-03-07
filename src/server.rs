@@ -5,9 +5,10 @@ use std::io::BufReader;
 use anyhow::anyhow;
 
 use bytes::Bytes;
-use log::{debug, error, trace};
+use log::{debug, error, info, trace};
 use maplit::{btreemap, hashmap};
 use pact_matching::{BodyMatchResult, Mismatch};
+use pact_models::pact::load_pact_from_json;
 use pact_plugin_driver::plugin_models::PactPluginManifest;
 use pact_plugin_driver::proto;
 use pact_plugin_driver::proto::catalogue_entry::EntryType;
@@ -16,7 +17,10 @@ use pact_plugin_driver::utils::proto_value_to_string;
 use prost::Message;
 use prost_types::FileDescriptorSet;
 use prost_types::value::Kind;
+use serde_json::Value;
+use uuid::Uuid;
 use crate::matching::{match_message, match_service};
+use crate::mock_server::GrpcMockServer;
 
 use crate::protobuf::process_proto;
 use crate::protoc::setup_protoc;
@@ -70,6 +74,11 @@ impl PactPlugin for ProtobufPactPlugin {
           values: hashmap! {
             "content-types".to_string() => "application/protobuf".to_string()
           }
+        },
+        proto::CatalogueEntry {
+          r#type: EntryType::MockServer as i32,
+          key: "grpc".to_string(),
+          values: hashmap! {}
         }
       ]
     }))
@@ -318,6 +327,87 @@ impl PactPlugin for ProtobufPactPlugin {
     Ok(tonic::Response::new(proto::GenerateContentResponse {
       contents: message.contents.clone()
     }))
+  }
+
+  async fn start_mock_server(
+    &self,
+    request: tonic::Request<proto::StartMockServerRequest>,
+  ) -> Result<tonic::Response<proto::StartMockServerResponse>, tonic::Status> {
+    let request = request.get_ref();
+
+    // Parse the Pact JSON string
+    let json: Value = match serde_json::from_str(request.pact.as_str()) {
+      Ok(json) => json,
+      Err(err) => {
+        error!("Failed to parse Pact JSON: {}", err);
+        return Ok(tonic::Response::new(proto::StartMockServerResponse {
+          response: Some(proto::start_mock_server_response::Response::Error(format!("Failed to parse Pact JSON: {}", err))),
+          .. proto::StartMockServerResponse::default()
+        }));
+      }
+    };
+    // Load the Pact model from the JSON
+    let pact = match load_pact_from_json("grpc:start_mock_server", &json) {
+      Ok(pact) => match pact.as_v4_pact() {
+        Ok(pact) => pact,
+        Err(err) => {
+          error!("Failed to parse Pact JSON, not a V4 Pact: {}", err);
+          return Ok(tonic::Response::new(proto::StartMockServerResponse {
+            response: Some(proto::start_mock_server_response::Response::Error(format!("Failed to parse Pact JSON, not a V4 Pact: {}", err))),
+            .. proto::StartMockServerResponse::default()
+          }));
+        }
+      },
+      Err(err) => {
+        error!("Failed to parse Pact JSON to a V4 Pact: {}", err);
+        return Ok(tonic::Response::new(proto::StartMockServerResponse {
+          response: Some(proto::start_mock_server_response::Response::Error(format!("Failed to parse Pact JSON: {}", err))),
+          .. proto::StartMockServerResponse::default()
+        }));
+      }
+    };
+
+    trace!("Got pact {pact:?}");
+    // Check for the plugin specific configuration for the Protobuf descriptors
+    let plugin_config = match pact.plugin_data.iter().find(|pd| pd.name == "protobuf") {
+      None => {
+        error!("Provided Pact file does not have any Protobuf descriptors");
+        return Ok(tonic::Response::new(proto::StartMockServerResponse {
+          response: Some(proto::start_mock_server_response::Response::Error("Provided Pact file does not have any Protobuf descriptors".to_string())),
+          .. proto::StartMockServerResponse::default()
+        }))
+      }
+      Some(config) => config.clone()
+    };
+
+    let grpc_mock_server = GrpcMockServer::new(pact, &plugin_config);
+    let server_key = grpc_mock_server.server_key.clone();
+    match grpc_mock_server.start_server(request.host_interface.as_str(), request.port, request.tls).await {
+      Ok(address) => {
+        info!("Started mock gRPC server on {}", address);
+        Ok(tonic::Response::new(proto::StartMockServerResponse {
+          response: Some(proto::start_mock_server_response::Response::Details(proto::MockServerDetails {
+            key: server_key,
+            port: address.port() as u32,
+            address: format!("http://{}", address)
+          }))
+        }))
+      }
+      Err(err) => {
+        error!("Failed to start gRPC mock server: {}", err);
+        return Ok(tonic::Response::new(proto::StartMockServerResponse {
+          response: Some(proto::start_mock_server_response::Response::Error(format!("Failed to start gRPC mock server: {}", err))),
+          .. proto::StartMockServerResponse::default()
+        }));
+      }
+    }
+  }
+
+  async fn shutdown_mock_server(
+    &self,
+    request: tonic::Request<proto::ShutdownMockServerRequest>,
+  ) -> Result<tonic::Response<proto::ShutdownMockServerResponse>, tonic::Status> {
+    unimplemented!()
   }
 }
 

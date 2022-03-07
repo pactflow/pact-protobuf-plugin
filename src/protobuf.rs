@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::anyhow;
+use futures::FutureExt;
 use itertools::{Either, Itertools};
 use log::{debug, LevelFilter, max_level, trace, warn};
 use maplit::{btreemap, hashmap};
@@ -92,9 +93,7 @@ pub(crate) async fn process_proto(
     if let Some(request_part) = request_part {
       interactions.push(request_part);
     }
-    if let Some(response_part) = response_part {
-      interactions.push(response_part);
-    }
+    interactions.extend_from_slice(&response_part);
   }
 
   let mut f = File::open(proto_file).await?;
@@ -122,7 +121,7 @@ fn configure_protobuf_service(
   descriptor: &FileDescriptorProto,
   all_descriptors: &HashMap<String, &FileDescriptorProto>,
   descriptor_hash: &str
-) -> anyhow::Result<(Option<InteractionResponse>, Option<InteractionResponse>)> {
+) -> anyhow::Result<(Option<InteractionResponse>, Vec<InteractionResponse>)> {
   trace!(">> configure_protobuf_service({service_name}, {config:?}, {descriptor_hash})");
 
   debug!("Looking for service and method with name '{}'", service_name);
@@ -147,7 +146,7 @@ fn configure_protobuf_service(
       trace!("response = {response:?}");
       (
         request.map(|r| InteractionResponse { plugin_configuration: plugin_configuration.clone(), .. r }),
-        response.map(|r| InteractionResponse { plugin_configuration, .. r })
+        response.iter().map(|r| InteractionResponse { plugin_configuration: plugin_configuration.clone(), .. r.clone() }).collect()
       )
     })
 }
@@ -160,7 +159,7 @@ fn construct_protobuf_interaction_for_service(
   method_name: &str,
   all_descriptors: &HashMap<String, &FileDescriptorProto>,
   file_descriptor: &FileDescriptorProto
-) -> anyhow::Result<(Option<InteractionResponse>, Option<InteractionResponse>)> {
+) -> anyhow::Result<(Option<InteractionResponse>, Vec<InteractionResponse>)> {
   trace!(">> construct_protobuf_interaction_for_service({config:?}, {service_name}, {method_name})");
 
   let (method_name, service_part) = if method_name.contains(':') {
@@ -201,26 +200,34 @@ fn construct_protobuf_interaction_for_service(
   };
 
   let response_part_config = if service_part == "response" {
-    config.clone()
+    vec![ config.clone() ]
   } else {
     config.get("response").map(|response_config| {
       response_config.kind.as_ref().map(|kind| {
         match kind {
-          Kind::StructValue(s) => Some(proto_struct_to_btreemap(s)),
-          _ => None
+          Kind::StructValue(s) => vec![ proto_struct_to_btreemap(s) ],
+          Kind::ListValue(l) => l.values.iter().map(|v| {
+            v.kind.as_ref().map(|k| match k {
+              Kind::StructValue(s) => Some(proto_struct_to_btreemap(s)),
+              _ => None
+            }).flatten()
+          })
+            .filter_map(|v| v)
+            .collect(),
+          _ => vec![]
         }
-      }).flatten()
+      })
     })
       .flatten()
       .unwrap_or_default()
   };
-  let response_part = if response_part_config.is_empty() {
-    None
-  } else {
-    construct_protobuf_interaction_for_message(
-      &response_descriptor, &response_part_config, output_message_name,
-      "response", file_descriptor).ok()
-  };
+  let response_part = response_part_config.iter().map(|i| {
+      construct_protobuf_interaction_for_message(
+        &response_descriptor, i, output_message_name, "response",
+        file_descriptor).ok()
+    })
+    .flatten()
+    .collect();
 
   Ok((request_part, response_part))
 }

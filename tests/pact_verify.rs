@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use expectest::prelude::{be_ok, expect};
+use expectest::prelude::*;
 use log::{debug, error};
 use maplit::hashmap;
 use pact_models::http_utils::HttpAuth;
@@ -13,7 +13,15 @@ use pact_models::v4::message_parts::MessageContents;
 use pact_plugin_driver::plugin_manager::shutdown_plugins;
 use pact_plugin_driver::proto::InitPluginRequest;
 use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
-use pact_verifier::{FilterInfo, NullRequestFilterExecutor, PactSource, ProviderInfo, VerificationOptions, verify_provider_async};
+use pact_verifier::{
+  FilterInfo,
+  NullRequestFilterExecutor,
+  PactSource,
+  ProviderInfo,
+  PublishOptions,
+  VerificationOptions,
+  verify_provider_async
+};
 use pact_verifier::callback_executors::ProviderStateExecutor;
 use prost::bytes::BytesMut;
 use prost::Message;
@@ -186,11 +194,16 @@ async fn verify_plugin() {
   version.push_str("+");
   version.push_str(built_info::GIT_COMMIT_HASH.unwrap_or("0"));
 
-  let options: VerificationOptions<NullRequestFilterExecutor> = VerificationOptions {
-    publish: env::var("CI").map(|v| v == "true").unwrap_or(false),
-    provider_version: Some(version),
-    provider_tags: vec!["pact-protobuf-plugin".to_string()],
-    .. VerificationOptions::default()
+  let options: VerificationOptions<NullRequestFilterExecutor> = VerificationOptions::default();
+  let publish_options = if env::var("CI").map(|v| v == "true").unwrap_or(false)  {
+    Some(PublishOptions {
+      provider_version: Some(version),
+      build_url: None,
+      provider_tags: vec!["pact-protobuf-plugin".to_string()],
+      provider_branch: None
+    })
+  } else {
+    None
   };
   let ps_executor = NoopProviderStateExecutor {};
 
@@ -203,8 +216,14 @@ async fn verify_plugin() {
   tokio::spawn(server.launch());
 
   // Execute the verification
-  let result = verify_provider_async(provider_info, vec![source], FilterInfo::None,
-    vec![], options, &Arc::new(ps_executor), None
+  let result = verify_provider_async(
+    provider_info,
+    vec![source],
+    FilterInfo::None,
+    vec![],
+    &options,
+    publish_options.as_ref(),
+    &Arc::new(ps_executor), None
   ).await;
 
   // Need to shutdown all the things, otherwise we could leave hanging plugin processes.
@@ -212,5 +231,5 @@ async fn verify_plugin() {
   shutdown_plugins();
 
   // Confirm that the verification was successful
-  expect!(result).to(be_ok().value(true));
+  expect!(result.unwrap().result).to(be_true());
 }

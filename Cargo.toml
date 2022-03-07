@@ -20,9 +20,9 @@ tokio = { version = "1.0", features = ["full"] }
 uuid = { version = "0.8", features = ["v4"] }
 log = "0.4"
 maplit = "1.0.2"
-pact_matching = "0.12.2"
-pact_models = "0.2.7"
-pact-plugin-driver = "0.0.17"
+pact_matching = "0.12.3"
+pact_models = "0.3.0"
+pact-plugin-driver = { version = "0.1", path = "/home/ronald/Development/Projects/Pact/pact-plugins/drivers/rust/driver" }
 anyhow = "1.0.42"
 futures = "0.3"
 async-trait = "0.1.51"
@@ -37,6 +37,13 @@ base64 = "0.13.0"
 bytes = "1.1.0"
 clap = "2.33.3"
 log4rs = "1.0.0"
+hyper = { version = "0.14", features = [ "full" ] }
+tower = { version = "0.4", features = [ "full" ] }
+tower-service = { version = "0.3" }
+tower-http = { version = "0.2.3", features = [ "full" ] }
+http-body = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dependencies.reqwest]
 version = "0.11"
@@ -44,9 +51,9 @@ default-features = false
 features = ["rustls-tls", "rustls-tls-native-roots", "json", "gzip", "deflate"]
 
 [dev-dependencies]
-expectest = "0.12.0"
-env_logger = "0.8"
-pact_verifier = "0.12.3"
+expectest = "0.12"
+env_logger = "0.9"
+pact_verifier = "0.13.2"
 serde = "1.0.130"
 rocket = "0.5.0-rc.1"
 test-log = "0.2.8"

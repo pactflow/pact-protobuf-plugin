@@ -18,6 +18,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloc-no-stdlib"
+version = "2.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "35ef4730490ad1c4eae5c4325b2a95f521d023e5c885853ff7aca0a6a1631db3"
+
+[[package]]
+name = "alloc-stdlib"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "697ed7edc0f1711de49ce108c541623a0af97c6c60b2f6e2b65229847ac843c2"
+dependencies = [
+ "alloc-no-stdlib",
+]
+
+[[package]]
 name = "ansi_term"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -53,6 +68,7 @@ version = "0.3.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2bf394cfbbe876f0ac67b13b6ca819f9c9f2fb9ec67223cceb1555fbab1c31a"
 dependencies = [
+ "brotli",
  "flate2",
  "futures-core",
  "memchr",
@@ -147,6 +163,27 @@ name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
+
+[[package]]
+name = "brotli"
+version = "3.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f838e47a451d5a8fa552371f80024dd6ace9b7acdf25c4c3d0f9bc6816fb1c39"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
+ "brotli-decompressor",
+]
+
+[[package]]
+name = "brotli-decompressor"
+version = "2.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59ad2d4653bf5ca36ae797b1f4bb4dbddb60ce49ca4aed8a2ce4829f60425b80"
+dependencies = [
+ "alloc-no-stdlib",
+ "alloc-stdlib",
+]
 
 [[package]]
 name = "buf_redux"
@@ -475,9 +512,9 @@ dependencies = [
 
 [[package]]
 name = "env_logger"
-version = "0.8.4"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a19187fea3ac7e84da7dacf48de0c45d63c6a76f9490dae389aead16c243fce3"
+checksum = "0b2cf0344971ee6c64c31be0d530793fba457d322dfec2810c453d0ef228f9c3"
 dependencies = [
  "atty",
  "humantime",
@@ -722,6 +759,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab5ef0d4909ef3724cc8cce6ccc8572c5c817592e9285f5464f8e86f8bd3726e"
 
 [[package]]
+name = "hdrhistogram"
+version = "7.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "31672b7011be2c4f7456c4ddbcb40e7e9a4a9fad8efe49a6ebaf5f307d0109c0"
+dependencies = [
+ "base64",
+ "byteorder",
+ "crossbeam-channel",
+ "flate2",
+ "nom",
+ "num-traits",
+]
+
+[[package]]
 name = "heck"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -775,6 +826,12 @@ dependencies = [
  "http",
  "pin-project-lite",
 ]
+
+[[package]]
+name = "http-range-header"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bfe8eed0a9285ef776bb792479ea3834e8b94e13d615c2f66d03dd50a435a29"
 
 [[package]]
 name = "httparse"
@@ -897,6 +954,15 @@ name = "ipnet"
 version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "35e70ee094dc02fd9c13fdad4940090f22dbd6ac7c9e7094a46cf0232a50bc7c"
+
+[[package]]
+name = "iri-string"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f0f7638c1e223529f1bfdc48c8b133b9e0b434094d1d28473161ee48b235f78"
+dependencies = [
+ "nom",
+]
 
 [[package]]
 name = "itertools"
@@ -1347,37 +1413,6 @@ dependencies = [
 
 [[package]]
 name = "pact-plugin-driver"
-version = "0.0.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66754036142fadeb2d30fc184d4df61c80ff5d606c0c038782f2bf41cb26479b"
-dependencies = [
- "anyhow",
- "async-trait",
- "bytes",
- "home",
- "itertools",
- "lazy_static",
- "log",
- "maplit",
- "md5",
- "os_info",
- "pact_models 0.2.7",
- "prost",
- "prost-types",
- "regex",
- "reqwest",
- "semver 1.0.6",
- "serde",
- "serde_json",
- "sysinfo 0.20.5",
- "tokio",
- "tonic",
- "tonic-build",
- "uuid",
-]
-
-[[package]]
-name = "pact-plugin-driver"
 version = "0.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "02ea32ffd125f86a8319df5716bcb85e7eb74a3205ca2cb8caabc7418dc071a6"
@@ -1392,7 +1427,7 @@ dependencies = [
  "maplit",
  "md5",
  "os_info",
- "pact_models 0.3.0",
+ "pact_models",
  "prost",
  "prost-types",
  "regex",
@@ -1400,7 +1435,36 @@ dependencies = [
  "semver 1.0.6",
  "serde",
  "serde_json",
- "sysinfo 0.21.2",
+ "sysinfo",
+ "tokio",
+ "tonic",
+ "tonic-build",
+ "uuid",
+]
+
+[[package]]
+name = "pact-plugin-driver"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "home",
+ "itertools",
+ "lazy_static",
+ "log",
+ "maplit",
+ "md5",
+ "os_info",
+ "pact_models",
+ "prost",
+ "prost-types",
+ "regex",
+ "reqwest",
+ "semver 1.0.6",
+ "serde",
+ "serde_json",
+ "sysinfo",
  "tokio",
  "tonic",
  "tonic-build",
@@ -1420,15 +1484,17 @@ dependencies = [
  "env_logger",
  "expectest",
  "futures",
+ "http-body",
+ "hyper",
  "itertools",
  "log",
  "log4rs",
  "maplit",
  "md5",
  "os_info",
- "pact-plugin-driver 0.0.17",
+ "pact-plugin-driver 0.1.0",
  "pact_matching",
- "pact_models 0.2.7",
+ "pact_models",
  "pact_verifier",
  "prost",
  "prost-types",
@@ -1441,6 +1507,11 @@ dependencies = [
  "test-log",
  "tokio",
  "tonic",
+ "tower",
+ "tower-http",
+ "tower-service",
+ "tracing",
+ "tracing-subscriber",
  "trim-margin",
  "uuid",
  "zip",
@@ -1471,7 +1542,7 @@ dependencies = [
  "nom",
  "onig",
  "pact-plugin-driver 0.0.18",
- "pact_models 0.3.0",
+ "pact_models",
  "rand",
  "reqwest",
  "semver 1.0.6",
@@ -1480,43 +1551,6 @@ dependencies = [
  "sxd-document",
  "tokio",
  "tree_magic_mini",
- "uuid",
-]
-
-[[package]]
-name = "pact_models"
-version = "0.2.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a9d11f951c3f000d652536e1391f1225deceb59f5732b850776daf84f094d3c"
-dependencies = [
- "anyhow",
- "ariadne",
- "base64",
- "bytes",
- "chrono",
- "chrono-tz",
- "fs2",
- "hex",
- "indextree",
- "itertools",
- "lazy_static",
- "lenient_semver",
- "log",
- "logos",
- "maplit",
- "mime",
- "nom",
- "onig",
- "parse-zoneinfo",
- "rand",
- "rand_regex",
- "regex",
- "regex-syntax",
- "reqwest",
- "semver 1.0.6",
- "serde",
- "serde_json",
- "sxd-document",
  "uuid",
 ]
 
@@ -1560,9 +1594,9 @@ dependencies = [
 
 [[package]]
 name = "pact_verifier"
-version = "0.12.4"
+version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2298728109e4f796ecd0eca7e28086589b7567cdbef5a2ca3cad6d1225877128"
+checksum = "c010ed26fa209457bbf8c949712b8f95cec414f9e683b39f294bf8f7700b3b98"
 dependencies = [
  "ansi_term",
  "anyhow",
@@ -1578,9 +1612,9 @@ dependencies = [
  "log",
  "maplit",
  "mime",
- "pact-plugin-driver 0.0.17",
+ "pact-plugin-driver 0.0.18",
  "pact_matching",
- "pact_models 0.2.7",
+ "pact_models",
  "regex",
  "reqwest",
  "serde",
@@ -2512,21 +2546,6 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.20.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e223c65cd36b485a34c2ce6e38efa40777d31c4166d9076030c74cdcf971679f"
-dependencies = [
- "cfg-if",
- "core-foundation-sys",
- "libc",
- "ntapi",
- "once_cell",
- "rayon",
- "winapi",
-]
-
-[[package]]
-name = "sysinfo"
 version = "0.21.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f88d66f3341b688163d3585037954ff276cf24a234d015b30025318a3e3449a"
@@ -2838,6 +2857,7 @@ checksum = "9a89fd63ad6adf737582df5db40d286574513c69a11dac5214dc3b5603d6713e"
 dependencies = [
  "futures-core",
  "futures-util",
+ "hdrhistogram",
  "indexmap",
  "pin-project",
  "pin-project-lite",
@@ -2845,6 +2865,35 @@ dependencies = [
  "slab",
  "tokio",
  "tokio-util 0.7.0",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
+name = "tower-http"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bb284cac1883d54083a0edbdc9cabf931dfed87455f8c7266c01ece6394a43a"
+dependencies = [
+ "async-compression",
+ "base64",
+ "bitflags",
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "http",
+ "http-body",
+ "http-range-header",
+ "httpdate",
+ "iri-string",
+ "mime",
+ "mime_guess",
+ "percent-encoding",
+ "pin-project-lite",
+ "tokio",
+ "tokio-util 0.7.0",
+ "tower",
  "tower-layer",
  "tower-service",
  "tracing",
