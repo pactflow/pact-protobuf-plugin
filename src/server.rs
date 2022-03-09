@@ -407,7 +407,10 @@ impl PactPlugin for ProtobufPactPlugin {
     &self,
     request: tonic::Request<proto::ShutdownMockServerRequest>,
   ) -> Result<tonic::Response<proto::ShutdownMockServerResponse>, tonic::Status> {
-    unimplemented!()
+    //unimplemented!()
+    Ok(tonic::Response::new(proto::ShutdownMockServerResponse {
+
+    }))
   }
 }
 

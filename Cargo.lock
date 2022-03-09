@@ -1484,6 +1484,7 @@ dependencies = [
  "env_logger",
  "expectest",
  "futures",
+ "http",
  "http-body",
  "hyper",
  "itertools",

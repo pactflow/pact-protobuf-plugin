@@ -11,24 +11,27 @@ use std::thread;
 use anyhow::{anyhow, Error};
 use bytes::Bytes;
 use futures::StreamExt;
+use http::Method;
+use http_body::Body;
 use http_body::combinators::UnsyncBoxBody;
-use hyper::{Body, http, Request, Response};
+use hyper::{http, Request, Response};
 use hyper::server::accept;
 use hyper::service::make_service_fn;
-use log::{debug, error};
+use itertools::Itertools;
 use pact_models::content_types::ContentType;
 use pact_models::json_utils::json_to_string;
 use pact_models::plugins::PluginData;
 use pact_models::prelude::v4::V4Pact;
 use pact_models::v4::sync_message::SynchronousMessage;
 use prost::Message;
-use prost_types::{FileDescriptorSet, ServiceDescriptorProto};
+use prost_types::{DescriptorProto, FileDescriptorSet, MethodDescriptorProto, ServiceDescriptorProto};
 use serde_json::Value;
 use tokio::net::TcpListener;
 use tokio::runtime::Handle;
 use tokio::sync::oneshot::{channel, Sender};
 use tokio::task;
 use tokio::task::{JoinHandle, spawn_blocking};
+use tonic::body::{BoxBody, empty_body};
 use tonic::metadata::MetadataMap;
 use tonic::Status;
 use tower::make::Shared;
@@ -36,10 +39,13 @@ use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::trace::TraceLayer;
 use tower_service::Service;
-use tracing::{Instrument, instrument, span, trace, Level};
+use tracing::{debug, error, Instrument, instrument, Level, span, trace, trace_span};
 use uuid::Uuid;
 
+use crate::dynamic_message::PactCodec;
+use crate::mock_service::MockService;
 use crate::tcp::TcpIncoming;
+use crate::utils::{find_message_type_by_name, find_message_type_in_file_descriptor, last_name};
 
 /// Main mock server that will use the provided Pact to provide behaviour
 #[derive(Debug, Clone)]
@@ -47,7 +53,7 @@ pub struct GrpcMockServer {
   pact: V4Pact,
   plugin_config: PluginData,
   descriptors: HashMap<String, FileDescriptorSet>,
-  routes: HashMap<String, (String, ServiceDescriptorProto, SynchronousMessage)>,
+  routes: HashMap<String, (FileDescriptorSet, ServiceDescriptorProto, MethodDescriptorProto, SynchronousMessage)>,
   /// Server key for this mock server
   pub server_key: String
 }
@@ -96,7 +102,12 @@ impl GrpcMockServer
                 descriptors.file.iter().filter_map(|d| {
                   d.service.iter().find(|s| s.name.clone().unwrap_or_default() == service_name)
                 }).next()
-                  .map(|d| (service_name.to_string(), (method_name.to_string(), d.clone(), i.clone())))
+                  .map(|d| {
+                    d.method.iter()
+                      .find(|m| m.name.clone().unwrap_or_default() == method_name)
+                      .map(|m| (format!("{service_name}/{method_name}"), (descriptors.clone(), d.clone(), m.clone(), i.clone())))
+                  })
+                  .flatten()
               } else {
                 // protobuf service was not properly formed <SERViCE>/<METHOD>
                 None
@@ -173,7 +184,7 @@ impl GrpcMockServer
 }
 
 impl Service<hyper::Request<hyper::Body>> for GrpcMockServer  {
-  type Response = hyper::Response<hyper::Body>;
+  type Response = hyper::Response<BoxBody>;
   type Error = anyhow::Error;
   type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
@@ -181,12 +192,16 @@ impl Service<hyper::Request<hyper::Body>> for GrpcMockServer  {
     Poll::Ready(Ok(()))
   }
 
+  #[instrument]
   fn call(&mut self, req: Request<hyper::Body>) -> Self::Future {
-    Box::pin(async {
-      debug!("Got request {req:?}");
+    let routes = self.routes.clone();
+    let descriptors = self.descriptors.clone();
 
-      let (parts, body) = req.into_parts();
-      let metadata = MetadataMap::from_headers(parts.headers);
+    Box::pin(async move {
+      trace!("Got request {req:?}");
+
+      let headers = req.headers();
+      let metadata = MetadataMap::from_headers(headers.clone());
 
       // If Content-Type does not begin with "application/grpc", gRPC servers SHOULD respond with HTTP status of 415 (Unsupported Media Type).
       // This will prevent other HTTP/2 clients from interpreting a gRPC error response, which uses status 200 (OK), as successful.
@@ -199,7 +214,44 @@ impl Service<hyper::Request<hyper::Body>> for GrpcMockServer  {
 
       match content_type {
         Ok(content_type) => if content_type.base_type().to_string().starts_with("application/grpc") {
-          Ok(invalid_media())
+          let method = req.method();
+          if method == &Method::POST {
+            let request_path = req.uri().path();
+            debug!("gRPC request received {}", request_path);
+            if let Some((service, method)) = request_path[1..].split_once("/") {
+              let service_name = last_name(service);
+              let lookup = format!("{service_name}/{method}");
+              if let Some((file, descriptor, method_descriptor, message)) = routes.get(lookup.as_str()) {
+                trace!(message = message.to_string().as_str(), "Found route for service call");
+
+                let input_message_name = method_descriptor.input_type.clone().unwrap_or_default();
+                let input_message = find_message_type_by_name(last_name(input_message_name.as_str()), file);
+                let output_message_name = method_descriptor.output_type.clone().unwrap_or_default();
+                let output_message = find_message_type_by_name(last_name(output_message_name.as_str()), file);
+
+                if let Ok(input_message) = input_message {
+                  if let Ok(output_message) = output_message {
+                    let codec = PactCodec::new(file, &input_message, &output_message, message);
+                    let mock_service = MockService::new(file, method_descriptor, &input_message, &output_message, message);
+                    let mut grpc = tonic::server::Grpc::new(codec);
+                    Ok(grpc.unary(mock_service, req).await)
+                  } else {
+                    error!("Did not find the descriptor for the output message {}", output_message_name);
+                    Ok(failed_precondition())
+                  }
+                } else {
+                  error!("Did not find the descriptor for the input message {}", input_message_name);
+                  Ok(failed_precondition())
+                }
+              } else {
+                Ok(invalid_path())
+              }
+            } else {
+              Ok(invalid_path())
+            }
+          } else {
+            Ok(invalid_method())
+          }
         } else {
           Ok(invalid_media())
         }
@@ -208,13 +260,38 @@ impl Service<hyper::Request<hyper::Body>> for GrpcMockServer  {
           Ok(invalid_media())
         }
       }
-    }.instrument(tracing::trace_span!("mock server handler", key = self.server_key.as_str())))
+    }.instrument(trace_span!("mock_server_handler", key = self.server_key.as_str())))
   }
 }
 
-fn invalid_media() -> Response<Body> {
+fn invalid_media() -> Response<BoxBody> {
   http::Response::builder()
     .status(415)
-    .body(Body::empty())
+    .body(empty_body())
+    .unwrap()
+}
+
+fn invalid_method() -> Response<BoxBody> {
+  http::Response::builder()
+    .status(405)
+    .body(empty_body())
+    .unwrap()
+}
+
+fn invalid_path() -> Response<BoxBody> {
+  http::Response::builder()
+    .status(200)
+    .header("grpc-status", "12")
+    .header("content-type", "application/grpc")
+    .body(empty_body())
+    .unwrap()
+}
+
+fn failed_precondition() -> Response<BoxBody> {
+  http::Response::builder()
+    .status(200)
+    .header("grpc-status", "9")
+    .header("content-type", "application/grpc")
+    .body(empty_body())
     .unwrap()
 }

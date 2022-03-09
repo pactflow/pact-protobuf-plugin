@@ -7,6 +7,8 @@ mod utils;
 mod matching;
 pub mod mock_server;
 pub mod tcp;
+mod dynamic_message;
+mod mock_service;
 
 pub mod built_info {
   include!(concat!(env!("OUT_DIR"), "/built.rs"));

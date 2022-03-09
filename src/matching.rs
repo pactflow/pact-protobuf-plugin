@@ -119,7 +119,7 @@ pub fn match_service(
 }
 
 /// Compare the expected message to the actual one
-fn compare(
+pub(crate) fn compare(
   message_descriptor: &DescriptorProto,
   expected_message: &[ProtobufField],
   actual_message: &[ProtobufField],
