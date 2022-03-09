@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::anyhow;
-use futures::FutureExt;
 use itertools::{Either, Itertools};
 use log::{debug, LevelFilter, max_level, trace, warn};
 use maplit::{btreemap, hashmap};

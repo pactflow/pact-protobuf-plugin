@@ -5,7 +5,7 @@ use bytes::BufMut;
 use itertools::Itertools;
 use pact_models::v4::sync_message::SynchronousMessage;
 use prost::encoding::{encode_key, encode_varint, WireType};
-use prost_types::{DescriptorProto, FileDescriptorSet, ServiceDescriptorProto};
+use prost_types::{DescriptorProto, FileDescriptorSet};
 use tonic::codec::{Codec, DecodeBuf, Decoder, EncodeBuf, Encoder};
 use tonic::Status;
 use tracing::{error, instrument, trace};

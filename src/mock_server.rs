@@ -4,48 +4,39 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::thread;
 
-use anyhow::{anyhow, Error};
+use anyhow::anyhow;
 use bytes::Bytes;
-use futures::StreamExt;
 use http::Method;
-use http_body::Body;
-use http_body::combinators::UnsyncBoxBody;
 use hyper::{http, Request, Response};
 use hyper::server::accept;
-use hyper::service::make_service_fn;
-use itertools::Itertools;
 use pact_models::content_types::ContentType;
 use pact_models::json_utils::json_to_string;
 use pact_models::plugins::PluginData;
 use pact_models::prelude::v4::V4Pact;
 use pact_models::v4::sync_message::SynchronousMessage;
 use prost::Message;
-use prost_types::{DescriptorProto, FileDescriptorSet, MethodDescriptorProto, ServiceDescriptorProto};
+use prost_types::{FileDescriptorSet, MethodDescriptorProto, ServiceDescriptorProto};
 use serde_json::Value;
 use tokio::net::TcpListener;
 use tokio::runtime::Handle;
-use tokio::sync::oneshot::{channel, Sender};
-use tokio::task;
-use tokio::task::{JoinHandle, spawn_blocking};
 use tonic::body::{BoxBody, empty_body};
 use tonic::metadata::MetadataMap;
 use tonic::Status;
 use tower::make::Shared;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tower_service::Service;
-use tracing::{debug, error, Instrument, instrument, Level, span, trace, trace_span};
+use tracing::{debug, error, Instrument, instrument, trace, trace_span};
 use uuid::Uuid;
 
 use crate::dynamic_message::PactCodec;
 use crate::mock_service::MockService;
 use crate::tcp::TcpIncoming;
-use crate::utils::{find_message_type_by_name, find_message_type_in_file_descriptor, last_name};
+use crate::utils::{find_message_type_by_name, last_name};
 
 /// Main mock server that will use the provided Pact to provide behaviour
 #[derive(Debug, Clone)]
@@ -53,7 +44,7 @@ pub struct GrpcMockServer {
   pact: V4Pact,
   plugin_config: PluginData,
   descriptors: HashMap<String, FileDescriptorSet>,
-  routes: HashMap<String, (FileDescriptorSet, ServiceDescriptorProto, MethodDescriptorProto, SynchronousMessage)>,
+  routes: HashMap<String, (FileDescriptorSet, MethodDescriptorProto, SynchronousMessage)>,
   /// Server key for this mock server
   pub server_key: String
 }
@@ -105,7 +96,7 @@ impl GrpcMockServer
                   .map(|d| {
                     d.method.iter()
                       .find(|m| m.name.clone().unwrap_or_default() == method_name)
-                      .map(|m| (format!("{service_name}/{method_name}"), (descriptors.clone(), d.clone(), m.clone(), i.clone())))
+                      .map(|m| (format!("{service_name}/{method_name}"), (descriptors.clone(), m.clone(), i.clone())))
                   })
                   .flatten()
               } else {
@@ -148,7 +139,10 @@ impl GrpcMockServer
       trace!("setting up middleware");
       let service = ServiceBuilder::new()
         // High level logging of requests and responses
-        .layer(TraceLayer::new_for_http())
+        .layer(
+          TraceLayer::new_for_http()
+            .make_span_with(DefaultMakeSpan::new().include_headers(true)),
+        )
         // Share an `Arc<State>` with all requests
         // .layer(AddExtensionLayer::new(Arc::new(state)))
         // Compress responses
@@ -221,8 +215,8 @@ impl Service<hyper::Request<hyper::Body>> for GrpcMockServer  {
             if let Some((service, method)) = request_path[1..].split_once("/") {
               let service_name = last_name(service);
               let lookup = format!("{service_name}/{method}");
-              if let Some((file, descriptor, method_descriptor, message)) = routes.get(lookup.as_str()) {
-                trace!(message = message.to_string().as_str(), "Found route for service call");
+              if let Some((file, method_descriptor, message)) = routes.get(lookup.as_str()) {
+                trace!(message = message.description.as_str(), "Found route for service call");
 
                 let input_message_name = method_descriptor.input_type.clone().unwrap_or_default();
                 let input_message = find_message_type_by_name(last_name(input_message_name.as_str()), file);

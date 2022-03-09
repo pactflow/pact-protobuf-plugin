@@ -10,7 +10,7 @@ use pact_models::v4::sync_message::SynchronousMessage;
 use prost_types::{DescriptorProto, FileDescriptorSet, MethodDescriptorProto, ServiceDescriptorProto};
 use tonic::{Request, Response, Status};
 use tower_service::Service;
-use tracing::{debug, error, Instrument, instrument, Level, span, trace, trace_span};
+use tracing::{error, instrument, trace};
 
 use crate::dynamic_message::DynamicMessage;
 use crate::matching::compare;

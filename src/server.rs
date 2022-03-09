@@ -18,7 +18,6 @@ use prost::Message;
 use prost_types::FileDescriptorSet;
 use prost_types::value::Kind;
 use serde_json::Value;
-use uuid::Uuid;
 use crate::matching::{match_message, match_service};
 use crate::mock_server::GrpcMockServer;
 
