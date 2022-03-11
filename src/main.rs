@@ -25,6 +25,7 @@ use tonic::transport::Server;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::sensitive_headers::SetSensitiveHeadersLayer;
+use tower_http::ServiceBuilderExt;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
@@ -128,7 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       .layer(SetSensitiveHeadersLayer::new(once(header::AUTHORIZATION)))
       // Log all requests and responses
       .layer(
-        TraceLayer::new_for_http()
+        TraceLayer::new_for_grpc()
           .make_span_with(DefaultMakeSpan::new().include_headers(true)),
       )
       .into_inner();

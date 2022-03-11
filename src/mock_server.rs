@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::Mutex;
 use std::task::{Context, Poll};
 use std::thread;
 
@@ -12,6 +13,9 @@ use bytes::Bytes;
 use http::Method;
 use hyper::{http, Request, Response};
 use hyper::server::accept;
+use lazy_static::lazy_static;
+use maplit::hashmap;
+use pact_matching::BodyMatchResult;
 use pact_models::content_types::ContentType;
 use pact_models::json_utils::json_to_string;
 use pact_models::plugins::PluginData;
@@ -22,12 +26,14 @@ use prost_types::{FileDescriptorSet, MethodDescriptorProto, ServiceDescriptorPro
 use serde_json::Value;
 use tokio::net::TcpListener;
 use tokio::runtime::Handle;
+use tokio::sync::oneshot::{channel, Sender};
 use tonic::body::{BoxBody, empty_body};
 use tonic::metadata::MetadataMap;
 use tonic::Status;
 use tower::make::Shared;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
+use tower_http::ServiceBuilderExt;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tower_service::Service;
 use tracing::{debug, error, Instrument, instrument, trace, trace_span};
@@ -37,6 +43,10 @@ use crate::dynamic_message::PactCodec;
 use crate::mock_service::MockService;
 use crate::tcp::TcpIncoming;
 use crate::utils::{find_message_type_by_name, last_name};
+
+lazy_static! {
+  pub static ref MOCK_SERVER_STATE: Mutex<HashMap<String, (Sender<()>, Vec<(String, BodyMatchResult)>)>> = Mutex::new(hashmap!{});
+}
 
 /// Main mock server that will use the provided Pact to provide behaviour
 #[derive(Debug, Clone)]
@@ -126,12 +136,19 @@ impl GrpcMockServer
     let addr: SocketAddr = format!("{interface}:{port}").parse()?;
     trace!("setting up mock server {addr}");
 
-    // let (snd, rcr) = channel();
+    let (snd, rcr) = channel::<()>();
+    {
+      let mut guard = MOCK_SERVER_STATE.lock().unwrap();
+      guard.insert(self.server_key.clone(), (snd, vec![]));
+    }
+
     let listener = TcpListener::bind(addr).await?;
     let address = listener.local_addr()?;
 
     let handle = Handle::current();
+    // because Rust
     let key = self.server_key.clone();
+    let key2 = self.server_key.clone();
     let result = thread::spawn(move || {
       let incoming_stream = TcpIncoming { inner: listener };
       let incoming = accept::from_stream(incoming_stream);
@@ -139,10 +156,7 @@ impl GrpcMockServer
       trace!("setting up middleware");
       let service = ServiceBuilder::new()
         // High level logging of requests and responses
-        .layer(
-          TraceLayer::new_for_http()
-            .make_span_with(DefaultMakeSpan::new().include_headers(true)),
-        )
+        .trace_for_grpc()
         // Share an `Arc<State>` with all requests
         // .layer(AddExtensionLayer::new(Arc::new(state)))
         // Compress responses
@@ -160,8 +174,11 @@ impl GrpcMockServer
         //   //   // .http2_keep_alive_timeout(http2_keepalive_timeout)
         //   //   // .http2_max_frame_size(max_frame_size)
         .serve(Shared::new(service))
-        // .with_graceful_shutdown(rcr)
-        .instrument(tracing::trace_span!("mock server", key = key.as_str(), port = address.port()));
+        .with_graceful_shutdown(async move {
+          let _ = rcr.await;
+          trace!("Received shutdown signal for server {}", key);
+        })
+        .instrument(tracing::trace_span!("mock server", key = key2.as_str(), port = address.port()));
 
       trace!("spawning server onto runtime");
       handle.spawn(server);
@@ -190,6 +207,7 @@ impl Service<hyper::Request<hyper::Body>> for GrpcMockServer  {
   fn call(&mut self, req: Request<hyper::Body>) -> Self::Future {
     let routes = self.routes.clone();
     let descriptors = self.descriptors.clone();
+    let server_key = self.server_key.clone();
 
     Box::pin(async move {
       trace!("Got request {req:?}");
@@ -226,7 +244,7 @@ impl Service<hyper::Request<hyper::Body>> for GrpcMockServer  {
                 if let Ok(input_message) = input_message {
                   if let Ok(output_message) = output_message {
                     let codec = PactCodec::new(file, &input_message, &output_message, message);
-                    let mock_service = MockService::new(file, method_descriptor, &input_message, &output_message, message);
+                    let mock_service = MockService::new(file, method_descriptor, &input_message, &output_message, message, server_key.as_str());
                     let mut grpc = tonic::server::Grpc::new(codec);
                     Ok(grpc.unary(mock_service, req).await)
                   } else {

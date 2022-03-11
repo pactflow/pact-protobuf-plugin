@@ -4,7 +4,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use maplit::hashmap;
-use pact_matching::{CoreMatchingContext, DiffConfig};
+use pact_matching::{BodyMatchResult, CoreMatchingContext, DiffConfig};
 
 use pact_models::v4::sync_message::SynchronousMessage;
 use prost_types::{DescriptorProto, FileDescriptorSet, MethodDescriptorProto, ServiceDescriptorProto};
@@ -15,6 +15,7 @@ use tracing::{error, instrument, trace};
 use crate::dynamic_message::DynamicMessage;
 use crate::matching::compare;
 use crate::message_decoder::decode_message;
+use crate::mock_server::MOCK_SERVER_STATE;
 
 #[derive(Debug, Clone)]
 pub(crate) struct MockService {
@@ -23,6 +24,7 @@ pub(crate) struct MockService {
   method_descriptor: MethodDescriptorProto,
   input_message: DescriptorProto,
   output_message: DescriptorProto,
+  server_key: String,
 }
 
 impl MockService {
@@ -43,21 +45,29 @@ impl MockService {
     let mismatches = compare(&message_descriptor, &expected_message, &request.proto_fields(), &context,
                              &expected_message_bytes, &self.file_descriptor_set);
     match mismatches {
-      Ok(result) => if result.all_matched() {
-        // TODO: need to invoke any generators
-        let mut response_bytes = self.message.response.first()
-          .map(|d| d.contents.value())
-          .flatten()
-          .unwrap_or_default();
-        trace!("Response message has {} bytes", response_bytes.len());
-        let response_message = decode_message(&mut response_bytes, &response_descriptor, &self.file_descriptor_set)
-          .map_err(|err| Status::invalid_argument(err.to_string()))?;
-        let message = DynamicMessage::new(&response_descriptor, &response_message);
-        trace!("Sending message {message:?}");
-        Ok(Response::new(message))
-      } else {
-        error!("Failed to match the request message - {result:?}");
-        Err(Status::failed_precondition(format!("Failed to match the request message - {result:?}")))
+      Ok(result) => {
+        // record the result in the static store
+        let mut guard = MOCK_SERVER_STATE.lock().unwrap();
+        if let Some((_, results)) = guard.get_mut(self.server_key.as_str()) {
+          results.push((self.method_descriptor.name.clone().unwrap_or("unknown method".into()), result.clone()));
+        }
+
+        if result.all_matched() {
+          // TODO: need to invoke any generators
+          let mut response_bytes = self.message.response.first()
+            .map(|d| d.contents.value())
+            .flatten()
+            .unwrap_or_default();
+          trace!("Response message has {} bytes", response_bytes.len());
+          let response_message = decode_message(&mut response_bytes, &response_descriptor, &self.file_descriptor_set)
+            .map_err(|err| Status::invalid_argument(err.to_string()))?;
+          let message = DynamicMessage::new(&response_descriptor, &response_message);
+          trace!("Sending message {message:?}");
+          Ok(Response::new(message))
+        } else {
+          error!("Failed to match the request message - {result:?}");
+          Err(Status::failed_precondition(format!("Failed to match the request message - {result:?}")))
+        }
       }
       Err(err) => {
         error!("Failed to match the request message - {err}");
@@ -73,14 +83,16 @@ impl MockService {
     method_descriptor: &MethodDescriptorProto,
     input_message: &DescriptorProto,
     output_message: &DescriptorProto,
-    message: &SynchronousMessage
+    message: &SynchronousMessage,
+    server_key: &str
   ) -> Self {
     MockService {
       file_descriptor_set: file_descriptor_set.clone(),
       method_descriptor: method_descriptor.clone(),
       input_message: input_message.clone(),
       output_message: output_message.clone(),
-      message: message.clone()
+      message: message.clone(),
+      server_key: server_key.to_string()
     }
   }
 }

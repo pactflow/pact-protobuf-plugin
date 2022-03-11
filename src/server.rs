@@ -19,7 +19,7 @@ use prost_types::FileDescriptorSet;
 use prost_types::value::Kind;
 use serde_json::Value;
 use crate::matching::{match_message, match_service};
-use crate::mock_server::GrpcMockServer;
+use crate::mock_server::{GrpcMockServer, MOCK_SERVER_STATE};
 
 use crate::protobuf::process_proto;
 use crate::protoc::setup_protoc;
@@ -406,10 +406,49 @@ impl PactPlugin for ProtobufPactPlugin {
     &self,
     request: tonic::Request<proto::ShutdownMockServerRequest>,
   ) -> Result<tonic::Response<proto::ShutdownMockServerResponse>, tonic::Status> {
-    //unimplemented!()
-    Ok(tonic::Response::new(proto::ShutdownMockServerResponse {
-
-    }))
+    let request = request.get_ref();
+    let mut guard = MOCK_SERVER_STATE.lock().unwrap();
+    if let Some((shutdown, results)) = guard.get(&request.server_key) {
+      let ok = results.iter().all(|(_, r)| *r == BodyMatchResult::Ok);
+      let results = results.iter().map(|(path, r)| {
+        proto::MockServerResult {
+          path: path.clone(),
+          mismatches: r.mismatches().iter().map(|m| {
+            match m {
+              Mismatch::BodyMismatch { path, mismatch, expected, actual } => {
+                proto::ContentMismatch {
+                  expected: expected.as_ref().map(|d| d.to_vec()),
+                  actual: actual.as_ref().map(|d| d.to_vec()),
+                  mismatch: mismatch.clone(),
+                  path: path.clone(),
+                  .. proto::ContentMismatch::default()
+                }
+              }
+              _ => proto::ContentMismatch {
+                mismatch: m.description(),
+                .. proto::ContentMismatch::default()
+              }
+            }
+          }).collect(),
+          .. proto::MockServerResult::default()
+        }
+      }).collect();
+      guard.remove(&request.server_key);
+      Ok(tonic::Response::new(proto::ShutdownMockServerResponse {
+        ok,
+        results
+      }))
+    } else {
+      Ok(tonic::Response::new(proto::ShutdownMockServerResponse {
+        ok: false,
+        results: vec![
+          proto::MockServerResult {
+            error: format!("Did not find any mock server results for a server with ID {}", request.server_key),
+            .. proto::MockServerResult::default()
+          }
+        ]
+      }))
+    }
   }
 }
 

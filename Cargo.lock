@@ -1468,6 +1468,7 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-build",
+ "tracing",
  "uuid",
 ]
 
@@ -1488,6 +1489,7 @@ dependencies = [
  "http-body",
  "hyper",
  "itertools",
+ "lazy_static",
  "log",
  "log4rs",
  "maplit",
