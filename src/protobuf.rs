@@ -195,7 +195,9 @@ fn construct_protobuf_interaction_for_service(
     None
   } else {
     construct_protobuf_interaction_for_message(&request_descriptor,
-      &request_part_config, input_message_name, "request", file_descriptor).ok()
+      &request_part_config, input_message_name, "", file_descriptor)
+      .ok()
+      .map(|i| InteractionResponse { part_name: "request".into(), .. i } )
   };
 
   let response_part_config = if service_part == "response" {
@@ -222,10 +224,11 @@ fn construct_protobuf_interaction_for_service(
   };
   let response_part = response_part_config.iter().map(|i| {
       construct_protobuf_interaction_for_message(
-        &response_descriptor, i, output_message_name, "response",
+        &response_descriptor, i, output_message_name, "",
         file_descriptor).ok()
     })
     .flatten()
+    .map(|i| InteractionResponse { part_name: "response".into(), .. i } )
     .collect();
 
   Ok((request_part, response_part))
