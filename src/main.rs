@@ -112,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Bind to a OS provided port and create a TCP listener
-    let addr: SocketAddr = "0.0.0.0:0".parse()?;
+    let addr: SocketAddr = "[::1]:0".parse()?;
     let listener = TcpListener::bind(addr).await?;
     let address = listener.local_addr()?;
 
