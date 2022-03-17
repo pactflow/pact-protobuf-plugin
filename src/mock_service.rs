@@ -20,11 +20,12 @@ use crate::mock_server::MOCK_SERVER_STATE;
 #[derive(Debug, Clone)]
 pub(crate) struct MockService {
   file_descriptor_set: FileDescriptorSet,
+  service_name: String,
   message: SynchronousMessage,
   method_descriptor: MethodDescriptorProto,
   input_message: DescriptorProto,
   output_message: DescriptorProto,
-  server_key: String,
+  server_key: String
 }
 
 impl MockService {
@@ -49,7 +50,8 @@ impl MockService {
         // record the result in the static store
         let mut guard = MOCK_SERVER_STATE.lock().unwrap();
         if let Some((_, results)) = guard.get_mut(self.server_key.as_str()) {
-          results.push((self.method_descriptor.name.clone().unwrap_or("unknown method".into()), result.clone()));
+          let key = format!("{}/{}", self.service_name, self.method_descriptor.name.clone().unwrap_or("unknown method".into()));
+          results.push((key, result.clone()));
         }
 
         if result.all_matched() {
@@ -80,6 +82,7 @@ impl MockService {
 impl MockService {
   pub(crate) fn new(
     file_descriptor_set: &FileDescriptorSet,
+    service_name: &str,
     method_descriptor: &MethodDescriptorProto,
     input_message: &DescriptorProto,
     output_message: &DescriptorProto,
@@ -88,6 +91,7 @@ impl MockService {
   ) -> Self {
     MockService {
       file_descriptor_set: file_descriptor_set.clone(),
+      service_name: service_name.to_string(),
       method_descriptor: method_descriptor.clone(),
       input_message: input_message.clone(),
       output_message: output_message.clone(),

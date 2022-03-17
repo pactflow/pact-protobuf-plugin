@@ -64,14 +64,14 @@ impl PactPlugin for ProtobufPactPlugin {
           r#type: EntryType::ContentMatcher as i32,
           key: "protobuf".to_string(),
           values: hashmap! {
-            "content-types".to_string() => "application/protobuf".to_string()
+            "content-types".to_string() => "application/protobuf;application/grpc".to_string()
           }
         },
         proto::CatalogueEntry {
           r#type: EntryType::ContentGenerator as i32,
           key: "protobuf".to_string(),
           values: hashmap! {
-            "content-types".to_string() => "application/protobuf".to_string()
+            "content-types".to_string() => "application/protobuf;application/grpc".to_string()
           }
         },
         proto::CatalogueEntry {
