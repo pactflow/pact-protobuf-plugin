@@ -75,7 +75,7 @@ impl PactPlugin for ProtobufPactPlugin {
           }
         },
         proto::CatalogueEntry {
-          r#type: EntryType::MockServer as i32,
+          r#type: EntryType::Transport as i32,
           key: "grpc".to_string(),
           values: hashmap! {}
         }
@@ -408,7 +408,7 @@ impl PactPlugin for ProtobufPactPlugin {
   ) -> Result<tonic::Response<proto::ShutdownMockServerResponse>, tonic::Status> {
     let request = request.get_ref();
     let mut guard = MOCK_SERVER_STATE.lock().unwrap();
-    if let Some((shutdown, results)) = guard.get(&request.server_key) {
+    if let Some((_, results)) = guard.get(&request.server_key) {
       let ok = results.iter().all(|(_, r)| *r == BodyMatchResult::Ok);
       let results = results.iter().map(|(path, r)| {
         proto::MockServerResult {
@@ -545,17 +545,22 @@ mod tests {
 
     let response = plugin.init_plugin(Request::new(request)).await.unwrap();
     let response_message = response.get_ref();
-    expect!(response_message.catalogue.iter()).to(have_count(2));
+    expect!(response_message.catalogue.iter()).to(have_count(3));
 
     let first = &response_message.catalogue.get(0).unwrap();
     expect!(first.key.as_str()).to(be_equal_to("protobuf"));
     expect!(first.r#type).to(be_equal_to(EntryType::ContentMatcher as i32));
-    expect!(first.values.get("content-types")).to(be_some().value(&"application/protobuf".to_string()));
+    expect!(first.values.get("content-types")).to(be_some().value(&"application/protobuf;application/grpc".to_string()));
 
     let second = &response_message.catalogue.get(1).unwrap();
     expect!(second.key.as_str()).to(be_equal_to("protobuf"));
     expect!(second.r#type).to(be_equal_to(EntryType::ContentGenerator as i32));
-    expect!(second.values.get("content-types")).to(be_some().value(&"application/protobuf".to_string()));
+    expect!(second.values.get("content-types")).to(be_some().value(&"application/protobuf;application/grpc".to_string()));
+
+    let third = &response_message.catalogue.get(2).unwrap();
+    expect!(third.key.as_str()).to(be_equal_to("grpc"));
+    expect!(third.r#type).to(be_equal_to(EntryType::Transport as i32));
+    expect!(third.values.iter()).to(be_empty());
   }
 
   #[tokio::test]

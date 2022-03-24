@@ -4,10 +4,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use maplit::hashmap;
-use pact_matching::{BodyMatchResult, CoreMatchingContext, DiffConfig};
+use pact_matching::{CoreMatchingContext, DiffConfig};
 
 use pact_models::v4::sync_message::SynchronousMessage;
-use prost_types::{DescriptorProto, FileDescriptorSet, MethodDescriptorProto, ServiceDescriptorProto};
+use prost_types::{DescriptorProto, FileDescriptorSet, MethodDescriptorProto};
 use tonic::{Request, Response, Status};
 use tower_service::Service;
 use tracing::{error, instrument, trace};

@@ -22,7 +22,7 @@ log = "0.4"
 maplit = "1.0.2"
 pact_matching = "0.12.3"
 pact_models = "0.3.0"
-pact-plugin-driver = { version = "0.1", path = "/home/ronald/Development/Projects/Pact/pact-plugins/drivers/rust/driver" }
+pact-plugin-driver = "0.1"
 anyhow = "1.0.42"
 futures = "0.3"
 async-trait = "0.1.51"
