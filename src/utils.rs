@@ -7,10 +7,13 @@ use anyhow::anyhow;
 use bytes::BytesMut;
 use log::{trace, warn};
 use maplit::hashmap;
+use pact_models::pact::load_pact_from_json;
+use pact_models::prelude::v4::V4Pact;
 use prost_types::{DescriptorProto, EnumDescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet, Value};
 use prost_types::field_descriptor_proto::Label;
 use prost_types::value::Kind;
 use serde_json::json;
+use tracing::error;
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
 
@@ -203,6 +206,33 @@ pub fn proto_type_name(value: &Value) -> String {
       Kind::ListValue(_) => "List".to_string(),
     }
     None => "Unknown".to_string()
+  }
+}
+
+/// Parse the JSON string into a V4 Pact model
+pub(crate) fn parse_pact_from_request_json(pact_json: &str, source: &str) -> anyhow::Result<V4Pact> {
+  // Parse the Pact JSON string into a JSON struct
+  let json: serde_json::Value = match serde_json::from_str(pact_json) {
+    Ok(json) => json,
+    Err(err) => {
+      error!("Failed to parse Pact JSON: {}", err);
+      return Err(anyhow!("Failed to parse Pact JSON: {}", err));
+    }
+  };
+
+  // Load the Pact model from the JSON
+  match load_pact_from_json(source, &json) {
+    Ok(pact) => match pact.as_v4_pact() {
+      Ok(pact) => Ok(pact),
+      Err(err) => {
+        error!("Failed to parse Pact JSON, not a V4 Pact: {}", err);
+        Err(anyhow!("Failed to parse Pact JSON, not a V4 Pact: {}", err))
+      }
+    },
+    Err(err) => {
+      error!("Failed to parse Pact JSON to a V4 Pact: {}", err);
+      Err(anyhow!("Failed to parse Pact JSON: {}", err))
+    }
   }
 }
 

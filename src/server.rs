@@ -1,28 +1,33 @@
 //! Module provides the main gRPC server for the plugin process
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
-use anyhow::anyhow;
 
+use anyhow::anyhow;
 use bytes::Bytes;
 use log::{debug, error, info, trace};
 use maplit::{btreemap, hashmap};
 use pact_matching::{BodyMatchResult, Mismatch};
-use pact_models::pact::load_pact_from_json;
+use pact_models::json_utils::json_to_string;
+use pact_models::prelude::{ContentType, OptionalBody};
 use pact_plugin_driver::plugin_models::PactPluginManifest;
 use pact_plugin_driver::proto;
+use pact_plugin_driver::proto::body::ContentTypeHint;
 use pact_plugin_driver::proto::catalogue_entry::EntryType;
 use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
-use pact_plugin_driver::utils::proto_value_to_string;
+use pact_plugin_driver::utils::{proto_struct_to_map, proto_value_to_string, to_proto_value};
 use prost::Message;
 use prost_types::FileDescriptorSet;
 use prost_types::value::Kind;
-use serde_json::Value;
+use tonic::metadata::KeyAndValueRef;
+
 use crate::matching::{match_message, match_service};
 use crate::mock_server::{GrpcMockServer, MOCK_SERVER_STATE};
-
 use crate::protobuf::process_proto;
 use crate::protoc::setup_protoc;
+use crate::utils::parse_pact_from_request_json;
+use crate::verification::verify_interaction;
 
 /// Plugin gRPC server implementation
 #[derive(Debug, Default)]
@@ -332,38 +337,14 @@ impl PactPlugin for ProtobufPactPlugin {
     &self,
     request: tonic::Request<proto::StartMockServerRequest>,
   ) -> Result<tonic::Response<proto::StartMockServerResponse>, tonic::Status> {
+    debug!("Received start mock server request");
     let request = request.get_ref();
-
-    // Parse the Pact JSON string
-    let json: Value = match serde_json::from_str(request.pact.as_str()) {
-      Ok(json) => json,
-      Err(err) => {
-        error!("Failed to parse Pact JSON: {}", err);
-        return Ok(tonic::Response::new(proto::StartMockServerResponse {
-          response: Some(proto::start_mock_server_response::Response::Error(format!("Failed to parse Pact JSON: {}", err))),
-          .. proto::StartMockServerResponse::default()
-        }));
-      }
-    };
-    // Load the Pact model from the JSON
-    let pact = match load_pact_from_json("grpc:start_mock_server", &json) {
-      Ok(pact) => match pact.as_v4_pact() {
-        Ok(pact) => pact,
-        Err(err) => {
-          error!("Failed to parse Pact JSON, not a V4 Pact: {}", err);
-          return Ok(tonic::Response::new(proto::StartMockServerResponse {
-            response: Some(proto::start_mock_server_response::Response::Error(format!("Failed to parse Pact JSON, not a V4 Pact: {}", err))),
-            .. proto::StartMockServerResponse::default()
-          }));
-        }
-      },
-      Err(err) => {
-        error!("Failed to parse Pact JSON to a V4 Pact: {}", err);
-        return Ok(tonic::Response::new(proto::StartMockServerResponse {
-          response: Some(proto::start_mock_server_response::Response::Error(format!("Failed to parse Pact JSON: {}", err))),
-          .. proto::StartMockServerResponse::default()
-        }));
-      }
+    let pact = match parse_pact_from_request_json(request.pact.as_str(), "grpc:start_mock_server") {
+      Ok(pact) => pact,
+      Err(err) => return Ok(tonic::Response::new(proto::StartMockServerResponse {
+        response: Some(proto::start_mock_server_response::Response::Error(format!("Failed to parse Pact JSON: {}", err))),
+        ..proto::StartMockServerResponse::default()
+      }))
     };
 
     trace!("Got pact {pact:?}");
@@ -449,6 +430,147 @@ impl PactPlugin for ProtobufPactPlugin {
         ]
       }))
     }
+  }
+
+  async fn prepare_interaction_for_verification(
+    &self,
+    request: tonic::Request<proto::VerificationPreparationRequest>,
+  ) -> Result<tonic::Response<proto::VerificationPreparationResponse>, tonic::Status> {
+    debug!("Received prepare interaction for verification request");
+
+    let request = request.get_ref();
+    trace!("Got prepare_interaction_for_verification request {:?}", request);
+
+    let pact = match parse_pact_from_request_json(request.pact.as_str(), "grpc:prepare_interaction_for_verification") {
+      Ok(pact) => pact,
+      Err(err) => return Ok(tonic::Response::new(proto::VerificationPreparationResponse {
+        response: Some(proto::verification_preparation_response::Response::Error(format!("Failed to parse Pact JSON: {}", err))),
+        .. proto::VerificationPreparationResponse::default()
+      }))
+    };
+
+    let interaction = match pact.interactions.iter()
+      .find(|i| i.key().unwrap_or_default() == request.interaction_key) {
+      Some(interaction) => match interaction.as_v4_sync_message() {
+        Some(interaction) => interaction,
+        None => return Ok(tonic::Response::new(proto::VerificationPreparationResponse {
+          response: Some(proto::verification_preparation_response::Response::Error(format!("gRPC interactions must be of type V4 synchronous message, got {}", interaction.type_of()))),
+          .. proto::VerificationPreparationResponse::default()
+        }))
+      },
+      None => return Ok(tonic::Response::new(proto::VerificationPreparationResponse {
+        response: Some(proto::verification_preparation_response::Response::Error(format!("Did not find interaction with key {} in the Pact", request.interaction_key))),
+        .. proto::VerificationPreparationResponse::default()
+      }))
+    };
+
+    // TODO: use any generators here
+    let request_body = interaction.request.contents.value().unwrap_or_default();
+    let request = tonic::Request::new(request_body.clone());
+
+    let mut request_metadata: HashMap<String, proto::MetadataValue> = interaction.request.metadata.iter()
+      .map(|(k, v)| (k.clone(), proto::MetadataValue {
+        value: Some(proto::metadata_value::Value::NonBinaryValue(to_proto_value(v)))
+      }))
+      .collect();
+
+    if let Some((_, plugin_data)) = interaction.plugin_config.iter().find(|(key, _)| key.as_str() == "protobuf") {
+      if let Some(service) = plugin_data.get("service") {
+        request_metadata.insert("request-path".to_string(), proto::MetadataValue {
+          value: Some(proto::metadata_value::Value::NonBinaryValue(prost_types::Value {
+            kind: Some(prost_types::value::Kind::StringValue(json_to_string(service)))
+          }))
+        });
+      }
+    }
+
+    for entry in request.metadata().iter() {
+      match entry {
+        KeyAndValueRef::Ascii(k, v) => {
+          request_metadata.insert(k.to_string(), proto::MetadataValue {
+            value: Some(proto::metadata_value::Value::NonBinaryValue(prost_types::Value {
+              kind: Some(prost_types::value::Kind::StringValue(v.to_str().unwrap_or_default().to_string()))
+            }))
+          });
+        }
+        KeyAndValueRef::Binary(k, v) => {
+          request_metadata.insert(k.to_string(), proto::MetadataValue {
+            value: Some(proto::metadata_value::Value::BinaryValue(v.to_bytes().unwrap_or_default().to_vec()))
+          });
+        }
+      }
+    }
+
+    let integration_data = proto::InteractionData {
+      body: Some(proto::Body {
+        content_type: "application/grpc".to_string(),
+        content: Some(request_body.to_vec()),
+        content_type_hint: ContentTypeHint::Binary as i32,
+      }),
+      metadata: request_metadata
+    };
+
+    Ok(tonic::Response::new(proto::VerificationPreparationResponse {
+      response: Some(proto::verification_preparation_response::Response::InteractionData(integration_data)),
+      .. proto::VerificationPreparationResponse::default()
+    }))
+  }
+
+  async fn verify_interaction(
+    &self,
+    request: tonic::Request<proto::VerifyInteractionRequest>
+  ) -> Result<tonic::Response<proto::VerifyInteractionResponse>, tonic::Status> {
+    debug!("Received verify interaction request");
+
+    let request = request.get_ref();
+    trace!("Got verify_interaction request {:?}", request);
+
+    let pact = match parse_pact_from_request_json(request.pact.as_str(), "grpc:verify_interaction") {
+      Ok(pact) => pact,
+      Err(err) => return Ok(tonic::Response::new(proto::VerifyInteractionResponse {
+        response: Some(proto::verify_interaction_response::Response::Error(format!("Failed to parse Pact JSON: {}", err))),
+        .. proto::VerifyInteractionResponse::default()
+      }))
+    };
+
+    let interaction = match pact.interactions.iter()
+      .find(|i| i.key().unwrap_or_default() == request.interaction_key) {
+      Some(interaction) => match interaction.as_v4_sync_message() {
+        Some(interaction) => interaction,
+        None => return Ok(tonic::Response::new(proto::VerifyInteractionResponse {
+          response: Some(proto::verify_interaction_response::Response::Error(format!("gRPC interactions must be of type V4 synchronous message, got {}", interaction.type_of()))),
+          .. proto::VerifyInteractionResponse::default()
+        }))
+      },
+      None => return Ok(tonic::Response::new(proto::VerifyInteractionResponse {
+        response: Some(proto::verify_interaction_response::Response::Error(format!("Did not find interaction with key {} in the Pact", request.interaction_key))),
+        .. proto::VerifyInteractionResponse::default()
+      }))
+    };
+
+    let body = match &request.interaction_data {
+      Some(data) => match &data.body {
+        Some(b) => match &b.content {
+          Some(data) => OptionalBody::Present(Bytes::from(data.clone()), Some(ContentType::from(b.content_type.clone())), None),
+          None => OptionalBody::Missing
+        }
+        None => OptionalBody::Missing
+      }
+      None => OptionalBody::Missing
+    };
+    let metadata = match &request.interaction_data {
+      Some(data) => data.metadata.clone(),
+      None => HashMap::default()
+    };
+
+    let result = verify_interaction(&pact, &interaction, &body,
+                                    &metadata,
+                                    &request.config.as_ref().map(|c| proto_struct_to_map(c)).unwrap_or_default());
+
+    Ok(tonic::Response::new(proto::VerifyInteractionResponse {
+      response: Some(proto::verify_interaction_response::Response::Error(format!("TODO"))),
+      .. proto::VerifyInteractionResponse::default()
+    }))
   }
 }
 
