@@ -11,22 +11,26 @@ use maplit::{btreemap, hashmap};
 use pact_matching::{BodyMatchResult, Mismatch};
 use pact_models::json_utils::json_to_string;
 use pact_models::prelude::{ContentType, OptionalBody};
+use pact_models::prelude::v4::V4Pact;
+use pact_models::v4::interaction::V4Interaction;
+use pact_models::v4::sync_message::SynchronousMessage;
 use pact_plugin_driver::plugin_models::PactPluginManifest;
 use pact_plugin_driver::proto;
 use pact_plugin_driver::proto::body::ContentTypeHint;
 use pact_plugin_driver::proto::catalogue_entry::EntryType;
 use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
-use pact_plugin_driver::utils::{proto_struct_to_map, proto_value_to_string, to_proto_value};
+use pact_plugin_driver::utils::{proto_struct_to_map, proto_value_to_json, proto_value_to_string, to_proto_value};
 use prost::Message;
 use prost_types::FileDescriptorSet;
 use prost_types::value::Kind;
+use serde_json::Value;
 use tonic::metadata::KeyAndValueRef;
 
 use crate::matching::{match_message, match_service};
 use crate::mock_server::{GrpcMockServer, MOCK_SERVER_STATE};
 use crate::protobuf::process_proto;
 use crate::protoc::setup_protoc;
-use crate::utils::parse_pact_from_request_json;
+use crate::utils::{get_descriptors_for_interaction, lookup_interaction_by_id, lookup_interaction_config, lookup_service_descriptors_for_interaction, parse_pact_from_request_json};
 use crate::verification::verify_interaction;
 
 /// Plugin gRPC server implementation
@@ -142,7 +146,9 @@ impl PactPlugin for ProtobufPactPlugin {
 
     let config_for_interaction = match pact_configuration.fields.get(&message_key)
       .map(|config| match &config.kind {
-        Some(Kind::StructValue(s)) => s.fields.clone(),
+        Some(Kind::StructValue(s)) => s.fields.iter()
+          .map(|(k, v)| (k.clone(), proto_value_to_json(v)))
+          .collect(),
         _ => btreemap!{}
       }) {
       Some(config) => config,
@@ -167,50 +173,11 @@ impl PactPlugin for ProtobufPactPlugin {
       }))
     }
 
-    // Get the encoded Protobuf descriptors from the Pact level configuration
-    let descriptor_bytes_encoded = config_for_interaction.get("protoDescriptors")
-      .map(proto_value_to_string)
-      .flatten()
-      .unwrap_or_default();
-    if descriptor_bytes_encoded.is_empty() {
-      error!("Plugin configuration item with key '{}' is required", message_key);
-      return Ok(tonic::Response::new(proto::CompareContentsResponse {
-        error: format!("Plugin configuration item with key '{}' is required", message_key),
-        .. proto::CompareContentsResponse::default()
-      }))
-    }
-
-    // The descriptor bytes will be base 64 encoded.
-    let descriptor_bytes = match base64::decode(descriptor_bytes_encoded) {
-      Ok(bytes) => Bytes::from(bytes),
-      Err(err) => {
-        error!("Failed to decode the Protobuf descriptor - {}", err);
-        return Ok(tonic::Response::new(proto::CompareContentsResponse {
-          error: format!("Failed to decode the Protobuf descriptor - {}", err),
-          .. proto::CompareContentsResponse::default()
-        }))
-      }
-    };
-    debug!("Protobuf file descriptor set is {} bytes", descriptor_bytes.len());
-
-    // Get an MD5 hash of the bytes to check that it matches the descriptor key
-    let digest = md5::compute(&descriptor_bytes);
-    let descriptor_hash = format!("{:x}", digest);
-    if descriptor_hash != message_key {
-      error!("Protobuf descriptors checksum failed. Expected {} but got {}", message_key, descriptor_hash);
-      return Ok(tonic::Response::new(proto::CompareContentsResponse {
-        error: format!("Protobuf descriptors checksum failed. Expected {} but got {}", message_key, descriptor_hash),
-        .. proto::CompareContentsResponse::default()
-      }))
-    }
-
-    // Decode the Protobuf descriptors
-    let descriptors = match FileDescriptorSet::decode(descriptor_bytes) {
+    let descriptors = match get_descriptors_for_interaction(message_key.as_str(), &config_for_interaction) {
       Ok(descriptors) => descriptors,
       Err(err) => {
-        error!("Failed to decode the Protobuf descriptors - {}", err);
         return Ok(tonic::Response::new(proto::CompareContentsResponse {
-          error: format!("Failed to decode the Protobuf descriptors - {}", err),
+          error: err.to_string(),
           .. proto::CompareContentsResponse::default()
         }))
       }
@@ -328,6 +295,7 @@ impl PactPlugin for ProtobufPactPlugin {
   ) -> Result<tonic::Response<proto::GenerateContentResponse>, tonic::Status> {
     debug!("Generate content request");
     let message = request.get_ref();
+    // TODO: apply any generators here
     Ok(tonic::Response::new(proto::GenerateContentResponse {
       contents: message.contents.clone()
     }))
@@ -449,19 +417,30 @@ impl PactPlugin for ProtobufPactPlugin {
       }))
     };
 
-    let interaction = match pact.interactions.iter()
-      .find(|i| i.key().unwrap_or_default() == request.interaction_key) {
-      Some(interaction) => match interaction.as_v4_sync_message() {
+    let interaction = match lookup_interaction_by_id(request.interaction_key.as_str(), &pact) {
+      Ok(interaction) => match interaction.as_v4_sync_message() {
         Some(interaction) => interaction,
         None => return Ok(tonic::Response::new(proto::VerificationPreparationResponse {
           response: Some(proto::verification_preparation_response::Response::Error(format!("gRPC interactions must be of type V4 synchronous message, got {}", interaction.type_of()))),
-          .. proto::VerificationPreparationResponse::default()
+          ..proto::VerificationPreparationResponse::default()
         }))
-      },
-      None => return Ok(tonic::Response::new(proto::VerificationPreparationResponse {
-        response: Some(proto::verification_preparation_response::Response::Error(format!("Did not find interaction with key {} in the Pact", request.interaction_key))),
-        .. proto::VerificationPreparationResponse::default()
-      }))
+      }
+      Err(err) => {
+        return Ok(tonic::Response::new(proto::VerificationPreparationResponse {
+          response: Some(proto::verification_preparation_response::Response::Error(err.to_string())),
+          ..proto::VerificationPreparationResponse::default()
+        }))
+      }
+    };
+
+    let (service_desc, method_desc, package, _, _) = match lookup_service_descriptors_for_interaction(&interaction, &pact) {
+      Ok(values) => values,
+      Err(err) => {
+        return Ok(tonic::Response::new(proto::VerificationPreparationResponse {
+          response: Some(proto::verification_preparation_response::Response::Error(err.to_string())),
+          ..proto::VerificationPreparationResponse::default()
+        }))
+      }
     };
 
     // TODO: use any generators here
@@ -474,14 +453,13 @@ impl PactPlugin for ProtobufPactPlugin {
       }))
       .collect();
 
-    if let Some((_, plugin_data)) = interaction.plugin_config.iter().find(|(key, _)| key.as_str() == "protobuf") {
-      if let Some(service) = plugin_data.get("service") {
-        request_metadata.insert("request-path".to_string(), proto::MetadataValue {
-          value: Some(proto::metadata_value::Value::NonBinaryValue(prost_types::Value {
-            kind: Some(prost_types::value::Kind::StringValue(json_to_string(service)))
-          }))
-        });
-      }
+    if let Some(plugin_data) = lookup_interaction_config(&interaction) {
+      let path = format!("/{}.{}/{}", package, service_desc.name.unwrap_or_default(), method_desc.name.unwrap_or_default());
+      request_metadata.insert("request-path".to_string(), proto::MetadataValue {
+        value: Some(proto::metadata_value::Value::NonBinaryValue(prost_types::Value {
+          kind: Some(prost_types::value::Kind::StringValue(path))
+        }))
+      });
     }
 
     for entry in request.metadata().iter() {
@@ -533,19 +511,20 @@ impl PactPlugin for ProtobufPactPlugin {
       }))
     };
 
-    let interaction = match pact.interactions.iter()
-      .find(|i| i.key().unwrap_or_default() == request.interaction_key) {
-      Some(interaction) => match interaction.as_v4_sync_message() {
+    let interaction = match lookup_interaction_by_id(request.interaction_key.as_str(), &pact) {
+      Ok(interaction) => match interaction.as_v4_sync_message() {
         Some(interaction) => interaction,
         None => return Ok(tonic::Response::new(proto::VerifyInteractionResponse {
           response: Some(proto::verify_interaction_response::Response::Error(format!("gRPC interactions must be of type V4 synchronous message, got {}", interaction.type_of()))),
           .. proto::VerifyInteractionResponse::default()
         }))
-      },
-      None => return Ok(tonic::Response::new(proto::VerifyInteractionResponse {
-        response: Some(proto::verify_interaction_response::Response::Error(format!("Did not find interaction with key {} in the Pact", request.interaction_key))),
-        .. proto::VerifyInteractionResponse::default()
-      }))
+      }
+      Err(err) => {
+        return Ok(tonic::Response::new(proto::VerifyInteractionResponse {
+          response: Some(proto::verify_interaction_response::Response::Error(err.to_string())),
+          ..proto::VerifyInteractionResponse::default()
+        }))
+      }
     };
 
     let body = match &request.interaction_data {
@@ -563,14 +542,21 @@ impl PactPlugin for ProtobufPactPlugin {
       None => HashMap::default()
     };
 
-    let result = verify_interaction(&pact, &interaction, &body,
-                                    &metadata,
-                                    &request.config.as_ref().map(|c| proto_struct_to_map(c)).unwrap_or_default());
-
-    Ok(tonic::Response::new(proto::VerifyInteractionResponse {
-      response: Some(proto::verify_interaction_response::Response::Error(format!("TODO"))),
-      .. proto::VerifyInteractionResponse::default()
-    }))
+    let config = request.config.as_ref().map(|c| proto_struct_to_map(c)).unwrap_or_default();
+    match verify_interaction(&pact, &interaction, &body, &metadata, &config).await {
+      Ok(result) => {
+        Ok(tonic::Response::new(proto::VerifyInteractionResponse {
+          response: Some(proto::verify_interaction_response::Response::Error(format!("TODO"))),
+          .. proto::VerifyInteractionResponse::default()
+        }))
+      }
+      Err(err) => {
+        Ok(tonic::Response::new(proto::VerifyInteractionResponse {
+          response: Some(proto::verify_interaction_response::Response::Error(err.to_string())),
+          .. proto::VerifyInteractionResponse::default()
+        }))
+      }
+    }
   }
 }
 

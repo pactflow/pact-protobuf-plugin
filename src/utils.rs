@@ -1,19 +1,23 @@
 //! Shared utilities
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 
 use anyhow::anyhow;
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use log::{trace, warn};
 use maplit::hashmap;
+use pact_models::json_utils::json_to_string;
 use pact_models::pact::load_pact_from_json;
 use pact_models::prelude::v4::V4Pact;
-use prost_types::{DescriptorProto, EnumDescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet, Value};
+use pact_models::v4::interaction::V4Interaction;
+use pact_plugin_driver::utils::proto_value_to_string;
+use prost::Message;
+use prost_types::{DescriptorProto, EnumDescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet, MethodDescriptorProto, ServiceDescriptorProto, Value};
 use prost_types::field_descriptor_proto::Label;
 use prost_types::value::Kind;
 use serde_json::json;
-use tracing::error;
+use tracing::{debug, error};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
 
@@ -234,6 +238,116 @@ pub(crate) fn parse_pact_from_request_json(pact_json: &str, source: &str) -> any
       Err(anyhow!("Failed to parse Pact JSON: {}", err))
     }
   }
+}
+
+/// Lookup up the interaction in the Pact file, given the ID
+pub(crate) fn lookup_interaction_by_id<'a>(interaction_key: &str, pact: &'a V4Pact) -> anyhow::Result<&'a Box<dyn V4Interaction>> {
+  match pact.interactions.iter()
+    .find(|i| i.key().unwrap_or_default() == interaction_key) {
+    Some(interaction) => Ok(interaction),
+    None => Err(anyhow!("Did not find interaction with key '{}' in the Pact", interaction_key))
+  }
+}
+
+pub(crate) fn lookup_interaction_config(interaction: &dyn V4Interaction) -> Option<HashMap<String, serde_json::Value>> {
+  interaction.plugin_config().iter()
+    .find_map(|(key, value)| {
+      if key.as_str() == "protobuf" {
+        Some(value.clone())
+      } else {
+        None
+      }
+    })
+}
+
+/// Returns the service descriptors for the given interaction
+pub(crate) fn lookup_service_descriptors_for_interaction(
+  interaction: &dyn V4Interaction,
+  pact: &V4Pact
+) -> anyhow::Result<(ServiceDescriptorProto, MethodDescriptorProto, String, DescriptorProto, DescriptorProto)> {
+  let interaction_config = lookup_interaction_config(interaction)
+    .ok_or_else(|| anyhow!("Interaction does not have any Protobuf configuration"))?;
+  let descriptor_key = interaction_config.get("descriptorKey")
+    .map(json_to_string)
+    .ok_or_else(|| anyhow!("Interaction descriptorKey was missing in Pact file"))?;
+  let service = interaction_config.get("service")
+    .map(json_to_string)
+    .ok_or_else(|| anyhow!("Interaction gRPC service was missing in Pact file"))?;
+  let (service_name, method_name) = service.split_once('/')
+    .ok_or_else(|| anyhow!("Service name '{}' is not valid, it should be of the form <SERVICE>/<METHOD>", service))?;
+
+  let plugin_config = pact.plugin_data.iter()
+    .find(|data| data.name == "protobuf")
+    .map(|data| &data.configuration)
+    .ok_or_else(|| anyhow!("Did not find any Protobuf configuration in the Pact file"))?
+    .iter()
+    .map(|(k, v)| (k.clone(), v.clone()))
+    .collect();
+  let descriptors = get_descriptors_for_interaction(descriptor_key.as_str(),
+    &plugin_config)?;
+  let (file_descriptor, service_descriptor) = find_service_descriptor(&descriptors, service_name)?;
+  let method_descriptor = service_descriptor.method.iter().find(|method_desc| {
+    method_desc.name.clone().unwrap_or_default() == method_name
+  }).ok_or_else(|| anyhow!("Did not find the method {} in the Protobuf file descriptor for service '{}'", method_name, service))?;
+  let input_message = method_descriptor.input_type.clone().unwrap_or_default();
+  let input_type = last_name(input_message.as_str());
+  let output_message = method_descriptor.output_type.clone().unwrap_or_default();
+  let output_type = last_name(output_message.as_str());
+  let input_descriptor = find_message_type_by_name(input_type, &descriptors)?;
+  let output_descriptor = find_message_type_by_name(output_type, &descriptors)?;
+
+  let package = file_descriptor.package.clone();
+  Ok((service_descriptor.clone(), method_descriptor.clone(), package.unwrap_or_default(), input_descriptor, output_descriptor))
+}
+
+/// Get the encoded Protobuf descriptors from the Pact level configuration for the message key
+pub(crate) fn get_descriptors_for_interaction(
+  message_key: &str,
+  plugin_config: &BTreeMap<String, serde_json::Value>
+) -> anyhow::Result<FileDescriptorSet> {
+  let descriptor_config = plugin_config.get(message_key)
+    .ok_or_else(|| anyhow!("Plugin configuration item with key '{}' is required", message_key))?
+    .as_object()
+    .ok_or_else(|| anyhow!("Plugin configuration item with key '{}' has an invalid format", message_key))?;
+  let descriptor_bytes_encoded = descriptor_config.get("protoDescriptors")
+    .map(json_to_string)
+    .unwrap_or_default();
+  if descriptor_bytes_encoded.is_empty() {
+    return Err(anyhow!("Plugin configuration item with key '{}' is required", message_key));
+  }
+
+  // The descriptor bytes will be base 64 encoded.
+  let descriptor_bytes = match base64::decode(descriptor_bytes_encoded) {
+    Ok(bytes) => Bytes::from(bytes),
+    Err(err) => {
+      return Err(anyhow!("Failed to decode the Protobuf descriptor - {}", err));
+    }
+  };
+  debug!("Protobuf file descriptor set is {} bytes", descriptor_bytes.len());
+
+  // Get an MD5 hash of the bytes to check that it matches the descriptor key
+  let digest = md5::compute(&descriptor_bytes);
+  let descriptor_hash = format!("{:x}", digest);
+  if descriptor_hash != message_key {
+    return Err(anyhow!("Protobuf descriptors checksum failed. Expected {} but got {}", message_key, descriptor_hash));
+  }
+
+  // Decode the Protobuf descriptors
+  FileDescriptorSet::decode(descriptor_bytes)
+    .map_err(|err| anyhow!(err))
+}
+
+pub(crate) fn find_service_descriptor<'a>(
+  descriptors: &'a FileDescriptorSet,
+  service_name: &str
+) -> anyhow::Result<(&'a FileDescriptorProto, &'a ServiceDescriptorProto)> {
+  descriptors.file.iter().filter_map(|descriptor| {
+    descriptor.service.iter()
+      .find(|p| p.name.clone().unwrap_or_default() == service_name)
+      .map(|p| (descriptor, p))
+  })
+    .next()
+    .ok_or_else(|| anyhow!("Did not find a descriptor for service '{}'", service_name))
 }
 
 #[cfg(test)]

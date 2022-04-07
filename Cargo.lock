@@ -1516,6 +1516,7 @@ dependencies = [
  "tower-http",
  "tower-service",
  "tracing",
+ "tracing-core",
  "tracing-subscriber",
  "trim-margin",
  "uuid",

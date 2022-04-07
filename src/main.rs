@@ -79,10 +79,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Setup tracing
     let subscriber = FmtSubscriber::builder()
-      // all spans/events with a level higher than TRACE (e.g, debug, info, warn, etc.)
-      // will be written to stdout.
-      .with_max_level(Level::TRACE)
-      // completes the builder.
+      .with_max_level(tracing_core::LevelFilter::from_str(log_level.as_str())
+        .unwrap_or(tracing_core::LevelFilter::INFO))
+      .with_thread_names(true)
       .finish();
 
     if let Err(err) = tracing::subscriber::set_global_default(subscriber) {

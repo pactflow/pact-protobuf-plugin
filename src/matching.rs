@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
-use anyhow::anyhow;
+use anyhow::{anyhow, Error};
 use bytes::{Bytes, BytesMut};
 use itertools::Itertools;
 use log::{debug, trace, warn};
@@ -18,10 +18,10 @@ use pact_models::path_exp::DocPath;
 use pact_models::prelude::{MatchingRuleCategory, RuleLogic};
 use pact_plugin_driver::proto::CompareContentsRequest;
 use pact_plugin_driver::utils::proto_struct_to_json;
-use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet};
+use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet, ServiceDescriptorProto};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
-use crate::utils::{display_bytes, enum_name, field_data_to_json, find_message_field_by_name, find_message_type_by_name, is_map_field, is_repeated_field, last_name};
+use crate::utils::{display_bytes, enum_name, field_data_to_json, find_message_field_by_name, find_message_type_by_name, find_service_descriptor, is_map_field, is_repeated_field, last_name};
 
 /// Match a single Protobuf message
 pub fn match_message(
@@ -78,11 +78,7 @@ pub fn match_service(
   debug!("Looking for service '{}'", service_name);
   let (service, method) = service_name.split_once('/')
     .ok_or_else(|| anyhow!("Service name '{}' is not valid, it should be of the form <SERVICE>/<METHOD>", service_name))?;
-  let service_descriptor = descriptors.file.iter().filter_map(|descriptor| {
-    descriptor.service.iter().find(|p| p.name.clone().unwrap_or_default() == service)
-  })
-    .next()
-    .ok_or_else(|| anyhow!("Did not find a descriptor for service '{}'", service_name))?;
+  let (_, service_descriptor) = find_service_descriptor(descriptors, service)?;
   trace!("Found service descriptor with name {:?}", service_descriptor.name);
 
   let (method_name, service_part) = if method.contains(':') {
