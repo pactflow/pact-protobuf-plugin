@@ -264,7 +264,7 @@ pub(crate) fn lookup_interaction_config(interaction: &dyn V4Interaction) -> Opti
 pub(crate) fn lookup_service_descriptors_for_interaction(
   interaction: &dyn V4Interaction,
   pact: &V4Pact
-) -> anyhow::Result<(ServiceDescriptorProto, MethodDescriptorProto, String, DescriptorProto, DescriptorProto)> {
+) -> anyhow::Result<(FileDescriptorSet, ServiceDescriptorProto, MethodDescriptorProto, String)> {
   let interaction_config = lookup_interaction_config(interaction)
     .ok_or_else(|| anyhow!("Interaction does not have any Protobuf configuration"))?;
   let descriptor_key = interaction_config.get("descriptorKey")
@@ -289,15 +289,9 @@ pub(crate) fn lookup_service_descriptors_for_interaction(
   let method_descriptor = service_descriptor.method.iter().find(|method_desc| {
     method_desc.name.clone().unwrap_or_default() == method_name
   }).ok_or_else(|| anyhow!("Did not find the method {} in the Protobuf file descriptor for service '{}'", method_name, service))?;
-  let input_message = method_descriptor.input_type.clone().unwrap_or_default();
-  let input_type = last_name(input_message.as_str());
-  let output_message = method_descriptor.output_type.clone().unwrap_or_default();
-  let output_type = last_name(output_message.as_str());
-  let input_descriptor = find_message_type_by_name(input_type, &descriptors)?;
-  let output_descriptor = find_message_type_by_name(output_type, &descriptors)?;
 
   let package = file_descriptor.package.clone();
-  Ok((service_descriptor.clone(), method_descriptor.clone(), package.unwrap_or_default(), input_descriptor, output_descriptor))
+  Ok((descriptors.clone(), service_descriptor.clone(), method_descriptor.clone(), package.unwrap_or_default()))
 }
 
 /// Get the encoded Protobuf descriptors from the Pact level configuration for the message key

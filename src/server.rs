@@ -4,13 +4,15 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
 
-use anyhow::anyhow;
-use bytes::Bytes;
+use anyhow::{anyhow, Error};
+use bytes::{Bytes, BytesMut};
 use log::{debug, error, info, trace};
 use maplit::{btreemap, hashmap};
 use pact_matching::{BodyMatchResult, Mismatch};
 use pact_models::json_utils::json_to_string;
-use pact_models::prelude::{ContentType, OptionalBody};
+use pact_models::matchingrules::MatchingRule;
+use pact_models::path_exp::DocPath;
+use pact_models::prelude::{ContentType, MatchingRuleCategory, OptionalBody, RuleLogic};
 use pact_models::prelude::v4::V4Pact;
 use pact_models::v4::interaction::V4Interaction;
 use pact_models::v4::sync_message::SynchronousMessage;
@@ -19,18 +21,23 @@ use pact_plugin_driver::proto;
 use pact_plugin_driver::proto::body::ContentTypeHint;
 use pact_plugin_driver::proto::catalogue_entry::EntryType;
 use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
-use pact_plugin_driver::utils::{proto_struct_to_map, proto_value_to_json, proto_value_to_string, to_proto_value};
+use pact_plugin_driver::proto::CompareContentsResponse;
+use pact_plugin_driver::utils::{proto_struct_to_json, proto_struct_to_map, proto_value_to_json, proto_value_to_string, to_proto_value};
+use pact_verifier::verification_result::MismatchResult;
 use prost::Message;
 use prost_types::FileDescriptorSet;
 use prost_types::value::Kind;
 use serde_json::Value;
 use tonic::metadata::KeyAndValueRef;
+use tonic::{Response, Status};
+use crate::dynamic_message::DynamicMessage;
 
 use crate::matching::{match_message, match_service};
+use crate::message_decoder::decode_message;
 use crate::mock_server::{GrpcMockServer, MOCK_SERVER_STATE};
 use crate::protobuf::process_proto;
 use crate::protoc::setup_protoc;
-use crate::utils::{get_descriptors_for_interaction, lookup_interaction_by_id, lookup_interaction_config, lookup_service_descriptors_for_interaction, parse_pact_from_request_json};
+use crate::utils::{find_message_type_by_name, get_descriptors_for_interaction, last_name, lookup_interaction_by_id, lookup_interaction_config, lookup_service_descriptors_for_interaction, parse_pact_from_request_json};
 use crate::verification::verify_interaction;
 
 /// Plugin gRPC server implementation
@@ -52,6 +59,14 @@ impl ProtobufPactPlugin {
       })
       .unwrap_or_default();
     ProtobufPactPlugin { manifest }
+  }
+
+  fn error_response<E>(err: E) -> Result<Response<CompareContentsResponse>, Status>
+    where E: Into<String> {
+    Ok(tonic::Response::new(proto::CompareContentsResponse {
+      error: err.into(),
+      ..proto::CompareContentsResponse::default()
+    }))
   }
 }
 
@@ -120,10 +135,7 @@ impl PactPlugin for ProtobufPactPlugin {
       Some(config) => config,
       None => {
         error!("Plugin configuration for the interaction is required");
-        return Ok(tonic::Response::new(proto::CompareContentsResponse {
-          error: "Plugin configuration for the interaction is required".to_string(),
-          .. proto::CompareContentsResponse::default()
-        }))
+        return Self::error_response("Plugin configuration for the interaction is required")
       }
     };
 
@@ -133,10 +145,7 @@ impl PactPlugin for ProtobufPactPlugin {
       Some(key) => key,
       None => {
         error!("Plugin configuration item with key 'descriptorKey' is required");
-        return Ok(tonic::Response::new(proto::CompareContentsResponse {
-          error: "Plugin configuration item with key 'descriptorKey' is required".to_string(),
-          .. proto::CompareContentsResponse::default()
-        }))
+        return Self::error_response("Plugin configuration item with key 'descriptorKey' is required");
       }
     };
     debug!("compare_contents: message_key = {}", message_key);
@@ -154,10 +163,7 @@ impl PactPlugin for ProtobufPactPlugin {
       Some(config) => config,
       None => {
         error!("Did not find the Protobuf config for key {}", message_key);
-        return Ok(tonic::Response::new(proto::CompareContentsResponse {
-          error: format!("Did not find the Protobuf config for key {}", message_key),
-          .. proto::CompareContentsResponse::default()
-        }))
+        return Self::error_response(format!("Did not find the Protobuf config for key {}", message_key));
       }
     };
 
@@ -167,28 +173,70 @@ impl PactPlugin for ProtobufPactPlugin {
     let service = interaction_config.get("service").map(proto_value_to_string).flatten();
     if message.is_none() && service.is_none() {
       error!("Plugin configuration item with key 'message' or 'service' is required");
-      return Ok(tonic::Response::new(proto::CompareContentsResponse {
-        error: "Plugin configuration item with key 'message' or 'service' is required".to_string(),
-        .. proto::CompareContentsResponse::default()
-      }))
+      return Self::error_response("Plugin configuration item with key 'message' or 'service' is required");
     }
 
     let descriptors = match get_descriptors_for_interaction(message_key.as_str(), &config_for_interaction) {
       Ok(descriptors) => descriptors,
-      Err(err) => {
-        return Ok(tonic::Response::new(proto::CompareContentsResponse {
-          error: err.to_string(),
-          .. proto::CompareContentsResponse::default()
-        }))
-      }
+      Err(err) => return Self::error_response(err.to_string())
     };
+
+    let mut expected_body = request.expected.as_ref()
+      .map(|body| body.content.clone().map(Bytes::from))
+      .flatten()
+      .unwrap_or_default();
+    let mut actual_body = request.actual.as_ref()
+      .map(|body| body.content.clone().map(Bytes::from))
+      .flatten()
+      .unwrap_or_default();
+    let mut matching_rules = MatchingRuleCategory::empty("body");
+    for (key, rules) in &request.rules {
+      for rule in &rules.rule {
+        let values = rule.values.as_ref().map(proto_struct_to_json).unwrap_or_default();
+        let doc_path = match DocPath::new(key) {
+          Ok(path) => path,
+          Err(err) => return Self::error_response(err.to_string())
+        };
+        let matching_rule = match MatchingRule::create(&rule.r#type, &values) {
+          Ok(rule) => rule,
+          Err(err) => return Self::error_response(err.to_string())
+        };
+        matching_rules.add_rule(doc_path, matching_rule, RuleLogic::And);
+      }
+    }
 
     let result = if let Some(message_name) = message {
       debug!("Received compareContents request for message {}", message_name);
-      match_message(message_name.as_str(), &descriptors, request)
+      match_message(
+        message_name.as_str(),
+        &descriptors,
+        &mut expected_body,
+        &mut actual_body,
+        &matching_rules,
+        request.allow_unexpected_keys
+      )
     } else if let Some(service_name) = service {
       debug!("Received compareContents request for service {}", service_name);
-      match_service(service_name.as_str(), &descriptors, request)
+      let (service, method) = match service_name.split_once('/') {
+        Some(result) => result,
+        None => return Self::error_response(format!("Service name '{}' is not valid, it should be of the form <SERVICE>/<METHOD>", service_name))
+      };
+      let content_type = request.expected.as_ref().map(|body| body.content_type.clone())
+        .unwrap_or_default();
+      let expected_content_type = match ContentType::parse(content_type.as_str()) {
+        Ok(ct) => ct,
+        Err(err) => return Self::error_response(format!("Expected content type is not set or not valid - {}", err))
+      };
+      match_service(
+        service,
+        method,
+        &descriptors,
+        &mut expected_body,
+        &mut actual_body,
+        &matching_rules,
+        request.allow_unexpected_keys,
+        &expected_content_type
+      )
     } else {
       Err(anyhow!("Did not get a message or service to match"))
     };
@@ -217,12 +265,7 @@ impl PactPlugin for ProtobufPactPlugin {
           }))
         }
       }
-      Err(err) => {
-        Ok(tonic::Response::new(proto::CompareContentsResponse {
-          error: format!("Failed to compare the Protobuf messages - {}", err),
-          .. proto::CompareContentsResponse::default()
-        }))
-      }
+      Err(err) => Self::error_response(format!("Failed to compare the Protobuf messages - {}", err))
     }
   }
 
@@ -433,7 +476,7 @@ impl PactPlugin for ProtobufPactPlugin {
       }
     };
 
-    let (service_desc, method_desc, package, _, _) = match lookup_service_descriptors_for_interaction(&interaction, &pact) {
+    let (file_desc, service_desc, method_desc, package) = match lookup_service_descriptors_for_interaction(&interaction, &pact) {
       Ok(values) => values,
       Err(err) => {
         return Ok(tonic::Response::new(proto::VerificationPreparationResponse {
@@ -443,9 +486,29 @@ impl PactPlugin for ProtobufPactPlugin {
       }
     };
 
+    let mut raw_request_body = interaction.request.contents.value().clone().unwrap_or_default();
+    let input_message_name = method_desc.input_type.clone().unwrap_or_default();
+    let input_message = match find_message_type_by_name(last_name(input_message_name.as_str()), &file_desc) {
+      Ok(message) => message,
+      Err(err) => {
+        return Ok(tonic::Response::new(proto::VerificationPreparationResponse {
+          response: Some(proto::verification_preparation_response::Response::Error(err.to_string())),
+          ..proto::VerificationPreparationResponse::default()
+        }))
+      }
+    };
+
     // TODO: use any generators here
-    let request_body = interaction.request.contents.value().unwrap_or_default();
-    let request = tonic::Request::new(request_body.clone());
+    let decoded_body = match decode_message(&mut raw_request_body, &input_message, &file_desc) {
+      Ok(message) => DynamicMessage::new(&input_message, &message),
+      Err(err) => {
+        return Ok(tonic::Response::new(proto::VerificationPreparationResponse {
+          response: Some(proto::verification_preparation_response::Response::Error(err.to_string())),
+          ..proto::VerificationPreparationResponse::default()
+        }))
+      }
+    };
+    let request = tonic::Request::new(decoded_body.clone());
 
     let mut request_metadata: HashMap<String, proto::MetadataValue> = interaction.request.metadata.iter()
       .map(|(k, v)| (k.clone(), proto::MetadataValue {
@@ -479,10 +542,17 @@ impl PactPlugin for ProtobufPactPlugin {
       }
     }
 
+    let mut buffer = BytesMut::new();
+    if let Err(err) = decoded_body.write_to(&mut buffer) {
+      return Ok(tonic::Response::new(proto::VerificationPreparationResponse {
+        response: Some(proto::verification_preparation_response::Response::Error(err.to_string())),
+        ..proto::VerificationPreparationResponse::default()
+      }))
+    }
     let integration_data = proto::InteractionData {
       body: Some(proto::Body {
         content_type: "application/grpc".to_string(),
-        content: Some(request_body.to_vec()),
+        content: Some(buffer.to_vec()),
         content_type_hint: ContentTypeHint::Binary as i32,
       }),
       metadata: request_metadata
@@ -545,8 +615,48 @@ impl PactPlugin for ProtobufPactPlugin {
     let config = request.config.as_ref().map(|c| proto_struct_to_map(c)).unwrap_or_default();
     match verify_interaction(&pact, &interaction, &body, &metadata, &config).await {
       Ok(result) => {
+        let results = result.iter()
+          .flat_map(|result| match result {
+            MismatchResult::Mismatches { mismatches, .. } => {
+              mismatches.iter()
+                .map(|mismatch| {
+                  if let Mismatch::BodyMismatch { path, expected, actual, mismatch } = mismatch {
+                    proto::VerificationResultItem {
+                      result: Some(proto::verification_result_item::Result::Mismatch(proto::ContentMismatch {
+                        expected: expected.as_ref().map(|b| b.to_vec()),
+                        actual: actual.as_ref().map(|b| b.to_vec()),
+                        mismatch: mismatch.clone(),
+                        path: path.clone(),
+                        .. proto::ContentMismatch::default()
+                      })),
+                      .. proto::VerificationResultItem::default()
+                    }
+                  } else {
+                    proto::VerificationResultItem {
+                      result: Some(proto::verification_result_item::Result::Mismatch(proto::ContentMismatch {
+                        mismatch: mismatch.description(),
+                        .. proto::ContentMismatch::default()
+                      })),
+                      .. proto::VerificationResultItem::default()
+                    }
+                  }
+                })
+                .collect()
+            }
+            MismatchResult::Error { error, .. } => {
+              vec![proto::VerificationResultItem {
+                result: Some(proto::verification_result_item::Result::Error(error.clone())),
+                .. proto::VerificationResultItem::default()
+              }]
+            }
+          })
+          .collect();
         Ok(tonic::Response::new(proto::VerifyInteractionResponse {
-          response: Some(proto::verify_interaction_response::Response::Error(format!("TODO"))),
+          response: Some(proto::verify_interaction_response::Response::Result(proto::VerificationResult {
+            success: result.is_empty(),
+            mismatches: results,
+            .. proto::VerificationResult::default()
+          })),
           .. proto::VerifyInteractionResponse::default()
         }))
       }

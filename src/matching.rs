@@ -1,11 +1,11 @@
 //! Functions for matching Protobuf messages
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Display, Formatter};
+
 use anyhow::{anyhow, Error};
 use bytes::{Bytes, BytesMut};
 use itertools::Itertools;
-use log::{debug, trace, warn};
 use maplit::hashmap;
 use pact_matching::{BodyMatchResult, CoreMatchingContext, DiffConfig, MatchingContext, Mismatch};
 use pact_matching::json::compare_json;
@@ -16,9 +16,10 @@ use pact_models::content_types::ContentType;
 use pact_models::matchingrules::MatchingRule;
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::{MatchingRuleCategory, RuleLogic};
-use pact_plugin_driver::proto::CompareContentsRequest;
+use pact_plugin_driver::proto::{CompareContentsRequest, Body, MatchingRules};
 use pact_plugin_driver::utils::proto_struct_to_json;
 use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet, ServiceDescriptorProto};
+use tracing::{debug, trace, warn};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
 use crate::utils::{display_bytes, enum_name, field_data_to_json, find_message_field_by_name, find_message_type_by_name, find_service_descriptor, is_map_field, is_repeated_field, last_name};
@@ -27,76 +28,58 @@ use crate::utils::{display_bytes, enum_name, field_data_to_json, find_message_fi
 pub fn match_message(
   message_name: &str,
   descriptors: &FileDescriptorSet,
-  request: &CompareContentsRequest
+  expected_request: &mut Bytes,
+  actual_request: &mut Bytes,
+  matching_rules: &MatchingRuleCategory,
+  allow_unexpected_keys: bool
 ) -> anyhow::Result<BodyMatchResult> {
   debug!("Looking for message '{}'", message_name);
   let message_descriptor = find_message_type_by_name(message_name, descriptors)?;
 
-  let mut expected_message_bytes = request.expected.as_ref()
-    .map(|body| body.content.clone().map(Bytes::from))
-    .flatten()
-    .unwrap_or_default();
-  let expected_message = decode_message(&mut expected_message_bytes, &message_descriptor, descriptors)?;
+  let expected_message = decode_message(expected_request, &message_descriptor, descriptors)?;
   debug!("expected message = {:?}", expected_message);
 
-  let mut actual_message_bytes = request.actual.as_ref()
-    .map(|body| body.content.clone().map(Bytes::from))
-    .flatten()
-    .unwrap_or_default();
-  let actual_message = decode_message(&mut actual_message_bytes, &message_descriptor, descriptors)?;
+  let actual_message = decode_message(actual_request, &message_descriptor, descriptors)?;
   debug!("actual message = {:?}", actual_message);
 
-  let mut matching_rules = MatchingRuleCategory::empty("body");
-  for (key, rules) in &request.rules {
-    for rule in &rules.rule {
-      let values = rule.values.as_ref().map(proto_struct_to_json).unwrap_or_default();
-      matching_rules.add_rule(DocPath::new(key)?,
-                              MatchingRule::create(&rule.r#type, &values)?,
-                              RuleLogic::And
-      );
-    }
-  }
-
   let plugin_config = hashmap!{};
-  let diff_config = if request.allow_unexpected_keys {
+  let diff_config = if allow_unexpected_keys {
     DiffConfig::AllowUnexpectedKeys
   } else {
     DiffConfig::NoUnexpectedKeys
   };
-  let context = CoreMatchingContext::new(diff_config, &matching_rules, &plugin_config);
+  let context = CoreMatchingContext::new(diff_config, matching_rules, &plugin_config);
 
   compare(&message_descriptor, &expected_message, &actual_message, &context,
-          &expected_message_bytes, descriptors)
+          expected_request, descriptors)
 }
 
 /// Match a Protobuf service call, which has an input and output message
 pub fn match_service(
   service_name: &str,
+  method_name: &str,
   descriptors: &FileDescriptorSet,
-  request: &CompareContentsRequest
+  expected_request: &mut Bytes,
+  actual_request: &mut Bytes,
+  rules: &MatchingRuleCategory,
+  allow_unexpected_keys: bool,
+  content_type: &ContentType
 ) -> anyhow::Result<BodyMatchResult> {
   debug!("Looking for service '{}'", service_name);
-  let (service, method) = service_name.split_once('/')
-    .ok_or_else(|| anyhow!("Service name '{}' is not valid, it should be of the form <SERVICE>/<METHOD>", service_name))?;
-  let (_, service_descriptor) = find_service_descriptor(descriptors, service)?;
+  let (_, service_descriptor) = find_service_descriptor(descriptors, service_name)?;
   trace!("Found service descriptor with name {:?}", service_descriptor.name);
 
-  let (method_name, service_part) = if method.contains(':') {
-    method.split_once(':').unwrap_or((method, ""))
+  let (method_name, service_part) = if method_name.contains(':') {
+    method_name.split_once(':').unwrap_or((method_name, ""))
   } else {
-    (method, "")
+    (method_name, "")
   };
   let method_descriptor = service_descriptor.method.iter().find(|method_desc| {
     method_desc.name.clone().unwrap_or_default() == method_name
-  }).ok_or_else(|| anyhow!("Did not find the method {} in the Protobuf file descriptor for service '{}'", method_name, service))?;
+  }).ok_or_else(|| anyhow!("Did not find the method {} in the Protobuf file descriptor for service '{}'", method_name, service_name))?;
   trace!("Found method descriptor with name {:?}", method_descriptor.name);
 
-  let expected_content_type = ContentType::parse(
-    request.expected.as_ref().map(|body| body.content_type.clone())
-      .ok_or_else(|| anyhow!("Expected content type is not set"))?
-      .as_str()
-  ).map_err(|err| anyhow!(err))?;
-  let expected_message_type = expected_content_type.attributes.get("message");
+  let expected_message_type = content_type.attributes.get("message");
   let message_type = if let Some(message_type) = expected_message_type {
     let input_type = method_descriptor.input_type.clone().unwrap_or_default();
     if last_name(input_type.as_str()) == message_type.as_str() {
@@ -111,7 +94,9 @@ pub fn match_service(
   };
 
   trace!("Message type = {}", message_type);
-  match_message(last_name(message_type.as_str()), descriptors, request)
+  match_message(last_name(message_type.as_str()), descriptors,
+                expected_request, actual_request,
+                rules, allow_unexpected_keys)
 }
 
 /// Compare the expected message to the actual one

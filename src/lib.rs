@@ -1,3 +1,5 @@
+extern crate core;
+
 pub mod server;
 mod protoc;
 mod protobuf;

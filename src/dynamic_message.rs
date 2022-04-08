@@ -75,8 +75,7 @@ impl DynamicMessage {
     self.fields.as_slice()
   }
 
-  #[instrument]
-  pub(crate) fn write_to(&self, buffer: &mut EncodeBuf) -> anyhow::Result<()> {
+  pub(crate) fn write_to<B>(&self, buffer: &mut B) -> anyhow::Result<()> where B: BufMut {
     for field in self.fields.iter().sorted_by(|a, b| Ord::cmp(&a.field_num, &b.field_num)) {
       trace!(field = field.to_string().as_str(), "Writing");
       encode_key(field.field_num, field.wire_type, buffer);
