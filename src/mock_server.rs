@@ -101,12 +101,11 @@ impl GrpcMockServer
                 descriptors.file.iter().filter_map(|d| {
                   d.service.iter().find(|s| s.name.clone().unwrap_or_default() == service_name)
                 }).next()
-                  .map(|d| {
+                  .and_then(|d| {
                     d.method.iter()
                       .find(|m| m.name.clone().unwrap_or_default() == method_name)
                       .map(|m| (format!("{service_name}/{method_name}"), (descriptors.clone(), m.clone(), i.clone())))
                   })
-                  .flatten()
               } else {
                 // protobuf service was not properly formed <SERViCE>/<METHOD>
                 None
@@ -183,7 +182,7 @@ impl GrpcMockServer
       trace!("spawning server onto runtime - done");
     }).join();
 
-    if let Err(_) = result {
+    if result.is_err() {
       Err(anyhow!("Failed to start mock server thread"))
     } else {
       trace!("Mock server setup OK");
@@ -224,10 +223,10 @@ impl Service<hyper::Request<hyper::Body>> for GrpcMockServer  {
       match content_type {
         Ok(content_type) => if content_type.base_type().to_string().starts_with("application/grpc") {
           let method = req.method();
-          if method == &Method::POST {
+          if method == Method::POST {
             let request_path = req.uri().path();
             debug!("gRPC request received {}", request_path);
-            if let Some((service, method)) = request_path[1..].split_once("/") {
+            if let Some((service, method)) = request_path[1..].split_once('/') {
               let service_name = last_name(service);
               let lookup = format!("{service_name}/{method}");
               if let Some((file, method_descriptor, message)) = routes.get(lookup.as_str()) {

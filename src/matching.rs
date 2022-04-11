@@ -136,7 +136,7 @@ fn compare_message(
   let mut results = hashmap!{};
 
   let fields = message_descriptor.field.iter()
-    .map(|field| {
+    .filter_map(|field| {
       field.number.map(|no| {
         let expected_field_values = expected_message_fields.iter().filter(|value| value.field_num == no as u32)
           .collect_vec();
@@ -144,8 +144,7 @@ fn compare_message(
           .collect_vec();
         (no as u32, (field, expected_field_values, actual_field_values))
       })
-    })
-    .flatten();
+    });
 
   for (field_no, (field_descriptor, expected, actual)) in fields {
     let field_name = field_descriptor.name
@@ -510,22 +509,20 @@ fn compare_map_field(
     });
   } else {
     let expected_map = expected_fields.iter()
-      .map(|f| {
+      .filter_map(|f| {
         match &f.data {
           ProtobufFieldData::Message(d, descriptor) => decode_message_map_entry(descriptor, d, descriptors).ok(),
           _ => None
         }
       })
-      .flatten()
       .collect::<BTreeMap<String, MapEntry>>();
     let actual_map = actual_fields.iter()
-      .map(|f| {
+      .filter_map(|f| {
         match &f.data {
           ProtobufFieldData::Message(d, descriptor) => decode_message_map_entry(descriptor, d, descriptors).ok(),
           _ => None
         }
       })
-      .flatten()
       .collect::<BTreeMap<String, MapEntry>>();
 
     if matching_context.matcher_is_defined(path) {
@@ -585,7 +582,7 @@ struct MapEntry {
 
 impl Display for MapEntry {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    write!(f, "{}", self.value.to_string())
+    write!(f, "{}", self.value)
   }
 }
 

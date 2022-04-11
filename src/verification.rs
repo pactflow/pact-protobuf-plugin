@@ -51,7 +51,7 @@ pub async fn verify_interaction(
   debug!("Verifying interaction {}", interaction);
   debug!("interaction={:?}", interaction);
 
-  let (file_desc, service_desc, method_desc, _) = lookup_service_descriptors_for_interaction(interaction, &pact)?;
+  let (file_desc, service_desc, method_desc, _) = lookup_service_descriptors_for_interaction(interaction, pact)?;
   let input_message_name = method_desc.input_type.clone().unwrap_or_default();
   let input_message = find_message_type_by_name(last_name(input_message_name.as_str()), &file_desc)?;
   let output_message_name = method_desc.output_type.clone().unwrap_or_default();
@@ -112,7 +112,7 @@ fn verify_response(
     match match_service(
       service_desc.name.clone().unwrap_or_default().as_str(),
       method_desc.name.clone().unwrap_or_default().as_str(),
-      &file_desc,
+      file_desc,
       &mut expected_body,
       &mut actual_body.freeze(),
       &response.matching_rules.rules_for_category("body").unwrap_or_default(),
@@ -159,7 +159,7 @@ async fn make_grpc_request(
 ) -> anyhow::Result<Response<DynamicMessage>> {
   let host = config.get("host")
     .map(json_to_string)
-    .unwrap_or("[::1]".to_string());
+    .unwrap_or_else(|| "[::1]".to_string());
   let port = json_to_num(config.get("port").cloned())
     .unwrap_or(8080);
   let dest = format!("http://{}:{}", host, port);

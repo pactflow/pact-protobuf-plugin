@@ -181,15 +181,14 @@ fn construct_protobuf_interaction_for_service(
   let request_part_config = if service_part == "request" {
     config.clone()
   } else {
-    config.get("request").map(|request_config| {
-      request_config.kind.as_ref().map(|kind| {
+    config.get("request").and_then(|request_config| {
+      request_config.kind.as_ref().and_then(|kind| {
         match kind {
           Kind::StructValue(s) => Some(proto_struct_to_btreemap(s)),
           _ => None
         }
-      }).flatten()
+      })
     })
-    .flatten()
     .unwrap_or_default()
   };
   let request_part = if request_part_config.is_empty() {
@@ -204,31 +203,29 @@ fn construct_protobuf_interaction_for_service(
   let response_part_config = if service_part == "response" {
     vec![ config.clone() ]
   } else {
-    config.get("response").map(|response_config| {
+    config.get("response").and_then(|response_config| {
       response_config.kind.as_ref().map(|kind| {
         match kind {
           Kind::StructValue(s) => vec![ proto_struct_to_btreemap(s) ],
           Kind::ListValue(l) => l.values.iter().map(|v| {
-            v.kind.as_ref().map(|k| match k {
+            v.kind.as_ref().and_then(|k| match k {
               Kind::StructValue(s) => Some(proto_struct_to_btreemap(s)),
               _ => None
-            }).flatten()
+            })
           })
-            .filter_map(|v| v)
+            .flatten()
             .collect(),
           _ => vec![]
         }
       })
     })
-      .flatten()
       .unwrap_or_default()
   };
-  let response_part = response_part_config.iter().map(|i| {
+  let response_part = response_part_config.iter().filter_map(|i| {
       construct_protobuf_interaction_for_message(
         &response_descriptor, i, output_message_name, "",
         file_descriptor).ok()
     })
-    .flatten()
     .map(|i| InteractionResponse { part_name: "response".into(), .. i } )
     .collect();
 

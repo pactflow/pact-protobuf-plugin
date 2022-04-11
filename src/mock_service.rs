@@ -50,15 +50,14 @@ impl MockService {
         // record the result in the static store
         let mut guard = MOCK_SERVER_STATE.lock().unwrap();
         if let Some((_, results)) = guard.get_mut(self.server_key.as_str()) {
-          let key = format!("{}/{}", self.service_name, self.method_descriptor.name.clone().unwrap_or("unknown method".into()));
+          let key = format!("{}/{}", self.service_name, self.method_descriptor.name.clone().unwrap_or_else(|| "unknown method".into()));
           results.push((key, result.clone()));
         }
 
         if result.all_matched() {
           // TODO: need to invoke any generators
           let mut response_bytes = self.message.response.first()
-            .map(|d| d.contents.value())
-            .flatten()
+            .and_then(|d| d.contents.value())
             .unwrap_or_default();
           trace!("Response message has {} bytes", response_bytes.len());
           let response_message = decode_message(&mut response_bytes, &response_descriptor, &self.file_descriptor_set)

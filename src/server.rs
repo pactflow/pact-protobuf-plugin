@@ -134,7 +134,7 @@ impl PactPlugin for ProtobufPactPlugin {
 
     // From the plugin configuration for the interaction, get the descriptor key. This key is used
     // to lookup the encoded Protobuf descriptors in the Pact level plugin configuration
-    let message_key = match interaction_config.get("descriptorKey").map(proto_value_to_string).flatten() {
+    let message_key = match interaction_config.get("descriptorKey").and_then(proto_value_to_string) {
       Some(key) => key,
       None => {
         error!("Plugin configuration item with key 'descriptorKey' is required");
@@ -162,8 +162,8 @@ impl PactPlugin for ProtobufPactPlugin {
 
     // From the plugin configuration for the interaction, there should be either a message type name
     // or a service name. Check for either.
-    let message = interaction_config.get("message").map(proto_value_to_string).flatten();
-    let service = interaction_config.get("service").map(proto_value_to_string).flatten();
+    let message = interaction_config.get("message").and_then(proto_value_to_string);
+    let service = interaction_config.get("service").and_then(proto_value_to_string);
     if message.is_none() && service.is_none() {
       error!("Plugin configuration item with key 'message' or 'service' is required");
       return Self::error_response("Plugin configuration item with key 'message' or 'service' is required");
@@ -175,8 +175,7 @@ impl PactPlugin for ProtobufPactPlugin {
     };
 
     let mut expected_body = request.expected.as_ref()
-      .map(|body| body.content.clone().map(Bytes::from))
-      .flatten()
+      .and_then(|body| body.content.clone().map(Bytes::from))
       .unwrap_or_default();
     let mut actual_body = request.actual.as_ref()
       .map(|body| body.content.clone().map(Bytes::from))
@@ -479,7 +478,7 @@ impl PactPlugin for ProtobufPactPlugin {
       }
     };
 
-    let mut raw_request_body = interaction.request.contents.value().clone().unwrap_or_default();
+    let mut raw_request_body = interaction.request.contents.value().unwrap_or_default();
     let input_message_name = method_desc.input_type.clone().unwrap_or_default();
     let input_message = match find_message_type_by_name(last_name(input_message_name.as_str()), &file_desc) {
       Ok(message) => message,
@@ -603,7 +602,7 @@ impl PactPlugin for ProtobufPactPlugin {
       None => HashMap::default()
     };
 
-    let config = request.config.as_ref().map(|c| proto_struct_to_map(c)).unwrap_or_default();
+    let config = request.config.as_ref().map(proto_struct_to_map).unwrap_or_default();
     match verify_interaction(&pact, &interaction, &body, &metadata, &config).await {
       Ok(result) => {
         let results = result.iter()

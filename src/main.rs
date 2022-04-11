@@ -10,7 +10,6 @@ use std::str::FromStr;
 
 use clap::{App, ErrorKind};
 use hyper::header;
-use log4rs;
 use log4rs::{Config, Handle};
 use log4rs::append::console::ConsoleAppender;
 use log4rs::append::file::FileAppender;
@@ -66,7 +65,7 @@ impl Interceptor for AuthInterceptor {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Setup the logging system based on the LOG_LEVEL environment variable
     let log_config = PathBuf::new().join("./log-config.yaml");
-    let log_level = env::var("LOG_LEVEL").unwrap_or("INFO".to_string());
+    let log_level = env::var("LOG_LEVEL").unwrap_or_else(|_| "INFO".to_string());
     let level = LevelFilter::from_str(log_level.as_str()).unwrap_or(LevelFilter::Info);
     if log_config.exists() {
       let mut config = load_config_file(log_config, Default::default())?;

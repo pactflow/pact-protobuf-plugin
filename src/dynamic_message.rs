@@ -64,10 +64,10 @@ pub(crate) struct DynamicMessage {
 }
 
 impl DynamicMessage {
-  pub(crate) fn new(descriptor: &DescriptorProto, fields: &Vec<ProtobufField>) -> DynamicMessage {
+  pub(crate) fn new(descriptor: &DescriptorProto, fields: &[ProtobufField]) -> DynamicMessage {
     DynamicMessage {
       descriptor: descriptor.clone(),
-      fields: fields.clone()
+      fields: fields.to_vec()
     }
   }
 
