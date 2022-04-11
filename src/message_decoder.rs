@@ -26,7 +26,7 @@ pub struct ProtobufField {
 
 impl Display for ProtobufField {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    write!(f, "{}:{} = {}", self.field_num, self.data.type_name(), self.data)
+    write!(f, "{}:({:?}, {}) = {}", self.field_num, self.wire_type, self.data.type_name(), self.data)
   }
 }
 
