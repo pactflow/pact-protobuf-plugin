@@ -382,8 +382,8 @@ fn compare_field(
         path: path.to_string(),
         expected: Some(field.data.to_string().into()),
         actual: Some(actual.data.to_string().into()),
-        mismatch: format!("Expected and actual messages have different types: {} and {}",
-                          field.data.type_name(), actual.data.type_name())
+        mismatch: format!("Expected and actual field have different types: {} and {}",
+                          field, actual)
       }
     ]
   }

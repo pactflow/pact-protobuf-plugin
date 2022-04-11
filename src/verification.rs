@@ -33,7 +33,7 @@ struct GrpcError {
 
 impl Display for GrpcError {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    write!(f, "gRPC request failed with status {}", self.status)
+    write!(f, "gRPC request failed {}", self.status)
   }
 }
 
@@ -184,7 +184,7 @@ async fn make_grpc_request(
   let mut grpc = tonic::client::Grpc::new(conn);
   grpc.unary(request, path, codec).await
     .map_err(|err| {
-      error!("gRPC request failed with status {:?}", err);
+      error!("gRPC request failed {:?}", err);
       anyhow!(GrpcError { status: err })
     })
 }

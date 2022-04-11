@@ -9,7 +9,7 @@ use itertools::Itertools;
 use prost::encoding::{decode_key, decode_varint, encode_varint, WireType};
 use prost_types::{DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, FileDescriptorSet};
 use prost_types::field_descriptor_proto::Type;
-use tracing::{trace, warn};
+use tracing::{error, trace, warn};
 
 use crate::utils::{as_hex, find_message_type_by_name, last_name};
 
@@ -26,7 +26,7 @@ pub struct ProtobufField {
 
 impl Display for ProtobufField {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    write!(f, "field {}:{} = {}", self.field_num, self.data.type_name(), self.data)
+    write!(f, "{}:{} = {}", self.field_num, self.data.type_name(), self.data)
   }
 }
 
@@ -123,9 +123,9 @@ impl Display for ProtobufFieldData {
         write!(f, "{}", descriptor.name.clone().unwrap_or_else(|| "unknown".to_string()))
       }
       ProtobufFieldData::Unknown(b) => if b.len() <= 16 {
-        write!(f, "?? {}", as_hex(b.as_slice()))
+        write!(f, "{}", as_hex(b.as_slice()))
       } else {
-        write!(f, "?? {}... ({} bytes)", as_hex(&b[0..16]), b.len())
+        write!(f, "{}... ({} bytes)", as_hex(&b[0..16]), b.len())
       }
     }
   }
@@ -167,7 +167,10 @@ pub fn decode_message<B>(
                 ProtobufFieldData::Integer32(((value >> 1) as i32) ^ (-((value & 1) as i32)))
               },
               Type::Sint64 => ProtobufFieldData::Integer64(((varint >> 1) as i64) ^ (-((varint & 1) as i64))),
-              _ => return Err(anyhow!("Field type {:?} is not a valid varint type", t))
+              _ => {
+                error!("Was expecting {:?} but received an unknown varint type", t);
+                ProtobufFieldData::Unknown(varint.to_le_bytes().to_vec())
+              }
             }
           }
           WireType::SixtyFourBit => {
@@ -176,7 +179,11 @@ pub fn decode_message<B>(
               Type::Double => ProtobufFieldData::Double(buffer.get_f64_le()),
               Type::Fixed64 => ProtobufFieldData::UInteger64(buffer.get_u64_le()),
               Type::Sfixed64 => ProtobufFieldData::Integer64(buffer.get_i64_le()),
-              _ => return Err(anyhow!("Field type {:?} is not a valid fixed 64 bit type", t))
+              _ => {
+                error!("Was expecting {:?} but received an unknown 64 bit type", t);
+                let value = buffer.get_u64_le();
+                ProtobufFieldData::Unknown(value.to_le_bytes().to_vec())
+              }
             }
           }
           WireType::LengthDelimited => {
@@ -184,7 +191,7 @@ pub fn decode_message<B>(
             let data_buffer = if buffer.remaining() >= data_length as usize {
               buffer.copy_to_bytes(data_length as usize)
             } else {
-              return Err(anyhow!("Insufficient data remaining to read {} bytes for field {}", data_length, field_num));
+              return Err(anyhow!("Insufficient data remaining ({} bytes) to read {} bytes for field {}", buffer.remaining(), data_length, field_num));
             };
             let t: Type = field_descriptor.r#type();
             match t {
@@ -199,7 +206,13 @@ pub fn decode_message<B>(
                 ProtobufFieldData::Message(data_buffer.to_vec(), message_proto)
               }
               Type::Bytes => ProtobufFieldData::Bytes(data_buffer.to_vec()),
-              _ => return Err(anyhow!("Field type {:?} is not a valid length-delimited type", t))
+              _ => {
+                error!("Was expecting {:?} but received an unknown length-delimited type", t);
+                let mut buf = BytesMut::with_capacity((data_length + 8) as usize);
+                encode_varint(data_length, &mut buf);
+                buf.extend_from_slice(&*data_buffer);
+                ProtobufFieldData::Unknown(buf.freeze().to_vec())
+              }
             }
           }
           WireType::ThirtyTwoBit => {
@@ -208,7 +221,11 @@ pub fn decode_message<B>(
               Type::Float => ProtobufFieldData::Float(buffer.get_f32_le()),
               Type::Fixed32 => ProtobufFieldData::UInteger32(buffer.get_u32_le()),
               Type::Sfixed32 => ProtobufFieldData::Integer32(buffer.get_i32_le()),
-              _ => return Err(anyhow!("Field type {:?} is not a valid fixed 32 bit type", t))
+              _ => {
+                error!("Was expecting {:?} but received an unknown fixed 32 bit type", t);
+                let value = buffer.get_u32_le();
+                ProtobufFieldData::Unknown(value.to_le_bytes().to_vec())
+              }
             }
           }
           _ => return Err(anyhow!("Messages with {:?} wire type fields are not supported", wire_type))
