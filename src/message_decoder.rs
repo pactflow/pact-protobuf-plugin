@@ -4,11 +4,12 @@ use std::fmt::{Display, Formatter};
 use std::str::from_utf8;
 
 use anyhow::anyhow;
-use bytes::Buf;
+use bytes::{Buf, BytesMut};
 use itertools::Itertools;
-use prost::encoding::{decode_key, decode_varint, WireType};
+use prost::encoding::{decode_key, decode_varint, encode_varint, WireType};
 use prost_types::{DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, FileDescriptorSet};
 use prost_types::field_descriptor_proto::Type;
+use tracing::{trace, warn};
 
 use crate::utils::{as_hex, find_message_type_by_name, last_name};
 
@@ -53,7 +54,9 @@ pub enum ProtobufFieldData {
   /// Enum value
   Enum(i32, EnumDescriptorProto),
   /// Embedded message
-  Message(Vec<u8>, DescriptorProto)
+  Message(Vec<u8>, DescriptorProto),
+  /// For field data that does not match the descriptor
+  Unknown(Vec<u8>)
 }
 
 impl ProtobufFieldData {
@@ -70,7 +73,8 @@ impl ProtobufFieldData {
       ProtobufFieldData::Double(_) => "Double",
       ProtobufFieldData::Bytes(_) => "Bytes",
       ProtobufFieldData::Enum(_, _) => "Enum",
-      ProtobufFieldData::Message(_, _) => "Message"
+      ProtobufFieldData::Message(_, _) => "Message",
+      ProtobufFieldData::Unknown(_) => "Unknown"
     }
   }
 
@@ -87,7 +91,8 @@ impl ProtobufFieldData {
       ProtobufFieldData::Double(n) => n.to_le_bytes().to_vec(),
       ProtobufFieldData::Bytes(b) => b.clone(),
       ProtobufFieldData::Enum(_, _) => self.to_string().as_bytes().to_vec(),
-      ProtobufFieldData::Message(b, _) => b.clone()
+      ProtobufFieldData::Message(b, _) => b.clone(),
+      ProtobufFieldData::Unknown(data) => data.clone()
     }
   }
 }
@@ -117,6 +122,11 @@ impl Display for ProtobufFieldData {
       ProtobufFieldData::Message(_, descriptor) => {
         write!(f, "{}", descriptor.name.clone().unwrap_or_else(|| "unknown".to_string()))
       }
+      ProtobufFieldData::Unknown(b) => if b.len() <= 16 {
+        write!(f, "?? {}", as_hex(b.as_slice()))
+      } else {
+        write!(f, "?? {}... ({} bytes)", as_hex(&b[0..16]), b.len())
+      }
     }
   }
 }
@@ -132,81 +142,106 @@ pub fn decode_message<B>(
 
   while buffer.has_remaining() {
     let (field_num, wire_type) = decode_key(buffer)?;
-    let field_descriptor = find_field_descriptor(field_num as i32, descriptor)?;
+    trace!("field_num={}, wire_type={:?}, bytes remaining = {}", field_num, wire_type, buffer.remaining());
 
-    let data = match wire_type {
-      WireType::Varint => {
-        let varint = decode_varint(buffer)?;
-        let t: Type = field_descriptor.r#type();
-        match t {
-          Type::Int64 => ProtobufFieldData::Integer64(varint as i64),
-          Type::Uint64 => ProtobufFieldData::UInteger64(varint),
-          Type::Int32 => ProtobufFieldData::Integer32(varint as i32),
-          Type::Bool => ProtobufFieldData::Boolean(varint > 0),
-          Type::Uint32 => ProtobufFieldData::UInteger32(varint as u32),
-          Type::Enum => {
-            let enum_proto = descriptor.enum_type.iter()
-              .find(|enum_type| enum_type.name.clone().unwrap_or_default() == last_name(field_descriptor.type_name.clone().unwrap_or_default().as_str()))
-              .ok_or_else(|| anyhow!("Did not find the enum {:?} for the field {} in the Protobuf descriptor", field_descriptor.type_name, field_num))?;
-            ProtobufFieldData::Enum(varint as i32, enum_proto.clone())
-          },
-          Type::Sint32 => {
-            let value = varint as u32;
-            ProtobufFieldData::Integer32(((value >> 1) as i32) ^ (-((value & 1) as i32)))
-          },
-          Type::Sint64 => ProtobufFieldData::Integer64(((varint >> 1) as i64) ^ (-((varint & 1) as i64))),
-          _ => return Err(anyhow!("Field type {:?} is not a valid varint type", t))
-        }
-      }
-      WireType::SixtyFourBit => {
-        let t: Type = field_descriptor.r#type();
-        match t {
-          Type::Double => ProtobufFieldData::Double(buffer.get_f64_le()),
-          Type::Fixed64 => ProtobufFieldData::UInteger64(buffer.get_u64_le()),
-          Type::Sfixed64 => ProtobufFieldData::Integer64(buffer.get_i64_le()),
-          _ => return Err(anyhow!("Field type {:?} is not a valid fixed 64 bit type", t))
-        }
-      }
-      WireType::LengthDelimited => {
-        let data_length = decode_varint(buffer)?;
-        let data_buffer = if buffer.remaining() >= data_length as usize {
-          buffer.copy_to_bytes(data_length as usize)
-        } else {
-          return Err(anyhow!("Insufficient data remaining to read {} bytes for field {}", data_length, field_num));
-        };
-        let t: Type = field_descriptor.r#type();
-        match t {
-          Type::String => ProtobufFieldData::String(from_utf8(&data_buffer)?.to_string()),
-          Type::Message => {
-            let type_name = field_descriptor.type_name.as_ref().map(|v| last_name(v.as_str()).to_string());
-            let message_proto = descriptor.nested_type.iter()
-              .find(|message_descriptor| message_descriptor.name == type_name)
-              .cloned()
-              .or_else(|| find_message_type_by_name(&type_name.unwrap_or_default(), descriptors).ok())
-              .ok_or_else(|| anyhow!("Did not find the embedded message {:?} for the field {} in the Protobuf descriptor", field_descriptor.type_name, field_num))?;
-            ProtobufFieldData::Message(data_buffer.to_vec(), message_proto)
+    match find_field_descriptor(field_num as i32, descriptor) {
+      Ok(field_descriptor) => {
+        let data = match wire_type {
+          WireType::Varint => {
+            let varint = decode_varint(buffer)?;
+            let t: Type = field_descriptor.r#type();
+            match t {
+              Type::Int64 => ProtobufFieldData::Integer64(varint as i64),
+              Type::Uint64 => ProtobufFieldData::UInteger64(varint),
+              Type::Int32 => ProtobufFieldData::Integer32(varint as i32),
+              Type::Bool => ProtobufFieldData::Boolean(varint > 0),
+              Type::Uint32 => ProtobufFieldData::UInteger32(varint as u32),
+              Type::Enum => {
+                let enum_proto = descriptor.enum_type.iter()
+                  .find(|enum_type| enum_type.name.clone().unwrap_or_default() == last_name(field_descriptor.type_name.clone().unwrap_or_default().as_str()))
+                  .ok_or_else(|| anyhow!("Did not find the enum {:?} for the field {} in the Protobuf descriptor", field_descriptor.type_name, field_num))?;
+                ProtobufFieldData::Enum(varint as i32, enum_proto.clone())
+              },
+              Type::Sint32 => {
+                let value = varint as u32;
+                ProtobufFieldData::Integer32(((value >> 1) as i32) ^ (-((value & 1) as i32)))
+              },
+              Type::Sint64 => ProtobufFieldData::Integer64(((varint >> 1) as i64) ^ (-((varint & 1) as i64))),
+              _ => return Err(anyhow!("Field type {:?} is not a valid varint type", t))
+            }
           }
-          Type::Bytes => ProtobufFieldData::Bytes(data_buffer.to_vec()),
-          _ => return Err(anyhow!("Field type {:?} is not a valid length-delimited type", t))
-        }
-      }
-      WireType::ThirtyTwoBit => {
-        let t: Type = field_descriptor.r#type();
-        match t {
-          Type::Float => ProtobufFieldData::Float(buffer.get_f32_le()),
-          Type::Fixed32 => ProtobufFieldData::UInteger32(buffer.get_u32_le()),
-          Type::Sfixed32 => ProtobufFieldData::Integer32(buffer.get_i32_le()),
-          _ => return Err(anyhow!("Field type {:?} is not a valid fixed 32 bit type", t))
-        }
-      }
-      _ => return Err(anyhow!("Messages with {:?} wire type fields are not supported", wire_type))
-    };
+          WireType::SixtyFourBit => {
+            let t: Type = field_descriptor.r#type();
+            match t {
+              Type::Double => ProtobufFieldData::Double(buffer.get_f64_le()),
+              Type::Fixed64 => ProtobufFieldData::UInteger64(buffer.get_u64_le()),
+              Type::Sfixed64 => ProtobufFieldData::Integer64(buffer.get_i64_le()),
+              _ => return Err(anyhow!("Field type {:?} is not a valid fixed 64 bit type", t))
+            }
+          }
+          WireType::LengthDelimited => {
+            let data_length = decode_varint(buffer)?;
+            let data_buffer = if buffer.remaining() >= data_length as usize {
+              buffer.copy_to_bytes(data_length as usize)
+            } else {
+              return Err(anyhow!("Insufficient data remaining to read {} bytes for field {}", data_length, field_num));
+            };
+            let t: Type = field_descriptor.r#type();
+            match t {
+              Type::String => ProtobufFieldData::String(from_utf8(&data_buffer)?.to_string()),
+              Type::Message => {
+                let type_name = field_descriptor.type_name.as_ref().map(|v| last_name(v.as_str()).to_string());
+                let message_proto = descriptor.nested_type.iter()
+                  .find(|message_descriptor| message_descriptor.name == type_name)
+                  .cloned()
+                  .or_else(|| find_message_type_by_name(&type_name.unwrap_or_default(), descriptors).ok())
+                  .ok_or_else(|| anyhow!("Did not find the embedded message {:?} for the field {} in the Protobuf descriptor", field_descriptor.type_name, field_num))?;
+                ProtobufFieldData::Message(data_buffer.to_vec(), message_proto)
+              }
+              Type::Bytes => ProtobufFieldData::Bytes(data_buffer.to_vec()),
+              _ => return Err(anyhow!("Field type {:?} is not a valid length-delimited type", t))
+            }
+          }
+          WireType::ThirtyTwoBit => {
+            let t: Type = field_descriptor.r#type();
+            match t {
+              Type::Float => ProtobufFieldData::Float(buffer.get_f32_le()),
+              Type::Fixed32 => ProtobufFieldData::UInteger32(buffer.get_u32_le()),
+              Type::Sfixed32 => ProtobufFieldData::Integer32(buffer.get_i32_le()),
+              _ => return Err(anyhow!("Field type {:?} is not a valid fixed 32 bit type", t))
+            }
+          }
+          _ => return Err(anyhow!("Messages with {:?} wire type fields are not supported", wire_type))
+        };
 
-    fields.push(ProtobufField {
-      field_num,
-      wire_type,
-      data
-    });
+        fields.push(ProtobufField {
+          field_num,
+          wire_type,
+          data
+        });
+      }
+      Err(err) => {
+        warn!("Was not able to decode field: {}", err);
+        let data = match wire_type {
+          WireType::Varint => decode_varint(buffer)?.to_le_bytes().to_vec(),
+          WireType::SixtyFourBit => buffer.get_u64().to_le_bytes().to_vec(),
+          WireType::LengthDelimited => {
+            let data_length = decode_varint(buffer)?;
+            let mut buf = BytesMut::with_capacity((data_length + 8) as usize);
+            encode_varint(data_length, &mut buf);
+            buf.extend_from_slice(&*buffer.copy_to_bytes(data_length as usize));
+            buf.freeze().to_vec()
+          }
+          WireType::ThirtyTwoBit => buffer.get_u32().to_le_bytes().to_vec(),
+          _ => return Err(anyhow!("Messages with {:?} wire type fields are not supported", wire_type))
+        };
+        fields.push(ProtobufField {
+          field_num,
+          wire_type,
+          data: ProtobufFieldData::Unknown(data)
+        });
+      }
+    }
   }
 
   Ok(fields.iter().sorted_by(|a, b| Ord::cmp(&a.field_num, &b.field_num)).cloned().collect())
@@ -586,5 +621,43 @@ mod tests {
     expect!(field_result.field_num).to(be_equal_to(1));
     expect!(field_result.wire_type).to(be_equal_to(WireType::LengthDelimited));
     expect!(&field_result.data).to(be_equal_to(&ProtobufFieldData::Message(encoded, message_descriptor)));
+  }
+
+  #[test]
+  fn decode_message_with_unknown_field() {
+    let message = InitPluginRequest {
+      implementation: "test".to_string(),
+      version: "1.2.3.4".to_string()
+    };
+
+    let field1 = string_field_descriptor!("implementation", 1);
+    let message_descriptor = DescriptorProto {
+      name: Some("InitPluginRequest".to_string()),
+      field: vec![
+        field1.clone()
+      ],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![]
+    };
+
+    let mut buffer = BytesMut::from(message.encode_to_vec().as_slice());
+    let result = decode_message(&mut buffer, &message_descriptor, &FileDescriptorSet{ file: vec![] }).unwrap();
+    expect!(result.len()).to(be_equal_to(2));
+
+    let field_result = result.first().unwrap();
+    expect!(field_result.field_num).to(be_equal_to(1));
+    expect!(field_result.wire_type).to(be_equal_to(WireType::LengthDelimited));
+    expect!(&field_result.data).to(be_equal_to(&ProtobufFieldData::String("test".to_string())));
+
+    let field_result = result.get(1).unwrap();
+    expect!(field_result.field_num).to(be_equal_to(2));
+    expect!(field_result.wire_type).to(be_equal_to(WireType::LengthDelimited));
+    expect!(field_result.data.type_name()).to(be_equal_to("Unknown"));
   }
 }

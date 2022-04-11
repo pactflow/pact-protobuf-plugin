@@ -185,6 +185,7 @@ pub fn field_data_to_json(
               let message_data = decode_message(&mut bytes, descriptor, descriptors)?;
               field_data_to_json(message_data, descriptor, descriptors)?
             }
+            ProtobufFieldData::Unknown(b) => serde_json::Value::Array(b.iter().map(|v| json!(v)).collect())
           });
         }
         None => warn!("Did not get the field name for field number {}", field.field_num)

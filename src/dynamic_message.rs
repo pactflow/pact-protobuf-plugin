@@ -8,7 +8,7 @@ use prost::encoding::{encode_key, encode_varint, WireType};
 use prost_types::{DescriptorProto, FileDescriptorSet};
 use tonic::codec::{Codec, DecodeBuf, Decoder, EncodeBuf, Encoder};
 use tonic::Status;
-use tracing::{error, instrument, trace};
+use tracing::{debug, error, instrument, trace};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
 
@@ -80,19 +80,27 @@ impl DynamicMessage {
       trace!(field = field.to_string().as_str(), "Writing");
       encode_key(field.field_num, field.wire_type, buffer);
       match field.wire_type {
-        WireType::Varint => match field.data {
-          ProtobufFieldData::Boolean(b) => encode_varint(b as u64, buffer),
-          ProtobufFieldData::UInteger32(n) => encode_varint(n as u64, buffer),
-          ProtobufFieldData::Integer32(n) => encode_varint(n as u64, buffer),
-          ProtobufFieldData::UInteger64(n) => encode_varint(n, buffer),
-          ProtobufFieldData::Integer64(n) => encode_varint(n as u64, buffer),
-          ProtobufFieldData::Enum(n, _) => encode_varint(n as u64, buffer),
+        WireType::Varint => match &field.data {
+          ProtobufFieldData::Boolean(b) => encode_varint(*b as u64, buffer),
+          ProtobufFieldData::UInteger32(n) => encode_varint(*n as u64, buffer),
+          ProtobufFieldData::Integer32(n) => encode_varint(*n as u64, buffer),
+          ProtobufFieldData::UInteger64(n) => encode_varint(*n, buffer),
+          ProtobufFieldData::Integer64(n) => encode_varint(*n as u64, buffer),
+          ProtobufFieldData::Enum(n, _) => encode_varint(*n as u64, buffer),
+          ProtobufFieldData::Unknown(b) => {
+            debug!("Writing unknown field {}", field.data);
+            buffer.put_slice(b.as_slice());
+          },
           _ => return Err(anyhow!("Expected a varint, but field is {}", field.data))
         },
-        WireType::SixtyFourBit => match field.data {
-          ProtobufFieldData::UInteger64(n) => buffer.put_u64_le(n),
-          ProtobufFieldData::Integer64(n) => buffer.put_i64_le(n),
-          ProtobufFieldData::Double(n) => buffer.put_f64_le(n),
+        WireType::SixtyFourBit => match &field.data {
+          ProtobufFieldData::UInteger64(n) => buffer.put_u64_le(*n),
+          ProtobufFieldData::Integer64(n) => buffer.put_i64_le(*n),
+          ProtobufFieldData::Double(n) => buffer.put_f64_le(*n),
+          ProtobufFieldData::Unknown(b) => {
+            debug!("Writing unknown field {}", field.data);
+            buffer.put_slice(b.as_slice());
+          }
           _ => return Err(anyhow!("Expected a 64 bit value, but field is {}", field.data))
         }
         WireType::LengthDelimited => match &field.data {
@@ -108,12 +116,20 @@ impl DynamicMessage {
             encode_varint(m.len() as u64, buffer);
             buffer.put_slice(m.as_slice());
           }
+          ProtobufFieldData::Unknown(b) => {
+            debug!("Writing unknown field {}", field.data);
+            buffer.put_slice(b.as_slice());
+          },
           _ => return Err(anyhow!("Expected a length delimited value, but field is {}", field.data))
         }
-        WireType::ThirtyTwoBit => match field.data {
-          ProtobufFieldData::UInteger32(n) => buffer.put_u32_le(n),
-          ProtobufFieldData::Integer32(n) => buffer.put_i32_le(n),
-          ProtobufFieldData::Float(n) => buffer.put_f32_le(n),
+        WireType::ThirtyTwoBit => match &field.data {
+          ProtobufFieldData::UInteger32(n) => buffer.put_u32_le(*n),
+          ProtobufFieldData::Integer32(n) => buffer.put_i32_le(*n),
+          ProtobufFieldData::Float(n) => buffer.put_f32_le(*n),
+          ProtobufFieldData::Unknown(b) => {
+            debug!("Writing unknown field {}", field.data);
+            buffer.put_slice(b.as_slice());
+          },
           _ => return Err(anyhow!("Expected a 32 bit value, but field is {}", field.data))
         }
         _ => return Err(anyhow!("Groups are not supported"))
