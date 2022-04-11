@@ -26,7 +26,6 @@ use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::sensitive_headers::SetSensitiveHeadersLayer;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
-use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 use uuid::Uuid;
 

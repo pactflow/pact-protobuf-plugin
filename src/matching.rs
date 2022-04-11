@@ -1,9 +1,9 @@
 //! Functions for matching Protobuf messages
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
 
-use anyhow::{anyhow, Error};
+use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
 use itertools::Itertools;
 use maplit::hashmap;
@@ -15,10 +15,8 @@ use pact_matching::Mismatch::BodyMismatch;
 use pact_models::content_types::ContentType;
 use pact_models::matchingrules::MatchingRule;
 use pact_models::path_exp::DocPath;
-use pact_models::prelude::{MatchingRuleCategory, RuleLogic};
-use pact_plugin_driver::proto::{CompareContentsRequest, Body, MatchingRules};
-use pact_plugin_driver::utils::proto_struct_to_json;
-use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet, ServiceDescriptorProto};
+use pact_models::prelude::MatchingRuleCategory;
+use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet};
 use tracing::{debug, trace, warn};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};

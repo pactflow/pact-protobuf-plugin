@@ -4,18 +4,14 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
 
-use anyhow::{anyhow, Error};
+use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
 use log::{debug, error, info, trace};
 use maplit::{btreemap, hashmap};
 use pact_matching::{BodyMatchResult, Mismatch};
-use pact_models::json_utils::json_to_string;
 use pact_models::matchingrules::MatchingRule;
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::{ContentType, MatchingRuleCategory, OptionalBody, RuleLogic};
-use pact_models::prelude::v4::V4Pact;
-use pact_models::v4::interaction::V4Interaction;
-use pact_models::v4::sync_message::SynchronousMessage;
 use pact_plugin_driver::plugin_models::PactPluginManifest;
 use pact_plugin_driver::proto;
 use pact_plugin_driver::proto::body::ContentTypeHint;
@@ -24,10 +20,7 @@ use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
 use pact_plugin_driver::proto::CompareContentsResponse;
 use pact_plugin_driver::utils::{proto_struct_to_json, proto_struct_to_map, proto_value_to_json, proto_value_to_string, to_proto_value};
 use pact_verifier::verification_result::MismatchResult;
-use prost::Message;
-use prost_types::FileDescriptorSet;
 use prost_types::value::Kind;
-use serde_json::Value;
 use tonic::metadata::KeyAndValueRef;
 use tonic::{Response, Status};
 use crate::dynamic_message::DynamicMessage;
@@ -37,7 +30,7 @@ use crate::message_decoder::decode_message;
 use crate::mock_server::{GrpcMockServer, MOCK_SERVER_STATE};
 use crate::protobuf::process_proto;
 use crate::protoc::setup_protoc;
-use crate::utils::{find_message_type_by_name, get_descriptors_for_interaction, last_name, lookup_interaction_by_id, lookup_interaction_config, lookup_service_descriptors_for_interaction, parse_pact_from_request_json};
+use crate::utils::{find_message_type_by_name, get_descriptors_for_interaction, last_name, lookup_interaction_by_id, lookup_service_descriptors_for_interaction, parse_pact_from_request_json};
 use crate::verification::verify_interaction;
 
 /// Plugin gRPC server implementation
@@ -516,14 +509,12 @@ impl PactPlugin for ProtobufPactPlugin {
       }))
       .collect();
 
-    if let Some(plugin_data) = lookup_interaction_config(&interaction) {
-      let path = format!("/{}.{}/{}", package, service_desc.name.unwrap_or_default(), method_desc.name.unwrap_or_default());
-      request_metadata.insert("request-path".to_string(), proto::MetadataValue {
-        value: Some(proto::metadata_value::Value::NonBinaryValue(prost_types::Value {
-          kind: Some(prost_types::value::Kind::StringValue(path))
-        }))
-      });
-    }
+    let path = format!("/{}.{}/{}", package, service_desc.name.unwrap_or_default(), method_desc.name.unwrap_or_default());
+    request_metadata.insert("request-path".to_string(), proto::MetadataValue {
+      value: Some(proto::metadata_value::Value::NonBinaryValue(prost_types::Value {
+        kind: Some(prost_types::value::Kind::StringValue(path))
+      }))
+    });
 
     for entry in request.metadata().iter() {
       match entry {

@@ -5,21 +5,21 @@ use std::path::Path;
 
 use anyhow::anyhow;
 use itertools::{Either, Itertools};
-use log::{debug, LevelFilter, max_level, trace, warn};
+use log::{LevelFilter, max_level};
 use maplit::{btreemap, hashmap};
 use pact_models::generators::Generator;
 use pact_models::json_utils::json_to_string;
 use pact_models::matchingrules;
-use pact_models::matchingrules::MatchingRuleCategory;
 use pact_models::matchingrules::expressions::{is_matcher_def, parse_matcher_def, ValueType};
+use pact_models::matchingrules::MatchingRuleCategory;
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::RuleLogic;
 use pact_plugin_driver::proto::{
   Body,
   InteractionResponse,
-  PluginConfiguration,
+  MatchingRule,
   MatchingRules,
-  MatchingRule
+  PluginConfiguration
 };
 use pact_plugin_driver::proto::body::ContentTypeHint;
 use pact_plugin_driver::proto::interaction_response::MarkupType;
@@ -30,6 +30,7 @@ use prost_types::value::Kind;
 use serde_json::{json, Value};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
+use tracing::{debug, trace, warn};
 
 use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValueType, RType};
 use crate::protoc::Protoc;
@@ -838,7 +839,7 @@ fn value_for_type(
 mod tests {
   use expectest::prelude::*;
   use maplit::{btreemap, hashmap};
-  use pact_plugin_driver::proto::{MatchingRules, MatchingRule};
+  use pact_plugin_driver::proto::{MatchingRule, MatchingRules};
   use pact_plugin_driver::proto::interaction_response::MarkupType;
   use prost_types::{DescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorProto};
   use prost_types::field_descriptor_proto::Type;

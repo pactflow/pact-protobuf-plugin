@@ -11,7 +11,6 @@ use pact_models::json_utils::json_to_string;
 use pact_models::pact::load_pact_from_json;
 use pact_models::prelude::v4::V4Pact;
 use pact_models::v4::interaction::V4Interaction;
-use pact_plugin_driver::utils::proto_value_to_string;
 use prost::Message;
 use prost_types::{DescriptorProto, EnumDescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet, MethodDescriptorProto, ServiceDescriptorProto, Value};
 use prost_types::field_descriptor_proto::Label;

@@ -204,7 +204,6 @@ impl Service<hyper::Request<hyper::Body>> for GrpcMockServer  {
   #[instrument]
   fn call(&mut self, req: Request<hyper::Body>) -> Self::Future {
     let routes = self.routes.clone();
-    let descriptors = self.descriptors.clone();
     let server_key = self.server_key.clone();
 
     Box::pin(async move {

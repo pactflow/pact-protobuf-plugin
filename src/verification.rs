@@ -2,11 +2,9 @@
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
-use std::str::FromStr;
 
 use anyhow::anyhow;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
-use maplit::hashmap;
+use bytes::BytesMut;
 use pact_matching::BodyMatchResult;
 use pact_models::json_utils::{json_to_num, json_to_string};
 use pact_models::prelude::OptionalBody;
@@ -15,20 +13,18 @@ use pact_models::v4::sync_message::SynchronousMessage;
 use pact_models::content_types::ContentType;
 use pact_plugin_driver::proto;
 use pact_plugin_driver::utils::proto_value_to_string;
-use pact_verifier::verification_result::{MismatchResult, VerificationExecutionResult};
+use pact_verifier::verification_result::MismatchResult;
 use prost_types::{DescriptorProto, FileDescriptorSet, MethodDescriptorProto, ServiceDescriptorProto};
 use serde_json::Value;
 use tonic::metadata::{Ascii, Binary, MetadataKey, MetadataMap, MetadataValue};
-use tonic::metadata::errors::InvalidMetadataKey;
 use tonic::{Request, Response, Status};
-use tonic::codec::{Codec, DecodeBuf, Decoder, EncodeBuf, Encoder};
 use tower::ServiceExt;
 use tracing::{debug, error, instrument, trace, warn};
 
-use crate::dynamic_message::{DynamicMessage, DynamicMessageEncoder, PactCodec};
+use crate::dynamic_message::{DynamicMessage, PactCodec};
 use crate::matching::match_service;
 use crate::message_decoder::decode_message;
-use crate::utils::{find_message_type_by_name, last_name, lookup_interaction_config, lookup_service_descriptors_for_interaction};
+use crate::utils::{find_message_type_by_name, last_name, lookup_service_descriptors_for_interaction};
 
 #[derive(Debug)]
 struct GrpcError {
@@ -66,10 +62,10 @@ pub async fn verify_interaction(
       Ok(response) => {
         debug!("Received response from gRPC server - {:?}", response);
         let response_metadata = response.metadata();
-        let mut body = response.get_ref();
+        let body = response.get_ref();
         trace!("gRPC metadata: {:?}", response_metadata);
         trace!("gRPC body: {:?}", body);
-        verify_response(body, response_metadata, pact, interaction,
+        verify_response(body, response_metadata, interaction,
                         &file_desc, &service_desc, &method_desc)
       }
       Err(err) => {
@@ -95,7 +91,6 @@ pub async fn verify_interaction(
 fn verify_response(
   response_body: &DynamicMessage,
   response_metadata: &MetadataMap,
-  pact: &V4Pact,
   interaction: &SynchronousMessage,
   file_desc: &FileDescriptorSet,
   service_desc: &ServiceDescriptorProto,
@@ -113,7 +108,7 @@ fn verify_response(
       .. ContentType::default()
     };
     let mut actual_body = BytesMut::new();
-    response_body.write_to(&mut actual_body);
+    response_body.write_to(&mut actual_body)?;
     match match_service(
       service_desc.name.clone().unwrap_or_default().as_str(),
       method_desc.name.clone().unwrap_or_default().as_str(),
@@ -143,6 +138,11 @@ fn verify_response(
         results.push(MismatchResult::Error { error: err.to_string(), interaction_id: interaction.id.clone() })
       }
     }
+  }
+
+  // TODO: match any metadata
+  if !response.metadata.is_empty() {
+
   }
 
   Ok(results)
