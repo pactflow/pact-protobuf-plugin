@@ -300,14 +300,14 @@ pub(crate) fn get_descriptors_for_interaction(
   plugin_config: &BTreeMap<String, serde_json::Value>
 ) -> anyhow::Result<FileDescriptorSet> {
   let descriptor_config = plugin_config.get(message_key)
-    .ok_or_else(|| anyhow!("Plugin configuration item with key '{}' is required. Received config {:?}", message_key, plugin_config))?
+    .ok_or_else(|| anyhow!("Plugin configuration item with key '{}' is required. Received config {:?}", message_key, plugin_config.keys()))?
     .as_object()
     .ok_or_else(|| anyhow!("Plugin configuration item with key '{}' has an invalid format", message_key))?;
   let descriptor_bytes_encoded = descriptor_config.get("protoDescriptors")
     .map(json_to_string)
     .unwrap_or_default();
   if descriptor_bytes_encoded.is_empty() {
-    return Err(anyhow!("Plugin configuration item with key '{}' is required. Received config {:?}", message_key, plugin_config));
+    return Err(anyhow!("Plugin configuration item with key '{}' is required, but the descriptors were empty. Received config {:?}", message_key, plugin_config.keys()));
   }
 
   // The descriptor bytes will be base 64 encoded.

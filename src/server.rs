@@ -7,7 +7,7 @@ use std::io::BufReader;
 use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
 use log::{debug, error, info, trace};
-use maplit::{btreemap, hashmap};
+use maplit::hashmap;
 use pact_matching::{BodyMatchResult, Mismatch};
 use pact_models::matchingrules::MatchingRule;
 use pact_models::path_exp::DocPath;
@@ -20,7 +20,6 @@ use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
 use pact_plugin_driver::proto::CompareContentsResponse;
 use pact_plugin_driver::utils::{proto_struct_to_json, proto_struct_to_map, proto_value_to_json, proto_value_to_string, to_proto_value};
 use pact_verifier::verification_result::MismatchResult;
-use prost_types::value::Kind;
 use tonic::metadata::KeyAndValueRef;
 use tonic::{Response, Status};
 use crate::dynamic_message::DynamicMessage;
@@ -143,23 +142,6 @@ impl PactPlugin for ProtobufPactPlugin {
     };
     debug!("compare_contents: message_key = {}", message_key);
 
-    let pact_configuration = plugin_configuration.pact_configuration.unwrap_or_default();
-    debug!("Pact level configuration keys: {:?}", pact_configuration.fields.keys());
-
-    let config_for_interaction = match pact_configuration.fields.get(&message_key)
-      .map(|config| match &config.kind {
-        Some(Kind::StructValue(s)) => s.fields.iter()
-          .map(|(k, v)| (k.clone(), proto_value_to_json(v)))
-          .collect(),
-        _ => btreemap!{}
-      }) {
-      Some(config) => config,
-      None => {
-        error!("Did not find the Protobuf config for key {}", message_key);
-        return Self::error_response(format!("Did not find the Protobuf config for key {}", message_key));
-      }
-    };
-
     // From the plugin configuration for the interaction, there should be either a message type name
     // or a service name. Check for either.
     let message = interaction_config.get("message").and_then(proto_value_to_string);
@@ -169,6 +151,12 @@ impl PactPlugin for ProtobufPactPlugin {
       return Self::error_response("Plugin configuration item with key 'message' or 'service' is required");
     }
 
+    let pact_configuration = plugin_configuration.pact_configuration.unwrap_or_default();
+    debug!("Pact level configuration keys: {:?}", pact_configuration.fields.keys());
+
+    let config_for_interaction = pact_configuration.fields.iter()
+      .map(|(key, config)| (key.clone(), proto_value_to_json(config)))
+      .collect();
     let descriptors = match get_descriptors_for_interaction(message_key.as_str(), &config_for_interaction) {
       Ok(descriptors) => descriptors,
       Err(err) => return Self::error_response(err.to_string())
