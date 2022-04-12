@@ -7,17 +7,22 @@ use std::iter::once;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
-use clap::{App, ErrorKind};
+use clap::{App, Arg, ErrorKind};
 use hyper::header;
+use lazy_static::lazy_static;
 use log4rs::{Config, Handle};
 use log4rs::append::console::ConsoleAppender;
 use log4rs::append::file::FileAppender;
 use log4rs::config::{Appender, load_config_file, Logger, Root};
 use log4rs::encode::pattern::PatternEncoder;
-use log::{LevelFilter, warn};
+use log::LevelFilter;
 use pact_plugin_driver::proto::pact_plugin_server::PactPluginServer;
 use tokio::net::TcpListener;
+use tokio::sync::oneshot::channel;
+use tokio::time;
 use tonic::{Request, Status};
 use tonic::service::{interceptor, Interceptor};
 use tonic::transport::Server;
@@ -25,6 +30,7 @@ use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::sensitive_headers::SetSensitiveHeadersLayer;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
+use tracing::{info, warn};
 use tracing_subscriber::FmtSubscriber;
 use uuid::Uuid;
 
@@ -39,6 +45,7 @@ struct AuthInterceptor {
 
 impl Interceptor for AuthInterceptor {
   fn call(&mut self, request: Request<()>) -> Result<Request<()>, Status> {
+    update_access_time();
     if let Some(auth) = request.metadata().get("authorization") {
       if let Ok(auth) = auth.to_str() {
         if self.server_key == auth {
@@ -53,6 +60,17 @@ impl Interceptor for AuthInterceptor {
       Err(Status::unauthenticated("no credentials supplied"))
     }
   }
+}
+
+lazy_static! {
+  pub static ref SHUTDOWN_TIMER: Mutex<Option<Instant>> = Mutex::new(None);
+}
+
+/// Maximum time to wait when there is no activity to shut the plugin down (10 minutes)
+const MAX_TIME: u64 = 600;
+
+fn integer_value(v: String) -> Result<(), String> {
+  v.parse::<u64>().map(|_| ()).map_err(|e| format!("'{}' is not a valid integer value: {}", v, e) )
 }
 
 /// Main method of the plugin process. This will start a gRPC server using the plugin proto file
@@ -91,21 +109,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = App::new(program)
       .version(clap::crate_version!())
       .about("Pact Protobuf plugin")
-      .version_short("v");
+      .version_short("v")
+      .arg(Arg::with_name("timeout")
+        .short("t")
+        .long("timeout")
+        .takes_value(true)
+        .use_delimiter(false)
+        .help("Timeout to use for inactivity to shutdown the plugin process. Default is 600 seconds (10 minutes)")
+        .validator(integer_value)
+      );
 
-    if let Err(err) = app.get_matches_safe() {
-      match err.kind {
+    let matches = match app.get_matches_safe() {
+      Ok(matches) => matches,
+      Err(err) => return match err.kind {
         ErrorKind::HelpDisplayed => {
           println!("{}", err.message);
-          return Ok(())
+          Ok(())
         },
         ErrorKind::VersionDisplayed => {
           println!();
-          return Ok(())
+          Ok(())
         },
-        _ => {}
+        _ => {
+          err.exit();
+        }
       }
-    }
+    };
 
     // Bind to a OS provided port and create a TCP listener
     let addr: SocketAddr = "[::1]:0".parse()?;
@@ -132,12 +161,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create the gRPC server listening on the previously created TCP listener
     let plugin = ProtobufPactPlugin::new();
+    let (snd, rcr) = channel::<()>();
+    update_access_time();
+
+    let timeout = matches.value_of("timeout")
+      .map(|port| port.parse::<u64>().unwrap())
+      .unwrap_or(MAX_TIME);
+    tokio::spawn(async move {
+      let mut interval = time::interval(Duration::from_secs(10));
+      let mut elapsed = false;
+      while !elapsed {
+        interval.tick().await;
+        {
+          let guard = SHUTDOWN_TIMER.lock().unwrap();
+          if let Some(i) = &*guard {
+            if i.elapsed().as_secs() > timeout {
+              info!("No activity for more than {timeout} seconds, sending shutdown signal");
+              elapsed = true;
+            }
+          }
+        }
+      }
+      let _ = snd.send(());
+    });
     Server::builder()
       .layer(layer)
       .add_service(PactPluginServer::new(plugin))
-      .serve_with_incoming(TcpIncoming { inner: listener }).await?;
+      .serve_with_incoming_shutdown(
+        TcpIncoming { inner: listener },
+        async move {
+          let _ = rcr.await;
+          info!("Received shutdown signal, shutting plugin down");
+        }
+      ).await?;
 
     Ok(())
+}
+
+pub fn update_access_time() {
+  let mut guard = SHUTDOWN_TIMER.lock().unwrap();
+  *guard = Some(Instant::now());
 }
 
 fn init_default_logging(log_level: LevelFilter) -> anyhow::Result<Handle> {
