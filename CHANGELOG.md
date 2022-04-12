@@ -1,3 +1,10 @@
+# 0.1.2 - Bugfix Release
+
+* accda0d - feat: add a shutdown time of 10 minutes to avoid hanging processes (Ronald Holshausen, Tue Apr 12 15:22:38 2022 +1000)
+* fda0844 - fix(regression): gRPC implementaton broke verifying Protobuf messages (Ronald Holshausen, Tue Apr 12 12:45:52 2022 +1000)
+* 9993693 - chore: debugging CI build (Ronald Holshausen, Tue Apr 12 11:08:04 2022 +1000)
+* b319205 - bump version to 0.1.2 (Ronald Holshausen, Mon Apr 11 18:06:20 2022 +1000)
+
 # 0.1.1 - Support verifying gRPC requests
 
 * d42a5c7 - chore: use the published version of pact-plugin-driver (Ronald Holshausen, Mon Apr 11 17:40:04 2022 +1000)
