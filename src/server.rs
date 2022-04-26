@@ -592,7 +592,7 @@ impl PactPlugin for ProtobufPactPlugin {
 
     let config = request.config.as_ref().map(proto_struct_to_map).unwrap_or_default();
     match verify_interaction(&pact, &interaction, &body, &metadata, &config).await {
-      Ok(result) => {
+      Ok((result, output)) => {
         let results = result.iter()
           .flat_map(|result| match result {
             MismatchResult::Mismatches { mismatches, .. } => {
@@ -633,6 +633,7 @@ impl PactPlugin for ProtobufPactPlugin {
           response: Some(proto::verify_interaction_response::Response::Result(proto::VerificationResult {
             success: result.is_empty(),
             mismatches: results,
+            output,
             .. proto::VerificationResult::default()
           })),
           .. proto::VerifyInteractionResponse::default()

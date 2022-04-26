@@ -241,7 +241,7 @@ pub(crate) fn parse_pact_from_request_json(pact_json: &str, source: &str) -> any
 }
 
 /// Lookup up the interaction in the Pact file, given the ID
-pub(crate) fn lookup_interaction_by_id<'a>(interaction_key: &str, pact: &'a V4Pact) -> anyhow::Result<&'a Box<dyn V4Interaction>> {
+pub(crate) fn lookup_interaction_by_id<'a>(interaction_key: &str, pact: &'a V4Pact) -> anyhow::Result<&'a Box<dyn V4Interaction + Send + Sync>> {
   match pact.interactions.iter()
     .find(|i| i.key().unwrap_or_default() == interaction_key) {
     Some(interaction) => Ok(interaction),

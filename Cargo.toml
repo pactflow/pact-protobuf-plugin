@@ -20,10 +20,10 @@ tokio = { version = "1.0", features = ["full"] }
 uuid = { version = "0.8", features = ["v4"] }
 log = "0.4"
 maplit = "1.0.2"
-pact_matching = "0.12.3"
-pact_models = "0.3.0"
-pact_verifier = "0.13.3"
-pact-plugin-driver = "0.1"
+pact_matching = { version = "0.12.5", path = "../pact-reference/rust/pact_matching" }
+pact_models = "0.4.0"
+pact_verifier = { version = "0.13.4", path = "../pact-reference/rust/pact_verifier" }
+pact-plugin-driver = "0.1.5"
 anyhow = "1.0.42"
 futures = "0.3"
 async-trait = "0.1.51"
@@ -48,6 +48,7 @@ tracing = { version = "0.1", features = [ "log-always" ] }
 tracing-core = "0.1.23"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 lazy_static = "1.4.0"
+ansi_term = "0.12.1"
 
 [dependencies.reqwest]
 version = "0.11"
@@ -57,7 +58,6 @@ features = ["rustls-tls", "rustls-tls-native-roots", "json", "gzip", "deflate"]
 [dev-dependencies]
 expectest = "0.12"
 env_logger = "0.9"
-pact_verifier = "0.13.2"
 serde = "1.0.130"
 rocket = "0.5.0-rc.1"
 test-log = "0.2.8"

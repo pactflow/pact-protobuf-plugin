@@ -103,7 +103,7 @@ pub(crate) async fn process_proto(
   let digest_str = format!("{:x}", digest);
   let plugin_config = PluginConfiguration {
     interaction_configuration: None,
-    pact_configuration: Some(to_proto_struct(hashmap!{
+    pact_configuration: Some(to_proto_struct(&hashmap!{
       digest_str => json!({
         "protoFile": file_contents,
         "protoDescriptors": descriptor_encoded
@@ -134,7 +134,7 @@ fn configure_protobuf_service(
     proc_name, all_descriptors, descriptor)
     .map(|(request, response)| {
       let plugin_configuration = Some(PluginConfiguration {
-        interaction_configuration: Some(to_proto_struct(hashmap! {
+        interaction_configuration: Some(to_proto_struct(&hashmap! {
             "service".to_string() => Value::String(
               service_name.split_once(':').map(|(s, _)| s).unwrap_or(service_name).to_string()
             ),
@@ -258,7 +258,7 @@ fn configure_protobuf_message(
     .map(|interaction| {
       InteractionResponse {
         plugin_configuration: Some(PluginConfiguration {
-          interaction_configuration: Some(to_proto_struct(hashmap!{
+          interaction_configuration: Some(to_proto_struct(&hashmap!{
             "message".to_string() => Value::String(message_name.to_string()),
             "descriptorKey".to_string() => Value::String(descriptor_hash.to_string())
           })),
@@ -310,7 +310,7 @@ fn construct_protobuf_interaction_for_message(
         let values = if rule_values.is_empty() {
           None
         } else {
-          Some(to_proto_struct(rule_values.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()))
+          Some(to_proto_struct(&rule_values.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()))
         };
         MatchingRule {
           r#type: rule.name(),
@@ -325,7 +325,7 @@ fn construct_protobuf_interaction_for_message(
     let values = if gen_values.is_empty() {
       None
     } else {
-      Some(to_proto_struct(gen_values.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()))
+      Some(to_proto_struct(&gen_values.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()))
     };
     (path.to_string(), pact_plugin_driver::proto::Generator {
       r#type: generator.name(),

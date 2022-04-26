@@ -3,23 +3,25 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 
+use ansi_term::Colour::{Green, Red};
+use ansi_term::Style;
 use anyhow::anyhow;
 use bytes::BytesMut;
 use pact_matching::BodyMatchResult;
+use pact_models::content_types::ContentType;
 use pact_models::json_utils::{json_to_num, json_to_string};
 use pact_models::prelude::OptionalBody;
 use pact_models::prelude::v4::V4Pact;
 use pact_models::v4::sync_message::SynchronousMessage;
-use pact_models::content_types::ContentType;
 use pact_plugin_driver::proto;
 use pact_plugin_driver::utils::proto_value_to_string;
 use pact_verifier::verification_result::MismatchResult;
 use prost_types::{DescriptorProto, FileDescriptorSet, MethodDescriptorProto, ServiceDescriptorProto};
 use serde_json::Value;
-use tonic::metadata::{Ascii, Binary, MetadataKey, MetadataMap, MetadataValue};
 use tonic::{Request, Response, Status};
+use tonic::metadata::{Ascii, Binary, MetadataKey, MetadataMap, MetadataValue};
 use tower::ServiceExt;
-use tracing::{debug, error, instrument, trace, warn};
+use tracing::{debug, error, trace, warn};
 
 use crate::dynamic_message::{DynamicMessage, PactCodec};
 use crate::matching::match_service;
@@ -40,16 +42,17 @@ impl Display for GrpcError {
 impl std::error::Error for GrpcError {}
 
 /// Verify a gRPC interaction
-#[instrument]
 pub async fn verify_interaction(
   pact: &V4Pact,
   interaction: &SynchronousMessage,
   request_body: &OptionalBody,
   metadata: &HashMap<String, proto::MetadataValue>,
   config: &HashMap<String, Value>
-) -> anyhow::Result<Vec<MismatchResult>> {
+) -> anyhow::Result<(Vec<MismatchResult>, Vec<String>)> {
   debug!("Verifying interaction {}", interaction);
-  debug!("interaction={:?}", interaction);
+  trace!("interaction={:?}", interaction);
+  trace!("metadata={:?}", metadata);
+  trace!("config={:?}", config);
 
   let (file_desc, service_desc, method_desc, _) = lookup_service_descriptors_for_interaction(interaction, pact)?;
   let input_message_name = method_desc.input_type.clone().unwrap_or_default();
@@ -65,8 +68,24 @@ pub async fn verify_interaction(
         let body = response.get_ref();
         trace!("gRPC metadata: {:?}", response_metadata);
         trace!("gRPC body: {:?}", body);
-        verify_response(body, response_metadata, interaction,
-                        &file_desc, &service_desc, &method_desc)
+        let result = verify_response(body, response_metadata, interaction,
+                        &file_desc, &service_desc, &method_desc)?;
+
+        let bold = Style::new().bold();
+        let status_result = if !result.is_empty() {
+          Red.paint("FAILED")
+        } else {
+          Green.paint("OK")
+        };
+        let output = vec![
+          format!("Given a {}/{} request",
+                  bold.paint(service_desc.name.unwrap_or_default()),
+                  bold.paint(method_desc.name.unwrap_or_default())),
+          format!("    with an input {} message", bold.paint(input_message_name)),
+          format!("    will return an output {} message [{}]", bold.paint(output_message_name), status_result)
+        ];
+
+        Ok((result, output))
       }
       Err(err) => {
         error!("Received error response from gRPC provider - {:?}", err);
