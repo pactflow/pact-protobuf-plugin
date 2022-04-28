@@ -20,9 +20,9 @@ tokio = { version = "1.0", features = ["full"] }
 uuid = { version = "0.8", features = ["v4"] }
 log = "0.4"
 maplit = "1.0.2"
-pact_matching = { version = "0.12.5", path = "../pact-reference/rust/pact_matching" }
+pact_matching = "0.12.6"
 pact_models = "0.4.0"
-pact_verifier = { version = "0.13.4", path = "../pact-reference/rust/pact_verifier" }
+pact_verifier = "0.13.5"
 pact-plugin-driver = "0.1.5"
 anyhow = "1.0.42"
 futures = "0.3"

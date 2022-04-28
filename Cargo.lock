@@ -1495,7 +1495,9 @@ dependencies = [
 
 [[package]]
 name = "pact_matching"
-version = "0.12.7"
+version = "0.12.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3cc523883bd04b2c7f9ead93c3866a3af9e2a16adf1413bdbfb0e296c97417fa"
 dependencies = [
  "ansi_term",
  "anyhow",
@@ -1568,7 +1570,9 @@ dependencies = [
 
 [[package]]
 name = "pact_verifier"
-version = "0.13.6"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "549f273bb986b0903e3d0a2c978800ee7fa7291dab98f0251717cea484dc0ee1"
 dependencies = [
  "ansi_term",
  "anyhow",
