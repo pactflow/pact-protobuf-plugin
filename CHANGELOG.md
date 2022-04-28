@@ -1,3 +1,10 @@
+# 0.1.3 - Updated verification output
+
+* 57f7cbd - chore: fix the CI build (Ronald Holshausen, Fri Apr 29 09:22:44 2022 +1000)
+* 6f22d4e - chore: update dependencies (Ronald Holshausen, Fri Apr 29 09:14:53 2022 +1000)
+* 070ebbc - feat: add verification output for the verification call (Ronald Holshausen, Tue Apr 26 16:50:57 2022 +1000)
+* ab7d0d8 - bump version to 0.1.3 (Ronald Holshausen, Tue Apr 12 15:59:17 2022 +1000)
+
 # 0.1.2 - Bugfix Release
 
 * accda0d - feat: add a shutdown time of 10 minutes to avoid hanging processes (Ronald Holshausen, Tue Apr 12 15:22:38 2022 +1000)
