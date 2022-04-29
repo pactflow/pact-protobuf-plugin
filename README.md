@@ -1,6 +1,6 @@
 <a href="https://pactflow.io"><img src="docs/pactflow-logo-s.png" alt="pactflow logo" height="60px" align="right"></a>
 
-# Pact Protobuf Plugin [![Pact-Protobuf-Plugin Build](https://github.com/pactflow/pact-protobuf-plugin/actions/workflows/build.yml/badge.svg)](https://github.com/pactflow/pact-protobuf-plugin/actions/workflows/build.yml)
+# Pact Protobuf/gRPC Plugin [![Pact-Protobuf-Plugin Build](https://github.com/pactflow/pact-protobuf-plugin/actions/workflows/build.yml/badge.svg)](https://github.com/pactflow/pact-protobuf-plugin/actions/workflows/build.yml)
 
 > Pact plugin for testing messages and gRPC service calls encoded with as [Protocol buffers](https://developers.google.com/protocol-buffers)
 > using the [Pact](https://docs.pact.io) contract testing framework.
@@ -8,7 +8,8 @@
 ## About this plugin
 
 This plugin provides support for matching and verifying Protobuf messages and gRPC service calls. It fits into the
-[Pact contract testing framework](https://docs.pact.io) and extends Pact testing for [Protocol buffer](https://developers.google.com/protocol-buffers) payloads. 
+[Pact contract testing framework](https://docs.pact.io) and extends Pact testing for [Protocol buffer](https://developers.google.com/protocol-buffers) 
+payloads and gRPC. 
 
 ## Table of Content
 
@@ -32,9 +33,9 @@ of the Pact framework that supports the [V4 Pact specification](https://github.c
 as well as the [Pact plugin framework](https://github.com/pact-foundation/pact-plugins).
 
 Supported Pact versions:
-- [Pact-JVM v4.3.x](https://github.com/pact-foundation/pact-jvm)
-- [Pact-Rust Consumer v0.8.x](https://github.com/pact-foundation/pact-reference/tree/master/rust/pact_consumer)
-- [Pact-Rust Verifier v0.12.x](https://github.com/pact-foundation/pact-reference/tree/master/rust/pact_verifier_cli)
+- [Pact-JVM v4.4.x](https://github.com/pact-foundation/pact-jvm)
+- [Pact-Rust Consumer v0.9.x](https://github.com/pact-foundation/pact-reference/tree/master/rust/pact_consumer)
+- [Pact-Rust Verifier v0.9.x](https://github.com/pact-foundation/pact-reference/tree/master/rust/pact_verifier_cli)
 
 To support compiling Protocol Buffer proto files requires a version of the [Protocol Buffer compiler](https://github.com/protocolbuffers/protobuf).
 
@@ -46,15 +47,15 @@ a request to [support@pactflow.io](support@pactflow.io) with the details.
 
 ### Installing the plugin
 To install the plugin requires the plugin executable binary as well as the plugin manifest file to be unpacked/copied into
-a Pact plugin directory. By default, this will be `.pact/plugins/protobuf-<version>` in the home directory (i.e. `$HOME/.pact/plugins/protobuf-0.0.0`).
+a Pact plugin directory. By default, this will be `.pact/plugins/protobuf-<version>` in the home directory (i.e. `$HOME/.pact/plugins/protobuf-0.1.3`).
 
-Example installation of Linux version 0.0.0: 
-1. Create the plugin directory if needed: `mkdir -p ~/.pact/plugins/protobuf-0.0.0`
-2. Download the plugin manifest into the directory: `wget https://github.com/pactflow/pact-protobuf-plugin/releases/download/v-0.0.0/pact-plugin.json -O ~/.pact/plugins/protobuf-0.0.0/pact-plugin.json`
-3. Download the plugin executable into the directory: `wget https://github.com/pactflow/pact-protobuf-plugin/releases/download/v-0.0.0/pact-protobuf-plugin-linux-x86_64.gz  -O ~/.pact/plugins/protobuf-0.0.0/pact-protobuf-plugin-linux-x86_64.gz`
-4. Unpack the plugin executable: `gunzip -N ~/.pact/plugins/protobuf-0.0.0/pact-protobuf-plugin-linux-x86_64.gz`
+Example installation of Linux version 0.1.3: 
+1. Create the plugin directory if needed: `mkdir -p ~/.pact/plugins/protobuf-0.0.3`
+2. Download the plugin manifest into the directory: `wget https://github.com/pactflow/pact-protobuf-plugin/releases/download/v-0.1.3/pact-plugin.json -O ~/.pact/plugins/protobuf-0.1.3/pact-plugin.json`
+3. Download the plugin executable into the directory: `wget https://github.com/pactflow/pact-protobuf-plugin/releases/download/v-0.1.3/pact-protobuf-plugin-linux-x86_64.gz  -O ~/.pact/plugins/protobuf-0.1.3/pact-protobuf-plugin-linux-x86_64.gz`
+4. Unpack the plugin executable: `gunzip -N ~/.pact/plugins/protobuf-0.1.3/pact-protobuf-plugin-linux-x86_64.gz`
 
-**Note:** The unpacked executable name must match the `entryPoint` value in the manifest file. By default this is
+**Note:** The unpacked executable name must match the `entryPoint` value in the manifest file. By default, this is
 `pact-protobuf-plugin` on unix* and `pact-protobuf-plugin.exe` on Windows.
 
 #### Overriding the default Pact plugin directory
@@ -79,13 +80,15 @@ The plugin executes the following steps:
 If the plugin is going to run in an environment that does not allow automatic downloading of files, then you can do any of the following:
 
 1. Download the protoc archive and place it in the plugin installation directory. It will need to be the correct version and operating system/architecture.
-2. Download the protoc archive and unpack it into the plugin installation directory. It will need to be in a `protoc` directory. Do this if the current version is not supported for your operating system/architecture.
+2. Download the protoc archive and unpack it into the plugin installation directory. It will need to be in a `protoc` directory. _Do this if the current version is not supported for your operating system/architecture._
 3. Change the `downloadUrl` entry in the plugin manifest to point to a location that the file can be downloaded from.
 4. Install the correct version of the protoc compiler as an operating system package. It must then be on the executable path when the plugin runs. For instance, for Alpine Linux this will need to be done as the downloaded versions will not work.
 
 ## Configuring logging
 
-The plugin will log to both standard output and a file (plugin.log) in the plugin log file. Common Rust library entries
+_NOTE: The logging was switched to the Rust tracing crate instead. Currently, log entries for tracing events will not be logged to the log file, but only to standard out._ 
+
+The plugin will log to both standard output and a file (plugin.log) in the plugin installation directory. Common Rust library entries
 for debug and trace levels will be filtered out. The log level will be set by the `LOG_LEVEL` environment variable that
 is passed into the plugin process (this should be set by the framework calling it).
 
@@ -135,19 +138,19 @@ It supports the following:
 * Embedded messages.
 * Map fields (with a string key).
 * Repeated fields.
-* RPC Service method calls (requires mocking of gRPC methods calls as gRPC is not currently supported). 
+* oneOf fields.
+* gRPC Service method calls. 
 
 ## Unsupported features
 
-The following features are currently unsupported, but will be supported in a later release:
-* oneOf fields.
+The following features are currently unsupported, but may be supported in a later release:
 * Map fields with scalar keys.
 * Map fields with enum keys.
 * default values for fields.
 * packed fields.
-* required fields.
-* gRPC service calls (gRPC mock server).
-* Testing/verifying options.
+* required fields (note that this is deprecated in Proto 3).
+* Testing/verifying Protobuf options.
+* Testing/verifying gRPC service call metadata.
 
 The following features will **not** be supported by this plugin:
 * proto2
@@ -159,7 +162,7 @@ The following features may be supported in a future release, but are not current
 
 ## Using the plugin
 
-This plugin will register itself with the Pact framework for the `application/protobuf` content type.
+This plugin will register itself with the Pact framework for the `application/protobuf` and `application/gRPC` content types.
 
 Using this plugin, you can write Pact tests that verify either a single Protobuf message (i.e. a message provider sends
 a single, or one-shot, message to a consumer), or you can verify a service method call where there is an input message 
@@ -194,14 +197,87 @@ from the consumer. There are two main ways of verifying the provider:
 
 For an example of the latter form, see [Simple Example Protobuf provider](https://github.com/pact-foundation/pact-plugins/tree/main/examples/protobuf/protobuf-provider).
 
-### Testing an RPC service method interaction
-
-**NOTE: gRPC service calls are not currently supported directly, but will be supported in a future version.**
+### Testing a gRPC service method interaction
 
 With a service method call, the consumer creates an input message, then invokes a service method and gets an output message
-as the response. The most common service call is via the gRPC RPC framework.
+as the response. The most common service call is via the gRPC framework.
 
-#### Protocol Buffer service message consumer
+#### Testing a gRPC service method interaction with a gRPC server
+
+This plugin supports testing service method calls via gRPC on both the consumer and provider side.
+
+##### Service method consumer
+
+The service method consumer is tested by configuring a test that starts a gRPC mock server based on the proto file for
+the service. Each test first configures a Pact from the proto file. The Pact framework (via this plugin)
+will then create a gRPC mock server for the test. The gRPC consumer can then be pointed at the mock server during the
+test and send the input message and then verify the output message that is received back.
+
+For an example:
+* [JVM example gRPC consumer test](https://github.com/pact-foundation/pact-plugins/blob/main/examples/gRPC/area_calculator/consumer-jvm/src/test/java/io/pact/example/grpc/consumer/PactConsumerTest.java)
+* [Rust example gRPC consumer test](https://github.com/pact-foundation/pact-plugins/blob/main/examples/gRPC/area_calculator/consumer-rust/src/lib.rs)
+
+##### Service method provider
+
+The Pact framework (using this plugin) can test gRPC service method calls to a running gRPC server. The server can be
+tested by either using a unit test, or by using the Rust Verifier CLI. It will need the Pact file created from the
+consumer test with the compiled protobuf descriptors in it (these will have been added by this plugin during the consumer test).
+
+For an example Java unit test: See the [example gRPC verification test](https://github.com/pact-foundation/pact-plugins/blob/main/examples/gRPC/area_calculator/provider-jvm/server/src/test/java/io/pact/example/grpc/provider/PactVerificationTest.java).
+
+By starting the gRPC server, we can then also use the [Pact Verifier](https://github.com/pact-foundation/pact-reference/tree/master/rust/pact_verifier_cli) to check it.
+
+###### For example (using the [example gRPC project](https://github.com/pact-foundation/pact-plugins/blob/main/examples/gRPC/area_calculator/provider-jvm)):
+
+_Running the gRPC server:_
+
+```console
+gRPC/area_calculator/provider-jvm: 
+❯ ./gradlew run
+
+> Task :server:run
+14:56:17,785 |-INFO in ch.qos.logback.classic.LoggerContext[default] - Could NOT find resource [logback-test.xml]
+14:56:17,786 |-INFO in ch.qos.logback.classic.LoggerContext[default] - Could NOT find resource [logback.groovy]
+14:56:17,787 |-INFO in ch.qos.logback.classic.LoggerContext[default] - Found resource [logback.xml] at [file:/home/ronald/Development/Projects/Pact/pact-plugins/examples/gRPC/area_calculator/provider-jvm/server/build/resources/main/logback.xml]
+14:56:17,862 |-INFO in ch.qos.logback.classic.joran.action.ConfigurationAction - debug attribute not set
+14:56:17,863 |-INFO in ch.qos.logback.core.joran.action.AppenderAction - About to instantiate appender of type [ch.qos.logback.core.ConsoleAppender]
+14:56:17,869 |-INFO in ch.qos.logback.core.joran.action.AppenderAction - Naming appender as [STDOUT]
+14:56:17,874 |-INFO in ch.qos.logback.core.joran.action.NestedComplexPropertyIA - Assuming default type [ch.qos.logback.classic.encoder.PatternLayoutEncoder] for [encoder] property
+14:56:17,928 |-INFO in ch.qos.logback.classic.joran.action.RootLoggerAction - Setting level of ROOT logger to ERROR
+14:56:17,928 |-INFO in ch.qos.logback.core.joran.action.AppenderRefAction - Attaching appender named [STDOUT] to Logger[ROOT]
+14:56:17,930 |-ERROR in ch.qos.logback.core.joran.spi.Interpreter@13:36 - no applicable action for [io.grpc.netty], current ElementPath  is [[configuration][io.grpc.netty]]
+14:56:17,930 |-INFO in ch.qos.logback.classic.joran.action.ConfigurationAction - End of configuration.
+14:56:17,932 |-INFO in ch.qos.logback.classic.joran.JoranConfigurator@2b662a77 - Registering current configuration as safe fallback point
+
+Started calculator service on 37621
+<===========--> 87% EXECUTING [18s]
+> :server:run
+```
+
+We can see that the gRPC server was started on a random port (37621 above). So we can then provide the Pact file and
+port number to the verifier.
+
+```console
+gRPC/area_calculator/provider-jvm: 
+❯ pact_verifier_cli -f ../consumer-jvm/build/pacts/protobuf-consumer-area-calculator-provider.json -p 37621
+
+Verifying a pact between protobuf-consumer and area-calculator-provider
+
+  calculate rectangle area request
+
+  Test Name: io.pact.example.grpc.consumer.PactConsumerTest.calculateRectangleArea(MockServer, SynchronousMessages)
+
+  Given a Calculator/calculate request
+      with an input .area_calculator.ShapeMessage message
+      will return an output .area_calculator.AreaResponse message [OK]
+```
+
+#### Testing a gRPC service method interaction without a gRPC server
+
+If you can mock out the gRPC channel or stub, it is fairly easy to test the service method call without requiring a
+gRPC server.
+
+##### Service method consumer
 
 To test the service message consumer, we write a Pact test that defines the expected input (or request) message and the 
 expected output (or response message). The Pact test framework will generate an example input and output message.
@@ -214,7 +290,7 @@ For an example:
 * [JVM example service consumer test](https://github.com/pact-foundation/pact-plugins/blob/main/drivers/jvm/core/src/test/groovy/io/pact/plugins/jvm/core/DriverPactTest.groovy#L116)
 * [Rust example service consumer test](https://github.com/pact-foundation/pact-plugins/blob/main/drivers/rust/driver/tests/pact.rs#L43)
 
-#### Protocol Buffer service message provider
+##### Service method provider
 
 The Protocol Buffer service providers normally extend an interface generated by the protoc compiler. To test them, we
 need a mechanism to get the Pact verifier to pass in the input message from the Pact file and then get the output message
