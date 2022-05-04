@@ -12,7 +12,7 @@ use anyhow::anyhow;
 use futures::TryFutureExt;
 use log::{debug, trace};
 use md5::Digest;
-use os_info::{Bitness, Info};
+use os_info::{Bitness, Info, Type};
 use pact_models::json_utils::json_to_string;
 use prost::Message;
 use prost_types::FileDescriptorSet;
@@ -103,7 +103,7 @@ pub(crate) async fn setup_protoc(config: &HashMap<String, Value>) -> anyhow::Res
   let os_info = os_info::get();
   debug!("Detected OS: {}", os_info);
 
-  local_protoc()
+  local_protoc(&os_info)
     .or_else(|err| {
       trace!("local_protoc: {}", err);
       unpack_protoc(config, &os_info)
@@ -176,13 +176,20 @@ async fn system_protoc() -> anyhow::Result<Protoc> {
   }
 }
 
-async fn local_protoc() -> anyhow::Result<Protoc> {
-  let local_path = "./protoc/bin/protoc";
-  trace!("Looking for local protoc at '{}'", local_path);
-  let protoc_path = Path::new(local_path);
-  if protoc_path.exists() {
+async fn local_protoc(os_info: &Info) -> anyhow::Result<Protoc> {
+  let path = PathBuf::from(".")
+      .join("protoc")
+      .join("bin");
+  let local_path = if os_info.os_type() == Type::Windows {
+    path.join("protoc.exe")
+  } else {
+    path.join("protoc")
+  };
+  let path_str = local_path.to_string_lossy();
+  trace!("Looking for local protoc at '{}'", path_str);
+  if local_path.exists() {
     debug!("Found unpacked protoc binary");
-    let protoc = Protoc::new(protoc_path.to_string_lossy().to_string(), true);
+    let protoc = Protoc::new(path_str.to_string(), true);
     protoc.invoke().await?;
     Ok(protoc)
   } else {
@@ -201,7 +208,7 @@ async fn unpack_protoc(config: &HashMap<String, Value>, os_info: &Info) -> anyho
   if protoc_zip_path.exists() {
     debug!("Found protoc zip archive: {}", protoc_zip_path.to_string_lossy());
     unzip_proto_archive(protoc_zip_path)?;
-    local_protoc().await
+    local_protoc(os_info).await
   } else {
     trace!("protoc zip archive not found");
     Err(anyhow!("No local protoc zip archive"))
