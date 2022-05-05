@@ -1,3 +1,10 @@
+# 0.1.4 - Bugfix Release
+
+* 45a9937 - fix(windows): Protoc does not support Windows paths that start with \\?\ (Ronald Holshausen, Thu May 5 11:41:13 2022 +1000)
+* f1e14fc - fix(windows): Use native OS paths when execting protoc binary (Ronald Holshausen, Wed May 4 17:25:43 2022 +1000)
+* 997be06 - chore: update readme with gRPC support (Ronald Holshausen, Fri Apr 29 15:05:22 2022 +1000)
+* 071e150 - bump version to 0.1.4 (Ronald Holshausen, Fri Apr 29 09:58:27 2022 +1000)
+
 # 0.1.3 - Updated verification output
 
 * 57f7cbd - chore: fix the CI build (Ronald Holshausen, Fri Apr 29 09:22:44 2022 +1000)
