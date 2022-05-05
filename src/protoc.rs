@@ -58,8 +58,13 @@ impl Protoc {
     let tmp_dir = Path::new("tmp");
     fs::create_dir_all(tmp_dir)?;
     let file = NamedTempFile::new_in(tmp_dir)?;
-
     let output = format!("-o{}", file.path().to_string_lossy());
+
+    // Protoc does not work with Windows \\?\ paths
+    let path_str = proto_file.to_string_lossy();
+    let path_str = path_str.strip_prefix(r"\\?\").unwrap_or(&*path_str);
+    let proto_file = PathBuf::from(path_str);
+
     let mut parent_dir = proto_file.to_path_buf();
     parent_dir.pop();
     let include = format!("-I{}", parent_dir.to_string_lossy());
@@ -68,13 +73,13 @@ impl Protoc {
     cmd.arg(output.as_str())
       .arg(include.as_str())
       .arg("--include_imports")
-      .arg(proto_file);
+      .arg(proto_file.clone());
     if self.local_install {
       let include2 = "-Iprotoc/include/google/protobuf";
-      trace!("Invoking protoc: '{} {} {} {} --include_imports {}'", self.protoc_path, output.as_str(), include.as_str(), include2, proto_file.to_string_lossy());
+      trace!("Invoking protoc: '{} {} {} {} --include_imports {}'", self.protoc_path, output.as_str(), include.as_str(), include2, proto_file.display());
       cmd.arg(include2);
     } else {
-      trace!("Invoking protoc: '{} {} {} --include_imports {}'", self.protoc_path, output.as_str(), include.as_str(), proto_file.to_string_lossy());
+      trace!("Invoking protoc: '{} {} {} --include_imports {}'", self.protoc_path, output.as_str(), include.as_str(), proto_file.display());
     }
     match cmd.output().await {
       Ok(out) => {
