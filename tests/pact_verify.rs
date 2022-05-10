@@ -139,7 +139,7 @@ async fn init_plugin_request(request_message: &MessageRequest) -> (Status, (Cont
             let mut buffer = BytesMut::new();
             match response.get_ref().encode(&mut buffer) {
               Ok(_) => {
-                (Status::Ok, (ContentType::with_params("application", "protobuf", ("message", "InitPluginResponse")),
+                (Status::Ok, (ContentType::new("application", "protobuf").with_params(("message", "InitPluginResponse")),
                               buffer.to_vec()))
               }
               Err(err) => {
