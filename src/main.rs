@@ -25,8 +25,10 @@ use tower_http::compression::CompressionLayer;
 use tower_http::sensitive_headers::SetSensitiveHeadersLayer;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::{info, warn};
+use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_subscriber::fmt::writer::MakeWriterExt;
-use tracing_subscriber::FmtSubscriber;
+use tracing_subscriber::{FmtSubscriber, Registry};
+use tracing_subscriber::layer::SubscriberExt;
 use uuid::Uuid;
 
 use pact_protobuf_plugin::server::ProtobufPactPlugin;
@@ -78,16 +80,21 @@ fn integer_value(v: String) -> Result<(), String> {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Setup the logging system based on the LOG_LEVEL environment variable
     let log_level = env::var("LOG_LEVEL").unwrap_or_else(|_| "INFO".to_string());
-    let file_appender = tracing_appender::rolling::daily(".", "plugin.log");
+    let file_appender = tracing_appender::rolling::daily("./log", "plugin.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    let json_appender = tracing_appender::rolling::daily("./log", "plugin.log.json");
+    let (json_non_blocking, _json_guard) = tracing_appender::non_blocking(json_appender);
 
     // Setup tracing
+    let formatting_layer = BunyanFormattingLayer::new("pact-protobuf-plugin".into(), json_non_blocking);
     let subscriber = FmtSubscriber::builder()
       .with_max_level(tracing_core::LevelFilter::from_str(log_level.as_str())
         .unwrap_or(tracing_core::LevelFilter::INFO))
       .with_thread_names(true)
       .with_writer(non_blocking.and(std::io::stdout))
-      .finish();
+      .finish()
+      .with(JsonStorageLayer)
+      .with(formatting_layer);
 
     if let Err(err) = tracing::subscriber::set_global_default(subscriber) {
       warn!("Failed to initialise global tracing subscriber - {err}");
