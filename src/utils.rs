@@ -5,7 +5,6 @@ use std::fmt::Write;
 
 use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
-use log::{trace, warn};
 use maplit::hashmap;
 use pact_models::json_utils::json_to_string;
 use pact_models::pact::load_pact_from_json;
@@ -16,7 +15,7 @@ use prost_types::{DescriptorProto, EnumDescriptorProto, field_descriptor_proto, 
 use prost_types::field_descriptor_proto::Label;
 use prost_types::value::Kind;
 use serde_json::json;
-use tracing::{debug, error};
+use tracing::{debug, error, trace, warn};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
 

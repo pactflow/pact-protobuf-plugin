@@ -6,12 +6,12 @@ use std::collections::BTreeMap;
 use anyhow::anyhow;
 use bytes::{BufMut, Bytes, BytesMut};
 use itertools::Itertools;
-use log::trace;
 use maplit::btreemap;
 use prost::encoding::{encode_key, encode_varint, string, WireType};
 use prost::Message;
 use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorProto};
 use prost_types::field_descriptor_proto::Type;
+use tracing::trace;
 
 use crate::utils::last_name;
 
@@ -612,10 +612,10 @@ mod tests {
   use pact_plugin_driver::proto::{
     Body,
     CompareContentsRequest,
-    MatchingRule,
-    MatchingRules,
+    Generator,
     InteractionResponse,
-    Generator
+    MatchingRule,
+    MatchingRules
   };
   use pact_plugin_driver::proto::body::ContentTypeHint;
   use prost::encoding::WireType;

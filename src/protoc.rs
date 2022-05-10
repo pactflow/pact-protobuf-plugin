@@ -10,7 +10,6 @@ use std::str::from_utf8;
 
 use anyhow::anyhow;
 use futures::TryFutureExt;
-use log::{debug, trace};
 use md5::Digest;
 use os_info::{Bitness, Info, Type};
 use pact_models::json_utils::json_to_string;
@@ -20,6 +19,7 @@ use reqwest::Url;
 use serde_json::Value;
 use tempfile::NamedTempFile;
 use tokio::process::Command;
+use tracing::{debug, trace};
 use zip::ZipArchive;
 
 pub(crate) struct Protoc {

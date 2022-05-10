@@ -13,12 +13,6 @@ use std::time::{Duration, Instant};
 use clap::{App, Arg, ErrorKind};
 use hyper::header;
 use lazy_static::lazy_static;
-use log4rs::{Config, Handle};
-use log4rs::append::console::ConsoleAppender;
-use log4rs::append::file::FileAppender;
-use log4rs::config::{Appender, load_config_file, Logger, Root};
-use log4rs::encode::pattern::PatternEncoder;
-use log::LevelFilter;
 use pact_plugin_driver::proto::pact_plugin_server::PactPluginServer;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot::channel;
@@ -31,6 +25,7 @@ use tower_http::compression::CompressionLayer;
 use tower_http::sensitive_headers::SetSensitiveHeadersLayer;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::{info, warn};
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::FmtSubscriber;
 use uuid::Uuid;
 
@@ -82,22 +77,16 @@ fn integer_value(v: String) -> Result<(), String> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Setup the logging system based on the LOG_LEVEL environment variable
-    let log_config = PathBuf::new().join("./log-config.yaml");
     let log_level = env::var("LOG_LEVEL").unwrap_or_else(|_| "INFO".to_string());
-    let level = LevelFilter::from_str(log_level.as_str()).unwrap_or(LevelFilter::Info);
-    if log_config.exists() {
-      let mut config = load_config_file(log_config, Default::default())?;
-      config.root_mut().set_level(level);
-      log4rs::init_config(config)?;
-    } else {
-      init_default_logging(level)?;
-    };
+    let file_appender = tracing_appender::rolling::daily(".", "plugin.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
     // Setup tracing
     let subscriber = FmtSubscriber::builder()
       .with_max_level(tracing_core::LevelFilter::from_str(log_level.as_str())
         .unwrap_or(tracing_core::LevelFilter::INFO))
       .with_thread_names(true)
+      .with_writer(non_blocking.and(std::io::stdout))
       .finish();
 
     if let Err(err) = tracing::subscriber::set_global_default(subscriber) {
@@ -201,30 +190,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 pub fn update_access_time() {
   let mut guard = SHUTDOWN_TIMER.lock().unwrap();
   *guard = Some(Instant::now());
-}
-
-fn init_default_logging(log_level: LevelFilter) -> anyhow::Result<Handle> {
-  let encoder = PatternEncoder::new("{d(%Y-%m-%dT%H:%M:%S%Z)} {l} [{T}] {t} - {m}{n}");
-  let stdout = ConsoleAppender::builder()
-    .encoder(Box::new(encoder.clone()))
-    .build();
-  let file = FileAppender::builder()
-    .encoder(Box::new(encoder))
-    .build("plugin.log")?;
-
-  let config = Config::builder()
-    .appender(Appender::builder().build("stdout", Box::new(stdout)))
-    .appender(Appender::builder().build("file", Box::new(file)))
-    .logger(Logger::builder().build("h2", LevelFilter::Info))
-    .logger(Logger::builder().build("hyper", LevelFilter::Info))
-    .logger(Logger::builder().build("tracing", LevelFilter::Warn))
-    .logger(Logger::builder().build("tokio", LevelFilter::Info))
-    .logger(Logger::builder().build("tokio_util", LevelFilter::Info))
-    .logger(Logger::builder().build("mio", LevelFilter::Info))
-    .build(Root::builder()
-      .appender("stdout")
-      .appender("file")
-      .build(log_level))?;
-
-  Ok(log4rs::init_config(config)?)
 }

@@ -5,7 +5,6 @@ use std::path::Path;
 
 use anyhow::anyhow;
 use itertools::{Either, Itertools};
-use log::{LevelFilter, max_level};
 use maplit::{btreemap, hashmap};
 use pact_models::generators::Generator;
 use pact_models::json_utils::json_to_string;
@@ -31,6 +30,7 @@ use serde_json::{json, Value};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tracing::{debug, trace, warn};
+use tracing_core::LevelFilter;
 
 use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValueType, RType};
 use crate::protoc::Protoc;
@@ -66,7 +66,7 @@ pub(crate) async fn process_proto(
     Some(des) => *des
   };
 
-  if max_level() >= LevelFilter::Trace {
+  if LevelFilter::current() >= LevelFilter::TRACE {
     trace!("All message types in proto descriptor");
     for message_type in &descriptor.message_type {
       trace!("  {:?}", message_type.name);

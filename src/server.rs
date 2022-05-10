@@ -6,7 +6,6 @@ use std::io::BufReader;
 
 use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
-use log::{debug, error, info, trace};
 use maplit::hashmap;
 use pact_matching::{BodyMatchResult, Mismatch};
 use pact_models::matchingrules::MatchingRule;
@@ -16,14 +15,15 @@ use pact_plugin_driver::plugin_models::PactPluginManifest;
 use pact_plugin_driver::proto;
 use pact_plugin_driver::proto::body::ContentTypeHint;
 use pact_plugin_driver::proto::catalogue_entry::EntryType;
-use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
 use pact_plugin_driver::proto::CompareContentsResponse;
+use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
 use pact_plugin_driver::utils::{proto_struct_to_json, proto_struct_to_map, proto_value_to_json, proto_value_to_string, to_proto_value};
 use pact_verifier::verification_result::MismatchResult;
-use tonic::metadata::KeyAndValueRef;
 use tonic::{Response, Status};
-use crate::dynamic_message::DynamicMessage;
+use tonic::metadata::KeyAndValueRef;
+use tracing::{debug, error, info, trace};
 
+use crate::dynamic_message::DynamicMessage;
 use crate::matching::{match_message, match_service};
 use crate::message_decoder::decode_message;
 use crate::mock_server::{GrpcMockServer, MOCK_SERVER_STATE};
