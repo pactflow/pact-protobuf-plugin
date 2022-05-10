@@ -5,7 +5,6 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use expectest::prelude::*;
-use log::{debug, error};
 use maplit::hashmap;
 use pact_models::http_utils::HttpAuth;
 use pact_models::prelude::ProviderState;
@@ -31,6 +30,8 @@ use rocket::data::{ByteUnit, FromData, Outcome};
 use rocket::http::{ContentType, Status};
 use rocket::outcome::Outcome::{Failure, Success};
 use serde_json::Value;
+use test_log::test;
+use tracing::{debug, error};
 
 use pact_protobuf_plugin::built_info;
 use pact_protobuf_plugin::server::ProtobufPactPlugin;
@@ -165,10 +166,8 @@ async fn init_plugin_request(request_message: &MessageRequest) -> (Status, (Cont
 
 // Pact verification test. This first starts up a Rocket server that can provide the Protobuf
 // messages required by the Pact verifier.
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 async fn verify_plugin() {
-  let _ = env_logger::builder().is_test(true).try_init();
-
   // Test Setup
   let provider_info = ProviderInfo {
     name: "plugin".to_string(),
