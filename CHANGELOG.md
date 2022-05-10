@@ -1,3 +1,12 @@
+# 0.1.5 - Updated logging
+
+* 6b3c0ca - chore: update readme (Ronald Holshausen, Tue May 10 12:10:00 2022 +1000)
+* 4ec5788 - chore: cleanup unused imports (Ronald Holshausen, Tue May 10 11:58:22 2022 +1000)
+* 55c9fa5 - feat: add bunyan formatted JSON logs (Ronald Holshausen, Tue May 10 11:44:46 2022 +1000)
+* 3dae582 - chore: fix failing CI build (Ronald Holshausen, Tue May 10 11:14:40 2022 +1000)
+* 905b19e - feat: use tracing appender for a rolling log file instead of log4rs (Ronald Holshausen, Tue May 10 10:46:45 2022 +1000)
+* 5e547cf - bump version to 0.1.5 (Ronald Holshausen, Thu May 5 13:26:06 2022 +1000)
+
 # 0.1.4 - Bugfix Release
 
 * 45a9937 - fix(windows): Protoc does not support Windows paths that start with \\?\ (Ronald Holshausen, Thu May 5 11:41:13 2022 +1000)
