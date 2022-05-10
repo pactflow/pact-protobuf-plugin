@@ -5,7 +5,6 @@
 use std::env;
 use std::iter::once;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -27,7 +26,7 @@ use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::{info, warn};
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_subscriber::fmt::writer::MakeWriterExt;
-use tracing_subscriber::{FmtSubscriber, Registry};
+use tracing_subscriber::FmtSubscriber;
 use tracing_subscriber::layer::SubscriberExt;
 use uuid::Uuid;
 
