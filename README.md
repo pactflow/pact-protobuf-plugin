@@ -49,7 +49,7 @@ a request to [support@pactflow.io](support@pactflow.io) with the details.
 To install the plugin requires the plugin executable binary as well as the plugin manifest file to be unpacked/copied into
 a Pact plugin directory. By default, this will be `.pact/plugins/protobuf-<version>` in the home directory (i.e. `$HOME/.pact/plugins/protobuf-0.1.5`).
 
-Example installation of Linux version 0.1.3 (replace with the actual version you are using): 
+Example installation of Linux version 0.1.5 (replace with the actual version you are using): 
 1. Create the plugin directory if needed: `mkdir -p ~/.pact/plugins/protobuf-0.1.5`
 2. Download the plugin manifest into the directory: `wget https://github.com/pactflow/pact-protobuf-plugin/releases/download/v-0.1.5/pact-plugin.json -O ~/.pact/plugins/protobuf-0.1.3/pact-plugin.json`
 3. Download the plugin executable into the directory: `wget https://github.com/pactflow/pact-protobuf-plugin/releases/download/v-0.1.5/pact-protobuf-plugin-linux-x86_64.gz  -O ~/.pact/plugins/protobuf-0.1.5/pact-protobuf-plugin.gz`
