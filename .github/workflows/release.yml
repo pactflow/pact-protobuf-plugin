@@ -24,7 +24,7 @@ jobs:
       - name: Install LLVM
         run: choco install -y llvm
         if: runner.os == 'Windows'
-      - run: ./release.sh ${{ runner.os }}
+      - run: ./release.sh ${{ runner.os }} ${{ github.ref }}
         shell: bash
       - name: Upload Release Assets
         id: upload-release-asset

@@ -2,11 +2,11 @@
 
 if [ $# -lt 1 ]
 then
-    echo "Usage : $0 <Linux|Windows|macOS>"
+    echo "Usage : $0 <Linux|Windows|macOS> <version tag>"
     exit
 fi
 
-echo Building Release for "$1"
+echo Building Release for "$1" - "$2"
 
 cargo clean
 mkdir -p target/artifacts
@@ -17,6 +17,9 @@ case "$1" in
             gzip -c target/release/pact-protobuf-plugin > target/artifacts/pact-protobuf-plugin-linux-x86_64.gz
             openssl dgst -sha256 -r target/artifacts/pact-protobuf-plugin-linux-x86_64.gz > target/artifacts/pact-protobuf-plugin-linux-x86_64.gz.sha256
             cp pact-plugin.json target/artifacts
+            NEXT=$(echo "$2" | cut -d\- -f2)
+            sed -e 's/VERSION=\"0.1.5\"/VERSION=\"'${NEXT}'\"/' scripts/install-plugin.sh > target/artifacts/install-plugin.sh
+            openssl dgst -sha256 -r target/artifacts/install-plugin.sh > target/artifacts/install-plugin.sh.sha256
             ;;
   Windows)  echo  "Building for Windows"
             gzip -c target/release/pact-protobuf-plugin.exe > target/artifacts/pact-protobuf-plugin-windows-x86_64.exe.gz
