@@ -15,7 +15,7 @@ case "$(uname -s)" in
      else
         wget https://github.com/pactflow/pact-protobuf-plugin/releases/download/v-${VERSION}/pact-protobuf-plugin-osx-x86_64.gz -O ~/.pact/plugins/protobuf-${VERSION}/pact-protobuf-plugin.gz
      fi
-     gunzip -N ~/.pact/plugins/protobuf-${VERSION}/pact-protobuf-plugin.gz
+     gunzip -N -f ~/.pact/plugins/protobuf-${VERSION}/pact-protobuf-plugin.gz
      chmod +x ~/.pact/plugins/protobuf-${VERSION}/pact-protobuf-plugin
      ;;
 
@@ -24,7 +24,7 @@ case "$(uname -s)" in
      mkdir -p ~/.pact/plugins/protobuf-${VERSION}
      wget https://github.com/pactflow/pact-protobuf-plugin/releases/download/v-${VERSION}/pact-plugin.json -O ~/.pact/plugins/protobuf-${VERSION}/pact-plugin.json
      wget https://github.com/pactflow/pact-protobuf-plugin/releases/download/v-${VERSION}/pact-protobuf-plugin-linux-x86_64.gz -O ~/.pact/plugins/protobuf-${VERSION}/pact-protobuf-plugin.gz
-     gunzip -N ~/.pact/plugins/protobuf-${VERSION}/pact-protobuf-plugin.gz
+     gunzip -N -f ~/.pact/plugins/protobuf-${VERSION}/pact-protobuf-plugin.gz
      chmod +x ~/.pact/plugins/protobuf-${VERSION}/pact-protobuf-plugin
      ;;
 
@@ -33,7 +33,7 @@ case "$(uname -s)" in
      mkdir -p ~/.pact/plugins/protobuf-${VERSION}
      wget https://github.com/pactflow/pact-protobuf-plugin/releases/download/v-${VERSION}/pact-plugin.json -O ~/.pact/plugins/protobuf-${VERSION}/pact-plugin.json
      wget https://github.com/pactflow/pact-protobuf-plugin/releases/download/v-${VERSION}/pact-protobuf-plugin-windows-x86_64.exe.gz -O ~/.pact/plugins/protobuf-${VERSION}/pact-protobuf-plugin.exe.gz
-     gunzip -N ~/.pact/plugins/protobuf-${VERSION}/pact-protobuf-plugin.exe.gz
+     gunzip -N -f ~/.pact/plugins/protobuf-${VERSION}/pact-protobuf-plugin.exe.gz
      ;;
 
    *)
