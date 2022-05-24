@@ -461,7 +461,6 @@ impl PactPlugin for ProtobufPactPlugin {
           .. proto::MockServerResult::default()
         }
       }).collect();
-      guard.remove(&request.server_key);
       Ok(tonic::Response::new(proto::MockServerResults {
         ok,
         results
