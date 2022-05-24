@@ -29,7 +29,14 @@ use crate::message_decoder::decode_message;
 use crate::mock_server::{GrpcMockServer, MOCK_SERVER_STATE};
 use crate::protobuf::process_proto;
 use crate::protoc::setup_protoc;
-use crate::utils::{find_message_type_by_name, get_descriptors_for_interaction, last_name, lookup_interaction_by_id, lookup_service_descriptors_for_interaction, parse_pact_from_request_json};
+use crate::utils::{
+  find_message_type_by_name,
+  get_descriptors_for_interaction,
+  last_name,
+  lookup_interaction_by_id,
+  lookup_service_descriptors_for_interaction,
+  parse_pact_from_request_json
+};
 use crate::verification::verify_interaction;
 
 /// Plugin gRPC server implementation
@@ -412,6 +419,55 @@ impl PactPlugin for ProtobufPactPlugin {
       }))
     } else {
       Ok(tonic::Response::new(proto::ShutdownMockServerResponse {
+        ok: false,
+        results: vec![
+          proto::MockServerResult {
+            error: format!("Did not find any mock server results for a server with ID {}", request.server_key),
+            .. proto::MockServerResult::default()
+          }
+        ]
+      }))
+    }
+  }
+
+  async fn get_mock_server_results(
+    &self,
+    request: tonic::Request<proto::MockServerRequest>,
+  ) -> Result<tonic::Response<proto::MockServerResults>, tonic::Status> {
+    let request = request.get_ref();
+    let mut guard = MOCK_SERVER_STATE.lock().unwrap();
+    if let Some((_, results)) = guard.get(&request.server_key) {
+      let ok = results.iter().all(|(_, r)| *r == BodyMatchResult::Ok);
+      let results = results.iter().map(|(path, r)| {
+        proto::MockServerResult {
+          path: path.clone(),
+          mismatches: r.mismatches().iter().map(|m| {
+            match m {
+              Mismatch::BodyMismatch { path, mismatch, expected, actual } => {
+                proto::ContentMismatch {
+                  expected: expected.as_ref().map(|d| d.to_vec()),
+                  actual: actual.as_ref().map(|d| d.to_vec()),
+                  mismatch: mismatch.clone(),
+                  path: path.clone(),
+                  .. proto::ContentMismatch::default()
+                }
+              }
+              _ => proto::ContentMismatch {
+                mismatch: m.description(),
+                .. proto::ContentMismatch::default()
+              }
+            }
+          }).collect(),
+          .. proto::MockServerResult::default()
+        }
+      }).collect();
+      guard.remove(&request.server_key);
+      Ok(tonic::Response::new(proto::MockServerResults {
+        ok,
+        results
+      }))
+    } else {
+      Ok(tonic::Response::new(proto::MockServerResults {
         ok: false,
         results: vec![
           proto::MockServerResult {
