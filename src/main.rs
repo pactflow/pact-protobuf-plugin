@@ -96,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       .with(formatting_layer);
 
     if let Err(err) = tracing::subscriber::set_global_default(subscriber) {
-      warn!("Failed to initialise global tracing subscriber - {err}");
+      eprintln!("WARN: Failed to initialise global tracing subscriber - {err}");
     };
 
     let args: Vec<String> = env::args().collect();
