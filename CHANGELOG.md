@@ -1,3 +1,15 @@
+# 0.1.6 - Bugfix Release
+
+* 580baba - fix: do not shutdown server for a get_mock_server_results request (Ronald Holshausen, Tue May 24 17:04:02 2022 +1000)
+* 0a3cb5f - feat: implement method for mock server results for FFI functions (Ronald Holshausen, Tue May 24 16:44:15 2022 +1000)
+* 009efa0 - chore: add the install script to the release build (Ronald Holshausen, Tue May 24 16:29:14 2022 +1000)
+* 2f4556b - chore: correct the install plugin script (Ronald Holshausen, Tue May 24 11:51:17 2022 +1000)
+* 593dc63 - core: add bash script to install plugin (Ronald Holshausen, Tue May 24 10:25:22 2022 +1000)
+* b998318 - fix: correct the installation docs to make the plugin executable (Ronald Holshausen, Mon May 16 14:50:55 2022 +1000)
+* 8f7956c - fix: correct the installation docs to make the plugin executable (Ronald Holshausen, Mon May 16 14:49:50 2022 +1000)
+* eb38ca2 - chore: fix pact test after upgrading deps (Ronald Holshausen, Tue May 10 13:56:08 2022 +1000)
+* 4a82af7 - bump version to 0.1.6 (Ronald Holshausen, Tue May 10 13:26:53 2022 +1000)
+
 # 0.1.5 - Updated logging
 
 * 6b3c0ca - chore: update readme (Ronald Holshausen, Tue May 10 12:10:00 2022 +1000)
