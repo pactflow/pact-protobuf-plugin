@@ -1499,9 +1499,9 @@ dependencies = [
 
 [[package]]
 name = "pact-plugin-driver"
-version = "0.1.7"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21dd6ea7db3fe3acf2754b60dba05b9e114be4732a008495b620fd1a754313b0"
+checksum = "70f15c5f627ea57b1ff3a0d1f5dc2b0a9519d1b779a50768361c30f38b48145e"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1573,6 +1573,7 @@ dependencies = [
  "tracing-appender",
  "tracing-bunyan-formatter",
  "tracing-core",
+ "tracing-log",
  "tracing-subscriber",
  "trim-margin",
  "uuid",
