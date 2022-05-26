@@ -23,7 +23,7 @@ use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::sensitive_headers::SetSensitiveHeadersLayer;
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
-use tracing::{info, warn};
+use tracing::info;
 use tracing_bunyan_formatter::{BunyanFormattingLayer, JsonStorageLayer};
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 use tracing_subscriber::FmtSubscriber;
@@ -90,6 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       .with_max_level(tracing_core::LevelFilter::from_str(log_level.as_str())
         .unwrap_or(tracing_core::LevelFilter::INFO))
       .with_thread_names(true)
+      .with_ansi(false)
       .with_writer(non_blocking.and(std::io::stdout))
       .finish()
       .with(JsonStorageLayer)
