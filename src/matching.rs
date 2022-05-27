@@ -123,6 +123,10 @@ pub(crate) fn compare(
 }
 
 /// Compare the fields of the expected and actual messages
+#[tracing::instrument(ret,
+  skip_all,
+  fields(%path)
+)]
 fn compare_message(
   path: DocPath,
   expected_message_fields: &[ProtobufField],
@@ -131,8 +135,6 @@ fn compare_message(
   message_descriptor: &DescriptorProto,
   descriptors: &FileDescriptorSet,
 ) -> anyhow::Result<BodyMatchResult> {
-  trace!(">> compare_message({}, {:?}, {:?})", path, expected_message_fields, actual_message_fields);
-
   let mut results = hashmap!{};
 
   let fields = message_descriptor.field.iter()
@@ -154,14 +156,16 @@ fn compare_message(
         field_no.to_string()
       });
     let field_path = path.join(&field_name);
-    trace!("Comparing message field {}:{}", field_name, field_no);
+    trace!(%field_name, field_no, "Comparing message field {:?} => {:?}", expected, actual);
 
     if is_map_field(message_descriptor, field_descriptor) {
+      trace!(%field_name, field_no, "field is a map field");
       let map_comparison = compare_map_field(&field_path, field_descriptor, expected, actual, matching_context, descriptors);
       if !map_comparison.is_empty() {
         results.insert(field_path.to_string(), map_comparison);
       }
     } else if is_repeated_field(field_descriptor) {
+      trace!(%field_name, field_no, "field is a repeated field");
       let e = expected.iter().map(|f| (*f).clone()).collect_vec();
       let a = actual.iter().map(|f| (*f).clone()).collect_vec();
       let repeated_comparison = compare_repeated_field(&field_path, field_descriptor, &e, &a, matching_context, descriptors);
@@ -169,6 +173,7 @@ fn compare_message(
         results.insert(field_path.to_string(), repeated_comparison);
       }
     } else if !expected.is_empty() && actual.is_empty() {
+      trace!(field_name = field_name.as_str(), field_no, "actual field list is empty");
       results.insert(field_path.to_string(), vec![
         BodyMismatch {
           path: field_path.to_string(),
@@ -183,6 +188,7 @@ fn compare_message(
         results.insert(field_path.to_string(), comparison);
       }
     } else if !actual.is_empty() && matching_context.config() == DiffConfig::NoUnexpectedKeys {
+      trace!(field_name = field_name.as_str(), field_no, "actual field list is not empty");
       results.insert(field_path.to_string(), vec![
         BodyMismatch {
           path: field_path.to_string(),
@@ -202,6 +208,10 @@ fn compare_message(
 }
 
 /// Compare a simple field (non-map and non-repeated)
+#[tracing::instrument(ret,
+  skip_all,
+  fields(%path, %field, %actual)
+)]
 fn compare_field(
   path: &DocPath,
   field: &ProtobufField,
@@ -210,8 +220,6 @@ fn compare_field(
   matching_context: &dyn MatchingContext,
   descriptors: &FileDescriptorSet
 ) -> Vec<Mismatch> {
-  trace!("compare_field({}, {:?}, {:?}, {:?})", path, field, descriptor, actual);
-
   match (&field.data, &actual.data) {
     (ProtobufFieldData::String(s1), ProtobufFieldData::String(s2)) => {
       trace!("Comparing string values");

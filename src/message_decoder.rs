@@ -132,6 +132,7 @@ impl Display for ProtobufFieldData {
 }
 
 /// Decodes the Protobuf message using the descriptors
+#[tracing::instrument(ret, skip_all)]
 pub fn decode_message<B>(
   buffer: &mut B,
   descriptor: &DescriptorProto,
@@ -142,7 +143,7 @@ pub fn decode_message<B>(
 
   while buffer.has_remaining() {
     let (field_num, wire_type) = decode_key(buffer)?;
-    trace!("field_num={}, wire_type={:?}, bytes remaining = {}", field_num, wire_type, buffer.remaining());
+    trace!(field_num, ?wire_type, "read field header, bytes remaining = {}", buffer.remaining());
 
     match find_field_descriptor(field_num as i32, descriptor) {
       Ok(field_descriptor) => {
@@ -231,6 +232,7 @@ pub fn decode_message<B>(
           _ => return Err(anyhow!("Messages with {:?} wire type fields are not supported", wire_type))
         };
 
+        trace!(field_num, ?wire_type, ?data, "read field, bytes remaining = {}", buffer.remaining());
         fields.push(ProtobufField {
           field_num,
           wire_type,
