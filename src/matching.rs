@@ -172,18 +172,13 @@ fn compare_message(
       if !repeated_comparison.is_empty() {
         results.insert(field_path.to_string(), repeated_comparison);
       }
-    } else if !expected.is_empty() && actual.is_empty() {
-      trace!(field_name = field_name.as_str(), field_no, "actual field list is empty");
-      results.insert(field_path.to_string(), vec![
-        BodyMismatch {
-          path: field_path.to_string(),
-          expected: expected.first().map(|field_data| Bytes::from(field_data.data.as_bytes())),
-          actual: None,
-          mismatch: format!("Expected message field '{}' but was missing", field_name)
-        }
-      ]);
     } else if let Some(expected_value) = expected.first() {
-      let comparison = compare_field(&field_path, *expected_value, field_descriptor, *actual.first().unwrap(), matching_context, descriptors);
+      let actual_value = actual.first().map(|v| (*v).clone()).unwrap_or_else(|| {
+        // Need to compare against the default values, as gRPC lib may have skipped sending the field if it was a default
+        expected_value.default_field_value(field_descriptor)
+      });
+
+      let comparison = compare_field(&field_path, *expected_value, field_descriptor, &actual_value, matching_context, descriptors);
       if !comparison.is_empty() {
         results.insert(field_path.to_string(), comparison);
       }
@@ -647,4 +642,196 @@ fn find_field_descriptor(field: &ProtobufField, descriptor: &DescriptorProto) ->
   descriptor.field.iter()
     .find(|field_desc| field_desc.number.unwrap_or_default() == field.field_num as i32)
     .cloned()
+}
+
+#[cfg(test)]
+mod tests {
+  use expectest::prelude::*;
+  use prost::Message;
+  use prost::encoding::WireType;
+  use prost_types::{DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto, FieldDescriptorProto, FileDescriptorSet, MessageOptions};
+  use prost_types::field_descriptor_proto::Label::{Optional, Repeated};
+  use prost_types::field_descriptor_proto::Type::{Enum, String};
+  use pact_models::matchingrules_list;
+
+  use crate::message_decoder::ProtobufField;
+  use crate::utils::tests::DESCRIPTORS;
+
+  use super::*;
+
+  #[test_log::test]
+  fn compare_message_where_the_actual_field_is_missing_due_it_being_the_default_enum_value() {
+    let bytes = base64::decode(DESCRIPTORS).unwrap();
+    let bytes1 = Bytes::copy_from_slice(bytes.as_slice());
+    let fds = FileDescriptorSet::decode(bytes1).unwrap();
+
+    let message_descriptor = find_message_type_by_name("InitPluginResponse", &fds).unwrap();
+
+    let path = DocPath::new("$").unwrap();
+    let context = CoreMatchingContext::new(DiffConfig::AllowUnexpectedKeys, &matchingrules_list! {
+      "body"; 
+      "$.catalogue.type" => [ MatchingRule::Regex("CONTENT_MATCHER|CONTENT_GENERATOR".into()) ],
+      "$.catalogue.key" => [ MatchingRule::NotEmpty ],
+      "$.catalogue.*" => [ MatchingRule::Type ],
+      "$.catalogue" => [ MatchingRule::Values ]
+    }, &hashmap!{});
+
+    let descriptor = DescriptorProto { 
+      name: Some("CatalogueEntry".to_string()), 
+      field: [
+        FieldDescriptorProto { 
+          name: Some("type".to_string()), 
+          number: Some(1), 
+          label: Some(Optional as i32), 
+          r#type: Some(Enum as i32), 
+          type_name: Some(".io.pact.plugin.CatalogueEntry.EntryType".to_string()), 
+          extendee: None, 
+          default_value: None, 
+          oneof_index: None, 
+          json_name: Some("type".to_string()), 
+          options: None, 
+          proto3_optional: None 
+        }, 
+        FieldDescriptorProto { 
+          name: Some("key".to_string()), 
+          number: Some(2), 
+          label: Some(Optional as i32), 
+          r#type: Some(String as i32), 
+          type_name: None, 
+          extendee: None, 
+          default_value: None, 
+          oneof_index: None, 
+          json_name: Some("key".to_string()), 
+          options: None, 
+          proto3_optional: None 
+        }, 
+        FieldDescriptorProto { 
+          name: Some("values".to_string()), 
+          number: Some(3), 
+          label: Some(Repeated as i32), 
+          r#type: Some(prost_types::field_descriptor_proto::Type::Message as i32), 
+          type_name: Some(".io.pact.plugin.CatalogueEntry.ValuesEntry".to_string()), 
+          extendee: None, 
+          default_value: None, 
+          oneof_index: None, 
+          json_name: Some("values".to_string()), 
+          options: None, 
+          proto3_optional: None 
+        }
+      ].to_vec(), 
+      extension: Default::default(), 
+      nested_type: [
+        DescriptorProto { 
+          name: Some("ValuesEntry".to_string()), 
+          field: [
+            FieldDescriptorProto { 
+              name: Some("key".to_string()), 
+              number: Some(1), 
+              label: Some(Optional as i32), 
+              r#type: Some(String as i32), 
+              type_name: None, 
+              extendee: None, 
+              default_value: None, 
+              oneof_index: None, 
+              json_name: Some("key".to_string()), 
+              options: None, 
+              proto3_optional: None 
+            }, 
+            FieldDescriptorProto { 
+              name: Some("value".to_string()), 
+              number: Some(2), 
+              label: Some(Optional as i32), 
+              r#type: Some(String as i32), 
+              type_name: None, 
+              extendee: None, 
+              default_value: None, 
+              oneof_index: None, 
+              json_name: Some("value".to_string()), 
+              options: None, 
+              proto3_optional: None 
+            }
+          ].to_vec(), 
+          extension: Default::default(), 
+          nested_type: Default::default(), 
+          enum_type: Default::default(), 
+          extension_range: Default::default(), 
+          oneof_decl: Default::default(), 
+          options: Some(MessageOptions { 
+            message_set_wire_format: None, 
+            no_standard_descriptor_accessor: None, 
+            deprecated: None, 
+            map_entry: Some(true), 
+            uninterpreted_option: Default::default() 
+          }), 
+          reserved_range: Default::default(), 
+          reserved_name: Default::default() 
+        }
+      ].to_vec(), 
+      enum_type: [
+        EnumDescriptorProto { 
+          name: Some("EntryType".to_string()), 
+          value: [
+            EnumValueDescriptorProto { 
+              name: Some("CONTENT_MATCHER".to_string()), 
+              number: Some(0), 
+              options: None 
+            }, 
+            EnumValueDescriptorProto { 
+              name: Some("CONTENT_GENERATOR".to_string()), 
+              number: Some(1), 
+              options: None 
+            }, 
+            EnumValueDescriptorProto { 
+              name: Some("TRANSPORT".to_string()), 
+              number: Some(2), 
+              options: None 
+            }, 
+            EnumValueDescriptorProto { 
+              name: Some("MATCHER".to_string()), 
+              number: Some(3), 
+              options: None 
+            }, 
+            EnumValueDescriptorProto { 
+              name: Some("INTERACTION".to_string()), 
+              number: Some(4), 
+              options: None 
+            }
+          ].to_vec(), 
+          options: None, 
+          reserved_range: Default::default(), 
+          reserved_name: Default::default() 
+        }
+      ].to_vec(), 
+      extension_range: Default::default(), 
+      oneof_decl: Default::default(), 
+      options: None, 
+      reserved_range: Default::default(), 
+      reserved_name: Default::default() 
+    };
+    let expected = vec![
+      ProtobufField { 
+        field_num: 1, 
+        wire_type: WireType::LengthDelimited, 
+        data: ProtobufFieldData::Message(vec![8, 0, 18, 4, 116, 101, 115, 116], descriptor.clone()) 
+      }
+    ];
+    let actual = vec![
+        ProtobufField { 
+          field_num: 1, 
+          wire_type: WireType::LengthDelimited, 
+          data: ProtobufFieldData::Message(vec![18, 8, 112, 114, 111, 116, 111, 98, 117, 102, 26, 54, 10, 13, 99, 111, 110, 116, 101, 110, 116, 45, 116, 121, 112, 101, 115, 18, 37, 97, 112, 112, 108, 105, 99, 97, 116, 105, 111, 110, 47, 112, 114, 111, 116, 111, 98, 117, 102, 59, 97, 112, 112, 108, 105, 99, 97, 116, 105, 111, 110, 47, 103, 114, 112, 99], descriptor.clone())
+        }
+    ];
+
+    let result = compare_message(
+      path,
+      &expected,
+      &actual,
+      &context,
+      &message_descriptor,
+      &fds,
+    ).unwrap();
+
+    expect!(result).to(be_equal_to(BodyMatchResult::Ok));
+  }
 }

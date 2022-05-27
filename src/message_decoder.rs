@@ -24,6 +24,17 @@ pub struct ProtobufField {
   pub data: ProtobufFieldData
 }
 
+impl ProtobufField {
+  /// Create a copy of this field with the value replaced with the default
+  pub fn default_field_value(&self, descriptor: &FieldDescriptorProto) -> ProtobufField {
+    ProtobufField {
+      field_num: self.field_num,
+      wire_type: self.wire_type,
+      data: self.data.default_field_value(descriptor)
+    }
+  }
+}
+
 impl Display for ProtobufField {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
     write!(f, "{}:({:?}, {}) = {}", self.field_num, self.wire_type, self.data.type_name(), self.data)
@@ -93,6 +104,54 @@ impl ProtobufFieldData {
       ProtobufFieldData::Enum(_, _) => self.to_string().as_bytes().to_vec(),
       ProtobufFieldData::Message(b, _) => b.clone(),
       ProtobufFieldData::Unknown(data) => data.clone()
+    }
+  }
+
+  /// Return the default value for this field data
+  pub fn default_field_value(&self, descriptor: &FieldDescriptorProto) -> ProtobufFieldData {
+    match &descriptor.default_value {
+      Some(s) => {
+        // For numeric types, contains the original text representation of the value.
+        // For booleans, "true" or "false".
+        // For strings, contains the default text contents (not escaped in any way).
+        // For bytes, contains the C escaped value.  All bytes >= 128 are escaped.
+        match self {
+          ProtobufFieldData::String(_) => ProtobufFieldData::String(s.clone()),
+          ProtobufFieldData::Boolean(_) => ProtobufFieldData::Boolean(s == "true"),
+          ProtobufFieldData::UInteger32(_) => ProtobufFieldData::UInteger32(s.parse().unwrap_or_default()),
+          ProtobufFieldData::Integer32(_) => ProtobufFieldData::Integer32(s.parse().unwrap_or_default()),
+          ProtobufFieldData::UInteger64(_) => ProtobufFieldData::UInteger64(s.parse().unwrap_or_default()),
+          ProtobufFieldData::Integer64(_) => ProtobufFieldData::Integer64(s.parse().unwrap_or_default()),
+          ProtobufFieldData::Float(_) => ProtobufFieldData::Float(s.parse().unwrap_or_default()),
+          ProtobufFieldData::Double(_) => ProtobufFieldData::Double(s.parse().unwrap_or_default()),
+          ProtobufFieldData::Bytes(_) => ProtobufFieldData::Bytes(s.as_bytes().to_vec()),
+          ProtobufFieldData::Enum(_, descriptor) => ProtobufFieldData::Enum(s.parse().unwrap_or_default(), descriptor.clone()),
+          ProtobufFieldData::Message(_, descriptor) => ProtobufFieldData::Message(Default::default(), descriptor.clone()),
+          ProtobufFieldData::Unknown(_) => ProtobufFieldData::Unknown(Default::default())
+        }
+      }
+      None => {
+        // For strings, the default value is the empty string.
+        // For bytes, the default value is empty bytes.
+        // For bools, the default value is false.
+        // For numeric types, the default value is zero.
+        // For enums, the default value is the first defined enum value, which must be 0.
+        // For message fields, the field is not set. Its exact value is language-dependent.
+        match self {
+          ProtobufFieldData::String(_) => ProtobufFieldData::String(Default::default()),
+          ProtobufFieldData::Boolean(_) => ProtobufFieldData::Boolean(false),
+          ProtobufFieldData::UInteger32(_) => ProtobufFieldData::UInteger32(0),
+          ProtobufFieldData::Integer32(_) => ProtobufFieldData::Integer32(0),
+          ProtobufFieldData::UInteger64(_) => ProtobufFieldData::UInteger64(0),
+          ProtobufFieldData::Integer64(_) => ProtobufFieldData::Integer64(0),
+          ProtobufFieldData::Float(_) => ProtobufFieldData::Float(0.0),
+          ProtobufFieldData::Double(_) => ProtobufFieldData::Double(0.0),
+          ProtobufFieldData::Bytes(_) => ProtobufFieldData::Bytes(Default::default()),
+          ProtobufFieldData::Enum(_, descriptor) => ProtobufFieldData::Enum(0, descriptor.clone()),
+          ProtobufFieldData::Message(_, descriptor) => ProtobufFieldData::Message(Default::default(), descriptor.clone()),
+          ProtobufFieldData::Unknown(_) => ProtobufFieldData::Unknown(Default::default())
+        }
+      }
     }
   }
 }
@@ -287,7 +346,19 @@ mod tests {
   use prost::Message;
   use prost_types::{DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto, FileDescriptorSet};
 
-  use crate::{bool_field_descriptor, message_field_descriptor, string_field_descriptor};
+  use crate::{
+    bool_field_descriptor, 
+    message_field_descriptor, 
+    string_field_descriptor,
+    enum_field_descriptor,
+    u32_field_descriptor,
+    i32_field_descriptor,
+    u64_field_descriptor,
+    i64_field_descriptor,
+    f32_field_descriptor,
+    f64_field_descriptor,
+    bytes_field_descriptor
+  };
   use crate::message_decoder::{decode_message, ProtobufFieldData};
 
   const FIELD_1_MESSAGE: [u8; 2] = [8, 1];
@@ -678,5 +749,237 @@ mod tests {
     expect!(field_result.field_num).to(be_equal_to(2));
     expect!(field_result.wire_type).to(be_equal_to(WireType::LengthDelimited));
     expect!(field_result.data.type_name()).to(be_equal_to("Unknown"));
+  }
+
+  #[test]
+  fn default_field_value_test_boolean() {
+    let descriptor = bool_field_descriptor!("bool_field", 1);
+    expect!(ProtobufFieldData::Boolean(true).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Boolean(false)));
+
+    let descriptor = prost_types::FieldDescriptorProto {
+      default_value: Some("true".to_string()),
+      .. bool_field_descriptor!("bool_field", 1)
+    };
+    expect!(ProtobufFieldData::Boolean(true).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Boolean(true)));
+
+    let descriptor = prost_types::FieldDescriptorProto {
+      default_value: Some("false".to_string()),
+      .. bool_field_descriptor!("bool_field", 1)
+    };
+    expect!(ProtobufFieldData::Boolean(true).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Boolean(false)));
+  }
+
+  #[test]
+  fn default_field_value_test_string() {
+    let descriptor = string_field_descriptor!("field", 1);
+    expect!(ProtobufFieldData::String("true".to_string()).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::String("".to_string())));
+
+    let descriptor = prost_types::FieldDescriptorProto {
+      default_value: Some("true".to_string()),
+      .. string_field_descriptor!("field", 1)
+    };
+    expect!(ProtobufFieldData::String("other".to_string()).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::String("true".to_string())));
+  }
+
+  #[test]
+  fn default_field_value_test_u32() {
+    let descriptor = u32_field_descriptor!("field", 1);
+    expect!(ProtobufFieldData::UInteger32(123).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::UInteger32(0)));
+
+    let descriptor = prost_types::FieldDescriptorProto {
+      default_value: Some("100".to_string()),
+      .. u32_field_descriptor!("field", 1)
+    };
+    expect!(ProtobufFieldData::UInteger32(123).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::UInteger32(100)));
+
+    let descriptor = prost_types::FieldDescriptorProto {
+      default_value: Some("sdsd".to_string()),
+      .. u32_field_descriptor!("field", 1)
+    };
+    expect!(ProtobufFieldData::UInteger32(123).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::UInteger32(0)));
+  }
+
+  #[test]
+  fn default_field_value_test_i32() {
+    let descriptor = i32_field_descriptor!("field", 1);
+    expect!(ProtobufFieldData::Integer32(123).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Integer32(0)));
+
+    let descriptor = prost_types::FieldDescriptorProto {
+      default_value: Some("100".to_string()),
+      .. i32_field_descriptor!("field", 1)
+    };
+    expect!(ProtobufFieldData::Integer32(123).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Integer32(100)));
+
+    let descriptor = prost_types::FieldDescriptorProto {
+      default_value: Some("sdsd".to_string()),
+      .. i32_field_descriptor!("field", 1)
+    };
+    expect!(ProtobufFieldData::Integer32(123).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Integer32(0)));
+  }
+
+  #[test]
+  fn default_field_value_test_u64() {
+    let descriptor = u64_field_descriptor!("field", 1);
+    expect!(ProtobufFieldData::UInteger64(123).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::UInteger64(0)));
+
+    let descriptor = prost_types::FieldDescriptorProto {
+      default_value: Some("100".to_string()),
+      .. u64_field_descriptor!("field", 1)
+    };
+    expect!(ProtobufFieldData::UInteger64(123).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::UInteger64(100)));
+
+    let descriptor = prost_types::FieldDescriptorProto {
+      default_value: Some("sdsd".to_string()),
+      .. u64_field_descriptor!("field", 1)
+    };
+    expect!(ProtobufFieldData::UInteger64(123).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::UInteger64(0)));
+  }
+
+  #[test]
+  fn default_field_value_test_i64() {
+    let descriptor = i64_field_descriptor!("field", 1);
+    expect!(ProtobufFieldData::Integer64(123).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Integer64(0)));
+
+    let descriptor = prost_types::FieldDescriptorProto {
+      default_value: Some("100".to_string()),
+      .. i64_field_descriptor!("field", 1)
+    };
+    expect!(ProtobufFieldData::Integer64(123).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Integer64(100)));
+
+    let descriptor = prost_types::FieldDescriptorProto {
+      default_value: Some("sdsd".to_string()),
+      .. i64_field_descriptor!("field", 1)
+    };
+    expect!(ProtobufFieldData::Integer64(123).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Integer64(0)));
+  }
+
+  #[test]
+  fn default_field_value_test_f32() {
+    let descriptor = f32_field_descriptor!("field", 1);
+    expect!(ProtobufFieldData::Float(123.0).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Float(0.0)));
+
+    let descriptor = prost_types::FieldDescriptorProto {
+      default_value: Some("100".to_string()),
+      .. f32_field_descriptor!("field", 1)
+    };
+    expect!(ProtobufFieldData::Float(123.0).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Float(100.0)));
+
+    let descriptor = prost_types::FieldDescriptorProto {
+      default_value: Some("sdsd".to_string()),
+      .. f32_field_descriptor!("field", 1)
+    };
+    expect!(ProtobufFieldData::Float(123.0).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Float(0.0)));
+  }
+
+  #[test]
+  fn default_field_value_test_f64() {
+    let descriptor = f64_field_descriptor!("field", 1);
+    expect!(ProtobufFieldData::Double(123.0).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Double(0.0)));
+
+    let descriptor = prost_types::FieldDescriptorProto {
+      default_value: Some("100".to_string()),
+      .. f64_field_descriptor!("field", 1)
+    };
+    expect!(ProtobufFieldData::Double(123.0).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Double(100.0)));
+
+    let descriptor = prost_types::FieldDescriptorProto {
+      default_value: Some("sdsd".to_string()),
+      .. f64_field_descriptor!("field", 1)
+    };
+    expect!(ProtobufFieldData::Double(123.0).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Double(0.0)));
+  }
+
+  #[test]
+  fn default_field_value_test_enum() {
+    let enum_descriptor = prost_types::EnumDescriptorProto {
+      name: Some("EnumValue".to_string()),
+      value: vec![
+        prost_types::EnumValueDescriptorProto {
+          name: Some("OPT1".to_string()),
+          number: Some(0),
+          options: None
+        },
+        prost_types::EnumValueDescriptorProto {
+          name: Some("OPT2".to_string()),
+          number: Some(1),
+          options: None
+        },
+        prost_types::EnumValueDescriptorProto {
+          name: Some("OPT3".to_string()),
+          number: Some(2),
+          options: None
+        }
+      ],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![]
+    };
+    let descriptor = enum_field_descriptor!("field", 1, "OPT1");
+    expect!(ProtobufFieldData::Enum(2, enum_descriptor.clone()).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Enum(0, enum_descriptor.clone())));
+
+    let descriptor = prost_types::FieldDescriptorProto {
+      default_value: Some("1".to_string()),
+      .. enum_field_descriptor!("field", 1, "OPT2")
+    };
+    expect!(ProtobufFieldData::Enum(2, enum_descriptor.clone()).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Enum(1, enum_descriptor.clone())));
+
+    let descriptor = prost_types::FieldDescriptorProto {
+      default_value: Some("sdsd".to_string()),
+      .. enum_field_descriptor!("field", 1, "OPT2")
+    };
+    expect!(ProtobufFieldData::Enum(2, enum_descriptor.clone()).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Enum(0, enum_descriptor.clone())));
+  }
+
+  #[test]
+  fn default_field_value_test_bytes() {
+    let descriptor = bytes_field_descriptor!("field", 1);
+    expect!(ProtobufFieldData::Bytes(vec![1, 2, 3, 4]).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Bytes(vec![])));
+
+    let descriptor = prost_types::FieldDescriptorProto {
+      default_value: Some("true".to_string()),
+      .. bytes_field_descriptor!("field", 1)
+    };
+    expect!(ProtobufFieldData::Bytes(vec![1, 2, 3, 4]).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Bytes(vec![116, 114, 117, 101])));
+  }
+
+  #[test]
+  fn default_field_value_test_message() {
+    let field1 = string_field_descriptor!("implementation", 1);
+    let field2 = string_field_descriptor!("version", 2);
+    let message_descriptor = DescriptorProto {
+      name: Some("InitPluginRequest".to_string()),
+      field: vec![
+        field1.clone(),
+        field2.clone()
+      ],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![]
+    };
+    let descriptor = message_field_descriptor!("field", 1, "InitPluginRequest");
+    expect!(ProtobufFieldData::Message(vec![1, 2, 3, 4], message_descriptor.clone()).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Message(vec![], message_descriptor.clone())));
+
+    let descriptor = prost_types::FieldDescriptorProto {
+      default_value: Some("true".to_string()),
+      .. message_field_descriptor!("field", 1, "InitPluginRequest")
+    };
+    expect!(ProtobufFieldData::Message(vec![1, 2, 3, 4], message_descriptor.clone()).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Message(vec![], message_descriptor.clone())));
+  }
+
+  #[test]
+  fn default_field_value_test_unknown() {
+    let descriptor = bytes_field_descriptor!("field", 1);
+    expect!(ProtobufFieldData::Unknown(vec![1, 2, 3, 4]).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Unknown(vec![])));
+
+    let descriptor = prost_types::FieldDescriptorProto {
+      default_value: Some("true".to_string()),
+      .. bytes_field_descriptor!("field", 1)
+    };
+    expect!(ProtobufFieldData::Unknown(vec![1, 2, 3, 4]).default_field_value(&descriptor)).to(be_equal_to(ProtobufFieldData::Unknown(vec![])));
   }
 }

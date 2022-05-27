@@ -344,7 +344,7 @@ pub(crate) fn find_service_descriptor<'a>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
   use bytes::Bytes;
   use expectest::prelude::*;
   use prost::Message;
@@ -364,7 +364,7 @@ mod tests {
     expect!(last_name("1.2.3.4")).to(be_equal_to("4"));
   }
 
-  const DESCRIPTORS: &'static str = "CuIFChxnb29nbGUvcHJvdG9idWYvc3RydWN0LnByb3RvEg9nb29\
+  pub const DESCRIPTORS: &'static str = "CuIFChxnb29nbGUvcHJvdG9idWYvc3RydWN0LnByb3RvEg9nb29\
     nbGUucHJvdG9idWYimAEKBlN0cnVjdBI7CgZmaWVsZHMYASADKAsyIy5nb29nbGUucHJvdG9idWYuU3RydWN0LkZpZWxkc\
     0VudHJ5UgZmaWVsZHMaUQoLRmllbGRzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSLAoFdmFsdWUYAiABKAsyFi5nb29nbGU\
     ucHJvdG9idWYuVmFsdWVSBXZhbHVlOgI4ASKyAgoFVmFsdWUSOwoKbnVsbF92YWx1ZRgBIAEoDjIaLmdvb2dsZS5wcm90b2\

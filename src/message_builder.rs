@@ -821,6 +821,120 @@ mod tests {
     );
   }
 
+  #[macro_export]
+  macro_rules! u32_field_descriptor {
+    ($name:expr, $n:expr) => (
+        prost_types::FieldDescriptorProto {
+          name: Some($name.to_string()),
+          number: Some($n),
+          label: Some(prost_types::field_descriptor_proto::Label::Optional as i32),
+          r#type: Some(prost_types::field_descriptor_proto::Type::Uint32 as i32),
+          type_name: Some("UInteger32".to_string()),
+          extendee: None,
+          default_value: None,
+          oneof_index: None,
+          json_name: None,
+          options: None,
+          proto3_optional: None
+        }
+    );
+  }
+
+  #[macro_export]
+  macro_rules! i32_field_descriptor {
+    ($name:expr, $n:expr) => (
+        prost_types::FieldDescriptorProto {
+          name: Some($name.to_string()),
+          number: Some($n),
+          label: Some(prost_types::field_descriptor_proto::Label::Optional as i32),
+          r#type: Some(prost_types::field_descriptor_proto::Type::Int32 as i32),
+          type_name: Some("Integer32".to_string()),
+          extendee: None,
+          default_value: None,
+          oneof_index: None,
+          json_name: None,
+          options: None,
+          proto3_optional: None
+        }
+    );
+  }
+
+  #[macro_export]
+  macro_rules! u64_field_descriptor {
+    ($name:expr, $n:expr) => (
+        prost_types::FieldDescriptorProto {
+          name: Some($name.to_string()),
+          number: Some($n),
+          label: Some(prost_types::field_descriptor_proto::Label::Optional as i32),
+          r#type: Some(prost_types::field_descriptor_proto::Type::Uint64 as i32),
+          type_name: Some("UInteger64".to_string()),
+          extendee: None,
+          default_value: None,
+          oneof_index: None,
+          json_name: None,
+          options: None,
+          proto3_optional: None
+        }
+    );
+  }
+
+  #[macro_export]
+  macro_rules! i64_field_descriptor {
+    ($name:expr, $n:expr) => (
+        prost_types::FieldDescriptorProto {
+          name: Some($name.to_string()),
+          number: Some($n),
+          label: Some(prost_types::field_descriptor_proto::Label::Optional as i32),
+          r#type: Some(prost_types::field_descriptor_proto::Type::Int64 as i32),
+          type_name: Some("Integer64".to_string()),
+          extendee: None,
+          default_value: None,
+          oneof_index: None,
+          json_name: None,
+          options: None,
+          proto3_optional: None
+        }
+    );
+  }
+
+  #[macro_export]
+  macro_rules! f32_field_descriptor {
+    ($name:expr, $n:expr) => (
+        prost_types::FieldDescriptorProto {
+          name: Some($name.to_string()),
+          number: Some($n),
+          label: Some(prost_types::field_descriptor_proto::Label::Optional as i32),
+          r#type: Some(prost_types::field_descriptor_proto::Type::Float as i32),
+          type_name: Some("Float".to_string()),
+          extendee: None,
+          default_value: None,
+          oneof_index: None,
+          json_name: None,
+          options: None,
+          proto3_optional: None
+        }
+    );
+  }
+
+  #[macro_export]
+  macro_rules! f64_field_descriptor {
+    ($name:expr, $n:expr) => (
+        prost_types::FieldDescriptorProto {
+          name: Some($name.to_string()),
+          number: Some($n),
+          label: Some(prost_types::field_descriptor_proto::Label::Optional as i32),
+          r#type: Some(prost_types::field_descriptor_proto::Type::Double as i32),
+          type_name: Some("Double".to_string()),
+          extendee: None,
+          default_value: None,
+          oneof_index: None,
+          json_name: None,
+          options: None,
+          proto3_optional: None
+        }
+    );
+  }
+
   #[test_log::test]
   fn encode_simple_message_test() {
     // message InitPluginRequest {
