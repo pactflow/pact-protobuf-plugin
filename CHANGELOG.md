@@ -1,3 +1,12 @@
+# 0.1.7 - Bugfix Release
+
+* 9697164 - fix: need to consider the default values when comparing with a missing field value (Ronald Holshausen, Fri May 27 16:02:49 2022 +1000)
+* ad9c37b - chore: update the tracing events for matching payloads (Ronald Holshausen, Fri May 27 10:35:07 2022 +1000)
+* 8dc4c17 - fix: disable ansi mode so the log file is more readable (Ronald Holshausen, Thu May 26 14:19:17 2022 +1000)
+* 820613d - chore: Upgrade to pact-plugin-driver 0.1.8 (Ronald Holshausen, Thu May 26 14:18:43 2022 +1000)
+* 6a12675 - chore: no point logging that you can not install logging (Ronald Holshausen, Wed May 25 14:19:39 2022 +1000)
+* 11ddc11 - bump version to 0.1.7 (Ronald Holshausen, Wed May 25 13:37:30 2022 +1000)
+
 # 0.1.6 - Bugfix Release
 
 * 580baba - fix: do not shutdown server for a get_mock_server_results request (Ronald Holshausen, Tue May 24 17:04:02 2022 +1000)
