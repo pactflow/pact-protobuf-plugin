@@ -340,6 +340,31 @@ builder
   ))
 ```
 
+## Running within docker containers
+
+The plugin will try to use an IP6 address when opening the port for the gRPC server. Docker will only support IP6
+addresses with extra configuration applied and this will not be available by default. To use an IP4 address instead,
+you can either add the host parameter as a command line parameter, or add `hostToBindTo` value to the plugin 
+configuration in the manifest file.
+
+I.e., updated manifest to use 127.0.0.1 as the host to bind to
+
+```json
+{
+  "manifestVersion": 1,
+  "pluginInterfaceVersion": 1,
+  "name": "protobuf",
+  "version": "0.1.8",
+  "executableType": "exec",
+  "entryPoint": "pact-protobuf-plugin",
+  "pluginConfig": {
+    "protocVersion": "3.19.1",
+    "downloadUrl": "https://github.com/protocolbuffers/protobuf/releases/download",
+    "hostToBindTo": "127.0.0.1"
+  }
+}
+```
+
 ## Support
 
 Join us on slack [![slack](https://slack.pact.io/badge.svg)](https://slack.pact.io) in the **#protobufs** channel
