@@ -8,6 +8,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use anyhow::Context;
 
 use clap::{App, Arg, ErrorKind};
 use hyper::header;
@@ -113,6 +114,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .use_delimiter(false)
         .help("Timeout to use for inactivity to shutdown the plugin process. Default is 600 seconds (10 minutes)")
         .validator(integer_value)
+      )
+      .arg(Arg::with_name("host")
+        .short("h")
+        .long("host")
+        .takes_value(true)
+        .use_delimiter(false)
+        .help("Host to bind to. Defaults to [::1], which is the IP6 loopback address")
       );
 
     let matches = match app.get_matches_safe() {
@@ -132,9 +140,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       }
     };
 
+    let plugin = ProtobufPactPlugin::new();
+
     // Bind to a OS provided port and create a TCP listener
-    let addr: SocketAddr = "[::1]:0".parse()?;
-    let listener = TcpListener::bind(addr).await?;
+    let host = plugin.host_to_bind_to()
+      .or_else(|| matches.value_of("host").map(|host| host.to_string()))
+      .unwrap_or_else(|| "[::1]".to_string());
+    let addr: SocketAddr = format!("{}:0", host).parse()
+      .with_context(|| format!("Failed to parse the host '{}'", host))?;
+    let listener = TcpListener::bind(addr)
+      .await
+      .with_context(|| format!("Failed to bind to host '{}'", host))?;
     let address = listener.local_addr()?;
 
     // Generate a server key and then output the required startup JSON message to standard out
@@ -156,7 +172,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       .into_inner();
 
     // Create the gRPC server listening on the previously created TCP listener
-    let plugin = ProtobufPactPlugin::new();
     let (snd, rcr) = channel::<()>();
     update_access_time();
 
