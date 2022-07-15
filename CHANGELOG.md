@@ -1,3 +1,10 @@
+# 0.1.8 - Support IP4 addresses in docker
+
+* ae7a7e3 - fix: Update the readme with host parameter details (Ronald Holshausen, Wed Jul 13 15:31:17 2022 -0400)
+* 1512f96 - fix: add host parameter to support IP4 adresses in docker (Ronald Holshausen, Wed Jul 13 15:16:37 2022 -0400)
+* 1d57ede - chore: Upgrade all the pact crates to latest versions (Ronald Holshausen, Mon May 30 12:35:17 2022 +1000)
+* 183cc80 - bump version to 0.1.8 (Ronald Holshausen, Mon May 30 11:12:58 2022 +1000)
+
 # 0.1.7 - Bugfix Release
 
 * 9697164 - fix: need to consider the default values when comparing with a missing field value (Ronald Holshausen, Fri May 27 16:02:49 2022 +1000)
