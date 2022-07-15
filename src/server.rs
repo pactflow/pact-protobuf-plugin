@@ -8,6 +8,7 @@ use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
 use maplit::hashmap;
 use pact_matching::{BodyMatchResult, Mismatch};
+use pact_models::json_utils::json_to_string;
 use pact_models::matchingrules::MatchingRule;
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::{ContentType, MatchingRuleCategory, OptionalBody, RuleLogic};
@@ -66,6 +67,12 @@ impl ProtobufPactPlugin {
       error: err.into(),
       ..proto::CompareContentsResponse::default()
     }))
+  }
+
+  pub fn host_to_bind_to(&self) -> Option<String> {
+    self.manifest.plugin_config
+      .get("hostToBindTo")
+      .map(|host| json_to_string(host))
   }
 }
 
