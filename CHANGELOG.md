@@ -1,3 +1,9 @@
+# 0.1.9 - build linux binary with musl
+
+* 30ce99e - chore: Update dependencies (Ronald Holshausen, Mon Aug 8 16:51:44 2022 +1000)
+* 5590dbc - feat: build linux binary with musl (Ronald Holshausen, Mon Aug 8 16:47:15 2022 +1000)
+* 6996dd2 - bump version to 0.1.9 (Ronald Holshausen, Fri Jul 15 13:17:25 2022 -0400)
+
 # 0.1.8 - Support IP4 addresses in docker
 
 * ae7a7e3 - fix: Update the readme with host parameter details (Ronald Holshausen, Wed Jul 13 15:31:17 2022 -0400)
