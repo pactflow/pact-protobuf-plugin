@@ -21,7 +21,7 @@ uuid = { version = "0.8", features = ["v4"] }
 maplit = "1.0.2"
 pact_matching = "0.12.8"
 pact_models = "0.4.1"
-pact_verifier = "0.13.7"
+pact_verifier = "=0.13.7"
 pact-plugin-driver = "0.1.8"
 anyhow = "1.0.42"
 futures = "0.3"
