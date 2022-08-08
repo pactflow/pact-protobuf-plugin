@@ -10,10 +10,10 @@ echo Building Release for "$1" - "$2"
 
 cargo clean
 mkdir -p target/artifacts
-cargo build --release
 
 case "$1" in
   Linux)    echo "Building for Linux"
+            docker run --rm --user "$(id -u)":"$(id -g)" -v "$(pwd):/workspace" -w /workspace -t pactfoundation/rust-musl-build -c 'cargo build --release'
             gzip -c target/release/pact-protobuf-plugin > target/artifacts/pact-protobuf-plugin-linux-x86_64.gz
             openssl dgst -sha256 -r target/artifacts/pact-protobuf-plugin-linux-x86_64.gz > target/artifacts/pact-protobuf-plugin-linux-x86_64.gz.sha256
             cp pact-plugin.json target/artifacts
@@ -22,10 +22,12 @@ case "$1" in
             openssl dgst -sha256 -r target/artifacts/install-plugin.sh > target/artifacts/install-plugin.sh.sha256
             ;;
   Windows)  echo  "Building for Windows"
+            cargo build --release
             gzip -c target/release/pact-protobuf-plugin.exe > target/artifacts/pact-protobuf-plugin-windows-x86_64.exe.gz
             openssl dgst -sha256 -r target/artifacts/pact-protobuf-plugin-windows-x86_64.exe.gz > target/artifacts/pact-protobuf-plugin-windows-x86_64.exe.gz.sha256
             ;;
   macOS)    echo  "Building for OSX"
+            cargo build --release
             gzip -c target/release/pact-protobuf-plugin > target/artifacts/pact-protobuf-plugin-osx-x86_64.gz
             openssl dgst -sha256 -r target/artifacts/pact-protobuf-plugin-osx-x86_64.gz > target/artifacts/pact-protobuf-plugin-osx-x86_64.gz.sha256
 
