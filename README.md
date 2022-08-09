@@ -94,6 +94,23 @@ installation directory. Each file will be rolled per day and be suffixed with th
 be formatted in the [bunyan format](https://github.com/trentm/node-bunyan).The log level will be set by the `LOG_LEVEL`
 environment variable that is passed into the plugin process (this should be set by the framework calling it).
 
+## Configuration
+
+The Protobuf plugin supports the following configuration options, which can be set in the plugin manifest file under
+`pluginConfig`:
+
+### `protocVersion` [string]
+
+The Protobuf compiler version to download if required.
+
+### `downloadUrl` [string]
+
+The URL to download the Protobuf compiler from. By default, this will be the Protocol Buffers GitHub release page.
+
+### `hostToBindTo` [string]
+
+Host to bind to. Default is the IP4 loopback adapter `127.0.0.1`, to use the IP6 loopback set it to `::1`. 
+
 ## Supported features
 
 The plugin currently supports proto3 formatted messages and service calls.
