@@ -1,3 +1,12 @@
+# 0.1.10 - Maintenance Release
+
+* 4c83a29 - feat: correct the trace logging of protoc command (Ronald Holshausen, Tue Aug 9 16:35:04 2022 +1000)
+* ae8fb4b - feat: allow additional includes to be configured for protoc (Ronald Holshausen, Tue Aug 9 15:15:56 2022 +1000)
+* a16cd9c - chore: add configuration section to readme (Ronald Holshausen, Tue Aug 9 14:22:13 2022 +1000)
+* 2faf8f4 - fix(Windows): correct the protobuf include for Windows (Ronald Holshausen, Tue Aug 9 13:53:35 2022 +1000)
+* 653cc79 - feat: default the address to bind to to the IP4 lookback adapter (Ronald Holshausen, Mon Aug 8 17:32:17 2022 +1000)
+* 6df9505 - bump version to 0.1.10 (Ronald Holshausen, Mon Aug 8 16:53:43 2022 +1000)
+
 # 0.1.9 - build linux binary with musl
 
 * 30ce99e - chore: Update dependencies (Ronald Holshausen, Mon Aug 8 16:51:44 2022 +1000)
