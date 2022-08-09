@@ -75,7 +75,8 @@ impl Protoc {
       .arg("--include_imports")
       .arg(proto_file.clone());
     if self.local_install {
-      let include2 = "-Iprotoc/include/google/protobuf";
+      let include_path = PathBuf::from("protoc").join("include");
+      let include2 = format!("-I{}", include_path.to_string_lossy());
       trace!("Invoking protoc: '{} {} {} {} --include_imports {}'", self.protoc_path, output.as_str(), include.as_str(), include2, proto_file.display());
       cmd.arg(include2);
     } else {
