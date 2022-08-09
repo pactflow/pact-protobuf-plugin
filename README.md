@@ -111,6 +111,11 @@ The URL to download the Protobuf compiler from. By default, this will be the Pro
 
 Host to bind to. Default is the IP4 loopback adapter `127.0.0.1`, to use the IP6 loopback set it to `::1`. 
 
+### `additionalIncludes` [string or list\<string\>]
+
+Additional includes to add to the Protocol buffers compiler. Each value will be added verbatim to the command line 
+using `-I`.
+
 ## Supported features
 
 The plugin currently supports proto3 formatted messages and service calls.

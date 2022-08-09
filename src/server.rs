@@ -20,6 +20,7 @@ use pact_plugin_driver::proto::CompareContentsResponse;
 use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
 use pact_plugin_driver::utils::{proto_struct_to_json, proto_struct_to_map, proto_value_to_json, proto_value_to_string, to_proto_value};
 use pact_verifier::verification_result::MismatchResult;
+use serde_json::Value;
 use tonic::{Response, Status};
 use tonic::metadata::KeyAndValueRef;
 use tracing::{debug, error, info, trace};
@@ -61,18 +62,34 @@ impl ProtobufPactPlugin {
     ProtobufPactPlugin { manifest }
   }
 
+  /// Return a Tonic error response for the given error
   fn error_response<E>(err: E) -> Result<Response<CompareContentsResponse>, Status>
     where E: Into<String> {
-    Ok(tonic::Response::new(proto::CompareContentsResponse {
+    Ok(Response::new(proto::CompareContentsResponse {
       error: err.into(),
       ..proto::CompareContentsResponse::default()
     }))
   }
 
+  /// Returns the configured hostname to bind to from the configuration in the manifest.
   pub fn host_to_bind_to(&self) -> Option<String> {
     self.manifest.plugin_config
       .get("hostToBindTo")
       .map(|host| json_to_string(host))
+  }
+
+  /// Returns any additional include paths from the configuration in the manifest to add to the
+  /// Protocol Buffers compiler call.
+  pub fn additional_includes(&self) -> Vec<String> {
+    self.manifest.plugin_config
+      .get("additionalIncludes")
+      .map(|includes| {
+        match includes {
+          Value::Array(list) => list.iter().map(|v| json_to_string(v)).collect(),
+          _ => vec![json_to_string(includes)]
+        }
+      })
+      .unwrap_or_default()
   }
 }
 
@@ -295,7 +312,7 @@ impl PactPlugin for ProtobufPactPlugin {
     }
 
     // Make sure we can execute the protobuf compiler
-    let protoc = match setup_protoc(&self.manifest.plugin_config).await {
+    let protoc = match setup_protoc(&self.manifest.plugin_config, &self.additional_includes()).await {
       Ok(protoc) => protoc,
       Err(err) => {
         error!("Failed to invoke protoc: {}", err);
@@ -786,10 +803,12 @@ fn mismatch_to_proto_mismatch(mismatch: &Mismatch) -> proto::ContentMismatch {
 #[allow(non_snake_case)]
 mod tests {
   use expectest::prelude::*;
-  use maplit::btreemap;
+  use maplit::{btreemap, hashmap};
+  use pact_plugin_driver::plugin_models::PactPluginManifest;
   use pact_plugin_driver::proto;
   use pact_plugin_driver::proto::catalogue_entry::EntryType;
   use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
+  use serde_json::json;
   use tonic::Request;
 
   use crate::server::ProtobufPactPlugin;
@@ -854,5 +873,83 @@ mod tests {
     let response_message = response.get_ref();
     expect!(&response_message.error).to(
       be_equal_to("Config item with key 'pact:message-type' and the protobuf message name or 'pact:proto-service' and the service name is required"));
+  }
+
+  #[test]
+  fn ProtobufPactPlugin__host_to_bind_to__default() {
+    let plugin = ProtobufPactPlugin { manifest: Default::default() };
+    expect!(plugin.host_to_bind_to()).to(be_none());
+  }
+
+  #[test]
+  fn ProtobufPactPlugin__host_to_bind_to__with_string_value() {
+    let manifest = PactPluginManifest {
+      plugin_config: hashmap! {
+        "hostToBindTo".to_string() => json!("127.0.1.1")
+      },
+      .. PactPluginManifest::default()
+    };
+    let plugin = ProtobufPactPlugin { manifest };
+    expect!(plugin.host_to_bind_to()).to(be_some().value("127.0.1.1".to_string()));
+  }
+
+  #[test]
+  fn ProtobufPactPlugin__host_to_bind_to__with_non_string_value() {
+    let manifest = PactPluginManifest {
+      plugin_config: hashmap! {
+        "hostToBindTo".to_string() => json!("127")
+      },
+      .. PactPluginManifest::default()
+    };
+    let plugin = ProtobufPactPlugin { manifest };
+    expect!(plugin.host_to_bind_to()).to(be_some().value("127".to_string()));
+  }
+
+  #[test]
+  fn ProtobufPactPlugin__additional_includes__default() {
+    let plugin = ProtobufPactPlugin { manifest: Default::default() };
+    expect!(plugin.additional_includes().iter()).to(be_empty());
+  }
+
+  #[test]
+  fn ProtobufPactPlugin__additional_includes__with_string_value() {
+    let manifest = PactPluginManifest {
+      plugin_config: hashmap! {
+        "additionalIncludes".to_string() => json!("/some/path")
+      },
+      .. PactPluginManifest::default()
+    };
+    let plugin = ProtobufPactPlugin { manifest };
+    expect!(plugin.additional_includes()).to(be_equal_to(vec!["/some/path".to_string()]));
+  }
+
+  #[test]
+  fn ProtobufPactPlugin__additional_includes__with_list_value() {
+    let manifest = PactPluginManifest {
+      plugin_config: hashmap! {
+        "additionalIncludes".to_string() => json!(["/path1", "/path2"])
+      },
+      .. PactPluginManifest::default()
+    };
+    let plugin = ProtobufPactPlugin { manifest };
+    expect!(plugin.additional_includes()).to(be_equal_to(vec![
+      "/path1".to_string(),
+      "/path2".to_string()
+    ]));
+  }
+
+  #[test]
+  fn ProtobufPactPlugin__additional_includes__with_non_string_values() {
+    let manifest = PactPluginManifest {
+      plugin_config: hashmap! {
+        "additionalIncludes".to_string() => json!(["/path1", 200])
+      },
+      .. PactPluginManifest::default()
+    };
+    let plugin = ProtobufPactPlugin { manifest };
+    expect!(plugin.additional_includes()).to(be_equal_to(vec![
+      "/path1".to_string(),
+      "200".to_string()
+    ]));
   }
 }

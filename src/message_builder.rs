@@ -1510,78 +1510,78 @@ mod tests {
 
   // #[test_log::test]
   // TODO: replace with a test that uses oneOf
-  fn encode_message_for_interaction_response_test() {
-    // message InteractionResponse {
-    //   // Contents for the interaction
-    //   Body contents = 1;
-    //   // All matching rules to apply
-    //   map<string, MatchingRules> rules = 2;
-    //   // Generators to apply
-    //   map<string, Generator> generators = 3;
-    //   // For message interactions, any metadata to be applied
-    //   google.protobuf.Struct messageMetadata = 4;
-    //   // Plugin specific data to be persisted in the pact file
-    //   PluginConfiguration pluginConfiguration = 5;
-    //   // Markdown/HTML formatted text representation of the interaction
-    //   string interactionMarkup = 6;
-    //   // Type of markup used
-    //   enum MarkupType {
-    //     // CommonMark format
-    //     COMMON_MARK = 0;
-    //     // HTML format
-    //     HTML = 1;
-    //   }
-    //   MarkupType interactionMarkupType = 7;
-    //   // Description of what part this interaction belongs to (in the case of there being more than one, for instance,
-    //   // request/response messages)
-    //   string partName = 8;
-    // }
-
-    let interaction_response = InteractionResponse {
-      contents: Some(Body {
-        content_type: "application/json".to_string(),
-        content: Some("{}".as_bytes().to_vec()),
-        content_type_hint: ContentTypeHint::Text as i32
-      }),
-      rules: hashmap! {
-        "$.test.one".to_string() => MatchingRules {
-          rule: vec![
-            MatchingRule {
-              r#type: "regex".to_string(),
-              values: None
-            }
-          ]
-        }
-      },
-      generators: hashmap! {
-        "$.test.one".to_string() => Generator {
-          r#type: "DateTime".to_string(),
-          values: Some(::prost_types::Struct {
-            fields: btreemap! {
-              "format".to_string() => ::prost_types::Value {
-                kind: Some(::prost_types::value::Kind::StringValue("YYYY-MM-DD".to_string()))
-              }
-            }
-          })
-        },
-        "$.test.two".to_string() => Generator {
-          r#type: "DateTime".to_string(),
-          values: Some(::prost_types::Struct {
-            fields: btreemap! {
-              "format".to_string() => ::prost_types::Value {
-                kind: Some(::prost_types::value::Kind::StringValue("YYYY-MM-DD".to_string()))
-              }
-            }
-          })
-        }
-      },
-      .. InteractionResponse::default()
-    };
-
-    let mut encoded_buf = BytesMut::with_capacity(interaction_response.encoded_len());
-    interaction_response.encode(&mut encoded_buf).unwrap();
-    dbg!(format!("{:0x}", encoded_buf));
-
-    expect!(true).to(be_false());
-  }
+  // fn encode_message_for_interaction_response_test() {
+  //   // message InteractionResponse {
+  //   //   // Contents for the interaction
+  //   //   Body contents = 1;
+  //   //   // All matching rules to apply
+  //   //   map<string, MatchingRules> rules = 2;
+  //   //   // Generators to apply
+  //   //   map<string, Generator> generators = 3;
+  //   //   // For message interactions, any metadata to be applied
+  //   //   google.protobuf.Struct messageMetadata = 4;
+  //   //   // Plugin specific data to be persisted in the pact file
+  //   //   PluginConfiguration pluginConfiguration = 5;
+  //   //   // Markdown/HTML formatted text representation of the interaction
+  //   //   string interactionMarkup = 6;
+  //   //   // Type of markup used
+  //   //   enum MarkupType {
+  //   //     // CommonMark format
+  //   //     COMMON_MARK = 0;
+  //   //     // HTML format
+  //   //     HTML = 1;
+  //   //   }
+  //   //   MarkupType interactionMarkupType = 7;
+  //   //   // Description of what part this interaction belongs to (in the case of there being more than one, for instance,
+  //   //   // request/response messages)
+  //   //   string partName = 8;
+  //   // }
+  //
+  //   let interaction_response = InteractionResponse {
+  //     contents: Some(Body {
+  //       content_type: "application/json".to_string(),
+  //       content: Some("{}".as_bytes().to_vec()),
+  //       content_type_hint: ContentTypeHint::Text as i32
+  //     }),
+  //     rules: hashmap! {
+  //       "$.test.one".to_string() => MatchingRules {
+  //         rule: vec![
+  //           MatchingRule {
+  //             r#type: "regex".to_string(),
+  //             values: None
+  //           }
+  //         ]
+  //       }
+  //     },
+  //     generators: hashmap! {
+  //       "$.test.one".to_string() => Generator {
+  //         r#type: "DateTime".to_string(),
+  //         values: Some(::prost_types::Struct {
+  //           fields: btreemap! {
+  //             "format".to_string() => ::prost_types::Value {
+  //               kind: Some(::prost_types::value::Kind::StringValue("YYYY-MM-DD".to_string()))
+  //             }
+  //           }
+  //         })
+  //       },
+  //       "$.test.two".to_string() => Generator {
+  //         r#type: "DateTime".to_string(),
+  //         values: Some(::prost_types::Struct {
+  //           fields: btreemap! {
+  //             "format".to_string() => ::prost_types::Value {
+  //               kind: Some(::prost_types::value::Kind::StringValue("YYYY-MM-DD".to_string()))
+  //             }
+  //           }
+  //         })
+  //       }
+  //     },
+  //     .. InteractionResponse::default()
+  //   };
+  //
+  //   let mut encoded_buf = BytesMut::with_capacity(interaction_response.encoded_len());
+  //   interaction_response.encode(&mut encoded_buf).unwrap();
+  //   dbg!(format!("{:0x}", encoded_buf));
+  //
+  //   expect!(true).to(be_false());
+  // }
 }

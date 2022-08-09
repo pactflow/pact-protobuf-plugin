@@ -22,20 +22,24 @@ use tokio::process::Command;
 use tracing::{debug, trace};
 use zip::ZipArchive;
 
+/// Encapsulation over the Protocol Buffers compiler.
 pub(crate) struct Protoc {
   protoc_path: String,
-  local_install: bool
+  local_install: bool,
+  additional_includes: Vec<String>
 }
 
 impl Protoc {
-  fn new(path: String, local_install: bool) -> Self {
+  /// Create a new Protoc
+  fn new(path: String, local_install: bool, additional_includes: Vec<String>) -> Self {
     Protoc {
       protoc_path: path,
-      local_install
+      local_install,
+      additional_includes
     }
   }
 
-  // Try to invoke the protoc binary
+  /// Try to invoke the protoc binary
   async fn invoke(&self) -> anyhow::Result<String> {
     trace!("Invoking protoc: '{} --version'", self.protoc_path);
     match Command::new(&self.protoc_path).arg("--version").output().await {
@@ -54,6 +58,7 @@ impl Protoc {
     }
   }
 
+  /// Get protoc to compile the proto file, and the load the file descriptors
   pub(crate) async fn parse_proto_file(&self, proto_file: &Path) -> anyhow::Result<(FileDescriptorSet, Digest, Vec<u8>)> {
     let tmp_dir = Path::new("tmp");
     fs::create_dir_all(tmp_dir)?;
@@ -69,11 +74,19 @@ impl Protoc {
     parent_dir.pop();
     let include = format!("-I{}", parent_dir.to_string_lossy());
 
+    // Create the protoc command line to invoke
     let mut cmd = Command::new(&self.protoc_path);
     cmd.arg(output.as_str())
       .arg(include.as_str())
       .arg("--include_imports")
       .arg(proto_file.clone());
+
+    // Add any additional includes defined by the user
+    for inc in &self.additional_includes {
+      cmd.arg(format!("-I{}", inc));
+    }
+
+    // If it is a local install, the default Protobuf well-defined types will be available
     if self.local_install {
       let include_path = PathBuf::from("protoc").join("include");
       let include2 = format!("-I{}", include_path.to_string_lossy());
@@ -82,6 +95,7 @@ impl Protoc {
     } else {
       trace!("Invoking protoc: '{} {} {} --include_imports {}'", self.protoc_path, output.as_str(), include.as_str(), proto_file.display());
     }
+
     match cmd.output().await {
       Ok(out) => {
         if out.status.success() {
@@ -105,27 +119,31 @@ impl Protoc {
 // otherwise it will try download and unpack the version for the current OS
 // otherwise then fallback to any version on the system path
 // will error if unable to do that
-pub(crate) async fn setup_protoc(config: &HashMap<String, Value>) -> anyhow::Result<Protoc> {
+pub(crate) async fn setup_protoc(config: &HashMap<String, Value>, additional_includes: &Vec<String>) -> anyhow::Result<Protoc> {
   let os_info = os_info::get();
   debug!("Detected OS: {}", os_info);
 
-  local_protoc(&os_info)
+  local_protoc(&os_info, additional_includes)
     .or_else(|err| {
       trace!("local_protoc: {}", err);
-      unpack_protoc(config, &os_info)
+      unpack_protoc(config, &os_info, additional_includes)
     })
     .or_else(|err| {
       trace!("unpack_protoc: {}", err);
-      download_protoc(config, &os_info)
+      download_protoc(config, &os_info, additional_includes)
     })
     .or_else(|err| {
       trace!("download_protoc: {}", err);
-      system_protoc()
+      system_protoc(additional_includes)
     })
     .await
 }
 
-async fn download_protoc(config: &HashMap<String, Value>, os_info: &Info) -> anyhow::Result<Protoc> {
+async fn download_protoc(
+  config: &HashMap<String, Value>,
+  os_info: &Info,
+  additional_includes: &Vec<String>
+) -> anyhow::Result<Protoc> {
   trace!("download_protoc: config = {:?}", config);
   let protoc_version = config.get("protocVersion")
     .map(json_to_string)
@@ -155,13 +173,13 @@ async fn download_protoc(config: &HashMap<String, Value>, os_info: &Info) -> any
       protoc_file.write_all(chunk.as_ref())?;
     }
     debug!("Downloaded {} bytes", count);
-    unpack_protoc(config, os_info).await
+    unpack_protoc(config, os_info, additional_includes).await
   } else {
     Err(anyhow!("Failed to download protoc - {}", response.status()))
   }
 }
 
-async fn system_protoc() -> anyhow::Result<Protoc> {
+async fn system_protoc(additional_includes: &Vec<String>) -> anyhow::Result<Protoc> {
   trace!("system_protoc: looking for protoc in system path");
   let program = if OS == "windows" { "where" } else { "which" };
   match Command::new(program).arg("protoc").output().await {
@@ -169,7 +187,7 @@ async fn system_protoc() -> anyhow::Result<Protoc> {
       if out.status.success() {
         let path = from_utf8(out.stdout.as_ref())?;
         debug!("Found protoc binary: {}", path);
-        let protoc = Protoc::new(path.trim().to_string(), false);
+        let protoc = Protoc::new(path.trim().to_string(), false, additional_includes.clone());
         protoc.invoke().await?;
         Ok(protoc)
       } else {
@@ -182,7 +200,7 @@ async fn system_protoc() -> anyhow::Result<Protoc> {
   }
 }
 
-async fn local_protoc(os_info: &Info) -> anyhow::Result<Protoc> {
+async fn local_protoc(os_info: &Info, additional_includes: &Vec<String>) -> anyhow::Result<Protoc> {
   let path = PathBuf::from(".")
       .join("protoc")
       .join("bin");
@@ -195,7 +213,7 @@ async fn local_protoc(os_info: &Info) -> anyhow::Result<Protoc> {
   trace!("Looking for local protoc at '{}'", path_str);
   if local_path.exists() {
     debug!("Found unpacked protoc binary");
-    let protoc = Protoc::new(path_str.to_string(), true);
+    let protoc = Protoc::new(path_str.to_string(), true, additional_includes.clone());
     protoc.invoke().await?;
     Ok(protoc)
   } else {
@@ -204,7 +222,11 @@ async fn local_protoc(os_info: &Info) -> anyhow::Result<Protoc> {
   }
 }
 
-async fn unpack_protoc(config: &HashMap<String, Value>, os_info: &Info) -> anyhow::Result<Protoc> {
+async fn unpack_protoc(
+  config: &HashMap<String, Value>,
+  os_info: &Info,
+  additional_includes: &Vec<String>
+) -> anyhow::Result<Protoc> {
   let protoc_version = config.get("protocVersion")
     .map(json_to_string)
     .ok_or_else(|| anyhow!("Could not get the protoc version from the manifest"))?;
@@ -214,7 +236,7 @@ async fn unpack_protoc(config: &HashMap<String, Value>, os_info: &Info) -> anyho
   if protoc_zip_path.exists() {
     debug!("Found protoc zip archive: {}", protoc_zip_path.to_string_lossy());
     unzip_proto_archive(protoc_zip_path)?;
-    local_protoc(os_info).await
+    local_protoc(os_info, additional_includes).await
   } else {
     trace!("protoc zip archive not found");
     Err(anyhow!("No local protoc zip archive"))
