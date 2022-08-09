@@ -60,6 +60,7 @@ impl Protoc {
 
   /// Get protoc to compile the proto file, and the load the file descriptors
   pub(crate) async fn parse_proto_file(&self, proto_file: &Path) -> anyhow::Result<(FileDescriptorSet, Digest, Vec<u8>)> {
+    trace!(proto_file = ?proto_file, additional_includes = ?self.additional_includes, "Parsing proto file");
     let tmp_dir = Path::new("tmp");
     fs::create_dir_all(tmp_dir)?;
     let file = NamedTempFile::new_in(tmp_dir)?;
@@ -90,12 +91,10 @@ impl Protoc {
     if self.local_install {
       let include_path = PathBuf::from("protoc").join("include");
       let include2 = format!("-I{}", include_path.to_string_lossy());
-      trace!("Invoking protoc: '{} {} {} {} --include_imports {}'", self.protoc_path, output.as_str(), include.as_str(), include2, proto_file.display());
       cmd.arg(include2);
-    } else {
-      trace!("Invoking protoc: '{} {} {} --include_imports {}'", self.protoc_path, output.as_str(), include.as_str(), proto_file.display());
     }
 
+    trace!("Invoking protoc: {:?}", cmd);
     match cmd.output().await {
       Ok(out) => {
         if out.status.success() {
@@ -120,6 +119,7 @@ impl Protoc {
 // otherwise then fallback to any version on the system path
 // will error if unable to do that
 pub(crate) async fn setup_protoc(config: &HashMap<String, Value>, additional_includes: &Vec<String>) -> anyhow::Result<Protoc> {
+  trace!(config = ?config, additional_includes = ?additional_includes, "Setting up protoc");
   let os_info = os_info::get();
   debug!("Detected OS: {}", os_info);
 
