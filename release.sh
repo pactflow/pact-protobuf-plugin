@@ -20,6 +20,12 @@ case "$1" in
             NEXT=$(echo "$2" | cut -d\- -f2)
             sed -e 's/VERSION=\"0.1.5\"/VERSION=\"'${NEXT}'\"/' scripts/install-plugin.sh > target/artifacts/install-plugin.sh
             openssl dgst -sha256 -r target/artifacts/install-plugin.sh > target/artifacts/install-plugin.sh.sha256
+
+            # Build aarch64
+            cargo install cross
+            cross build --target aarch64-unknown-linux-gnu --release
+            gzip -c target/aarch64-unknown-linux-gnu/release/pact-protobuf-plugin > target/artifacts/pact-protobuf-plugin-linux-aarch64.gz
+            openssl dgst -sha256 -r target/artifacts/pact-protobuf-plugin-linux-aarch64.gz > target/artifacts/pact-protobuf-plugin-linux-aarch64.gz.sha256
             ;;
   Windows)  echo  "Building for Windows"
             cargo build --release
