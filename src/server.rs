@@ -459,7 +459,7 @@ impl PactPlugin for ProtobufPactPlugin {
     request: tonic::Request<proto::MockServerRequest>,
   ) -> Result<tonic::Response<proto::MockServerResults>, tonic::Status> {
     let request = request.get_ref();
-    let mut guard = MOCK_SERVER_STATE.lock().unwrap();
+    let guard = MOCK_SERVER_STATE.lock().unwrap();
     if let Some((_, results)) = guard.get(&request.server_key) {
       let ok = results.iter().all(|(_, r)| *r == BodyMatchResult::Ok);
       let results = results.iter().map(|(path, r)| {

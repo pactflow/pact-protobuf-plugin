@@ -174,22 +174,33 @@ fn construct_protobuf_interaction_for_service(
   let input_name = method_descriptor.input_type.as_ref().ok_or_else(|| anyhow!("Input message name is empty for service {}/{}", service_name, method_name))?;
   let output_name = method_descriptor.output_type.as_ref().ok_or_else(|| anyhow!("Input message name is empty for service {}/{}", service_name, method_name))?;
   let input_message_name = last_name(input_name.as_str());
-  let request_descriptor = find_message_descriptor(input_message_name, all_descriptors)?;
   let output_message_name = last_name(output_name.as_str());
+
+  trace!(input_name = input_name.as_str(), input_message_name, "Input message");
+  trace!(output_name = output_name.as_str(), output_message_name, "Output message");
+
+  let request_descriptor = find_message_descriptor(input_message_name, all_descriptors)?;
   let response_descriptor = find_message_descriptor(output_message_name, all_descriptors)?;
 
   let request_part_config = if service_part == "request" {
     config.clone()
   } else {
-    config.get("request").and_then(|request_config| {
+    let config = config.get("request").and_then(|request_config| {
       request_config.kind.as_ref().and_then(|kind| {
         match kind {
-          Kind::StructValue(s) => Some(proto_struct_to_btreemap(s)),
-          _ => None
+          Kind::StructValue(s) => Some(Ok(proto_struct_to_btreemap(s))),
+          Kind::StringValue(s) => Some(Ok(btreemap!{ "value".to_string() => request_config.clone() })),
+          _ => {
+            warn!("Request contents is of an un-processable type: {:?}", kind);
+            Some(Err(anyhow!("Request contents is of an un-processable type: {:?}, it should be either a Struct or a StringValue", kind)))
+          }
         }
       })
-    })
-    .unwrap_or_default()
+    });
+    match config {
+      None => btreemap!{},
+      Some(result) => result?
+    }
   };
   let request_part = if request_part_config.is_empty() {
     None
@@ -838,12 +849,12 @@ mod tests {
   use maplit::{btreemap, hashmap};
   use pact_plugin_driver::proto::{MatchingRule, MatchingRules};
   use pact_plugin_driver::proto::interaction_response::MarkupType;
-  use prost_types::{DescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorProto};
+  use prost_types::{DescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorProto, MethodDescriptorProto, ServiceDescriptorProto};
   use prost_types::field_descriptor_proto::Type;
   use trim_margin::MarginTrimmable;
 
   use crate::message_builder::RType;
-  use crate::protobuf::{construct_protobuf_interaction_for_message, value_for_type};
+  use crate::protobuf::{construct_protobuf_interaction_for_message, construct_protobuf_interaction_for_service, value_for_type};
 
   #[test]
   fn value_for_type_test() {
@@ -1017,5 +1028,192 @@ mod tests {
       |}
       |```
       |".trim_margin().unwrap()));
+  }
+
+  #[test]
+  fn construct_protobuf_interaction_for_service_returns_error_on_invalid_request_type() {
+    let string_descriptor = DescriptorProto {
+      name: Some("StringValue".to_string()),
+      field: vec![
+        FieldDescriptorProto {
+          name: Some("value".to_string()),
+          number: Some(1),
+          label: None,
+          r#type: Some(field_descriptor_proto::Type::String as i32),
+          type_name: Some("string".to_string()),
+          extendee: None,
+          default_value: None,
+          oneof_index: None,
+          json_name: None,
+          options: None,
+          proto3_optional: None
+        }
+      ],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![]
+    };
+    let message_descriptor = DescriptorProto {
+      name: Some("test_message".to_string()),
+      field: vec![
+        FieldDescriptorProto {
+          name: Some("value".to_string()),
+          number: Some(1),
+          label: None,
+          r#type: Some(field_descriptor_proto::Type::String as i32),
+          type_name: Some("string".to_string()),
+          extendee: None,
+          default_value: None,
+          oneof_index: None,
+          json_name: None,
+          options: None,
+          proto3_optional: None
+        }
+      ],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![]
+    };
+    let file_descriptor = FileDescriptorProto {
+      name: None,
+      package: None,
+      dependency: vec![],
+      public_dependency: vec![],
+      weak_dependency: vec![],
+      message_type: vec![ string_descriptor, message_descriptor ],
+      enum_type: vec![],
+      service: vec![],
+      extension: vec![],
+      options: None,
+      source_code_info: None,
+      syntax: None
+    };
+    let service_descriptor = ServiceDescriptorProto {
+      name: Some("test_service".to_string()),
+      method: vec![
+        MethodDescriptorProto {
+          name: Some("call".to_string()),
+          input_type: Some(".google.protobuf.StringValue".to_string()),
+          output_type: Some("test_message".to_string()),
+          options: None,
+          client_streaming: None,
+          server_streaming: None
+        }
+      ],
+      options: None
+    };
+
+    let config = btreemap! {
+      "request".to_string() => prost_types::Value { kind: Some(prost_types::value::Kind::BoolValue(true)) }
+    };
+
+    let result = construct_protobuf_interaction_for_service(&service_descriptor, &config,
+      "test_service", "call", &hashmap!{ "file".to_string() => &file_descriptor }, &file_descriptor);
+    expect!(result.as_ref()).to(be_err());
+    expect!(result.unwrap_err().to_string()).to(
+      be_equal_to("Request contents is of an un-processable type: BoolValue(true), it should be either a Struct or a StringValue")
+    );
+  }
+
+  #[test_log::test]
+  fn construct_protobuf_interaction_for_service_supports_string_value_type() {
+    let string_descriptor = DescriptorProto {
+      name: Some("StringValue".to_string()),
+      field: vec![
+        FieldDescriptorProto {
+          name: Some("value".to_string()),
+          number: Some(1),
+          label: None,
+          r#type: Some(field_descriptor_proto::Type::String as i32),
+          type_name: Some("string".to_string()),
+          extendee: None,
+          default_value: None,
+          oneof_index: None,
+          json_name: None,
+          options: None,
+          proto3_optional: None
+        }
+      ],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![]
+    };
+    let message_descriptor = DescriptorProto {
+      name: Some("test_message".to_string()),
+      field: vec![
+        FieldDescriptorProto {
+          name: Some("value".to_string()),
+          number: Some(1),
+          label: None,
+          r#type: Some(field_descriptor_proto::Type::String as i32),
+          type_name: Some("string".to_string()),
+          extendee: None,
+          default_value: None,
+          oneof_index: None,
+          json_name: None,
+          options: None,
+          proto3_optional: None
+        }
+      ],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![]
+    };
+    let file_descriptor = FileDescriptorProto {
+      name: None,
+      package: None,
+      dependency: vec![],
+      public_dependency: vec![],
+      weak_dependency: vec![],
+      message_type: vec![ string_descriptor, message_descriptor ],
+      enum_type: vec![],
+      service: vec![],
+      extension: vec![],
+      options: None,
+      source_code_info: None,
+      syntax: None
+    };
+    let service_descriptor = ServiceDescriptorProto {
+      name: Some("test_service".to_string()),
+      method: vec![
+        MethodDescriptorProto {
+          name: Some("call".to_string()),
+          input_type: Some(".google.protobuf.StringValue".to_string()),
+          output_type: Some("test_message".to_string()),
+          options: None,
+          client_streaming: None,
+          server_streaming: None
+        }
+      ],
+      options: None
+    };
+
+    let config = btreemap! {
+      "request".to_string() => prost_types::Value { kind: Some(prost_types::value::Kind::StringValue("true".to_string())) }
+    };
+
+    let result = construct_protobuf_interaction_for_service(&service_descriptor, &config,
+      "test_service", "call", &hashmap!{ "file".to_string() => &file_descriptor }, &file_descriptor);
+    expect!(result).to(be_ok());
   }
 }
