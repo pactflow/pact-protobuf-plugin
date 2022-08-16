@@ -21,7 +21,7 @@ use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
 use pact_plugin_driver::utils::{proto_struct_to_json, proto_struct_to_map, proto_value_to_json, proto_value_to_string, to_proto_value};
 use pact_verifier::verification_result::MismatchResult;
 use serde_json::Value;
-use tonic::{Response, Status};
+use tonic::{Request, Response, Status};
 use tonic::metadata::KeyAndValueRef;
 use tracing::{debug, error, info, trace};
 
@@ -99,8 +99,8 @@ impl PactPlugin for ProtobufPactPlugin {
   // This will return the catalogue entries for the plugin
   async fn init_plugin(
     &self,
-    request: tonic::Request<proto::InitPluginRequest>,
-  ) -> Result<tonic::Response<proto::InitPluginResponse>, tonic::Status> {
+    request: Request<proto::InitPluginRequest>,
+  ) -> Result<Response<proto::InitPluginResponse>, Status> {
     let message = request.get_ref();
     debug!("Init request from {}/{}", message.implementation, message.version);
 
@@ -133,19 +133,19 @@ impl PactPlugin for ProtobufPactPlugin {
   // Request from the plugin driver to update our copy of the plugin catalogue.
   async fn update_catalogue(
     &self,
-    _request: tonic::Request<proto::Catalogue>,
-  ) -> Result<tonic::Response<()>, tonic::Status> {
+    _request: Request<proto::Catalogue>,
+  ) -> Result<Response<()>, tonic::Status> {
     debug!("Update catalogue request");
 
     // currently a no-op
-    Ok(tonic::Response::new(()))
+    Ok(Response::new(()))
   }
 
   // Request to compare the contents and return the results of the comparison.
   async fn compare_contents(
     &self,
-    request: tonic::Request<proto::CompareContentsRequest>,
-  ) -> Result<tonic::Response<proto::CompareContentsResponse>, tonic::Status> {
+    request: Request<proto::CompareContentsRequest>,
+  ) -> Result<Response<proto::CompareContentsResponse>, Status> {
     trace!("Got compare_contents request {:?}", request.get_ref());
 
     let request = request.get_ref();
@@ -283,8 +283,8 @@ impl PactPlugin for ProtobufPactPlugin {
   // Request to configure the expected interaction for a consumer tests.
   async fn configure_interaction(
     &self,
-    request: tonic::Request<proto::ConfigureInteractionRequest>,
-  ) -> Result<tonic::Response<proto::ConfigureInteractionResponse>, tonic::Status> {
+    request: Request<proto::ConfigureInteractionRequest>,
+  ) -> Result<Response<proto::ConfigureInteractionResponse>, Status> {
     let message = request.get_ref();
     debug!("Configure interaction request for content type '{}'", message.content_type);
 
@@ -345,8 +345,8 @@ impl PactPlugin for ProtobufPactPlugin {
   // Request to generate the contents of the interaction.
   async fn generate_content(
     &self,
-    request: tonic::Request<proto::GenerateContentRequest>,
-  ) -> Result<tonic::Response<proto::GenerateContentResponse>, tonic::Status> {
+    request: Request<proto::GenerateContentRequest>,
+  ) -> Result<Response<proto::GenerateContentResponse>, Status> {
     debug!("Generate content request");
     let message = request.get_ref();
     // TODO: apply any generators here
@@ -357,8 +357,8 @@ impl PactPlugin for ProtobufPactPlugin {
 
   async fn start_mock_server(
     &self,
-    request: tonic::Request<proto::StartMockServerRequest>,
-  ) -> Result<tonic::Response<proto::StartMockServerResponse>, tonic::Status> {
+    request: Request<proto::StartMockServerRequest>,
+  ) -> Result<Response<proto::StartMockServerResponse>, Status> {
     debug!("Received start mock server request");
     let request = request.get_ref();
     let pact = match parse_pact_from_request_json(request.pact.as_str(), "grpc:start_mock_server") {
@@ -407,8 +407,8 @@ impl PactPlugin for ProtobufPactPlugin {
 
   async fn shutdown_mock_server(
     &self,
-    request: tonic::Request<proto::ShutdownMockServerRequest>,
-  ) -> Result<tonic::Response<proto::ShutdownMockServerResponse>, tonic::Status> {
+    request: Request<proto::ShutdownMockServerRequest>,
+  ) -> Result<Response<proto::ShutdownMockServerResponse>, Status> {
     let request = request.get_ref();
     let mut guard = MOCK_SERVER_STATE.lock().unwrap();
     if let Some((_, results)) = guard.get(&request.server_key) {
@@ -456,8 +456,8 @@ impl PactPlugin for ProtobufPactPlugin {
 
   async fn get_mock_server_results(
     &self,
-    request: tonic::Request<proto::MockServerRequest>,
-  ) -> Result<tonic::Response<proto::MockServerResults>, tonic::Status> {
+    request: Request<proto::MockServerRequest>,
+  ) -> Result<Response<proto::MockServerResults>, Status> {
     let request = request.get_ref();
     let guard = MOCK_SERVER_STATE.lock().unwrap();
     if let Some((_, results)) = guard.get(&request.server_key) {
@@ -504,8 +504,8 @@ impl PactPlugin for ProtobufPactPlugin {
 
   async fn prepare_interaction_for_verification(
     &self,
-    request: tonic::Request<proto::VerificationPreparationRequest>,
-  ) -> Result<tonic::Response<proto::VerificationPreparationResponse>, tonic::Status> {
+    request: Request<proto::VerificationPreparationRequest>,
+  ) -> Result<Response<proto::VerificationPreparationResponse>, Status> {
     debug!("Received prepare interaction for verification request");
 
     let request = request.get_ref();
@@ -513,7 +513,7 @@ impl PactPlugin for ProtobufPactPlugin {
 
     let pact = match parse_pact_from_request_json(request.pact.as_str(), "grpc:prepare_interaction_for_verification") {
       Ok(pact) => pact,
-      Err(err) => return Ok(tonic::Response::new(proto::VerificationPreparationResponse {
+      Err(err) => return Ok(Response::new(proto::VerificationPreparationResponse {
         response: Some(proto::verification_preparation_response::Response::Error(format!("Failed to parse Pact JSON: {}", err))),
         .. proto::VerificationPreparationResponse::default()
       }))
@@ -522,13 +522,13 @@ impl PactPlugin for ProtobufPactPlugin {
     let interaction = match lookup_interaction_by_id(request.interaction_key.as_str(), &pact) {
       Ok(interaction) => match interaction.as_v4_sync_message() {
         Some(interaction) => interaction,
-        None => return Ok(tonic::Response::new(proto::VerificationPreparationResponse {
+        None => return Ok(Response::new(proto::VerificationPreparationResponse {
           response: Some(proto::verification_preparation_response::Response::Error(format!("gRPC interactions must be of type V4 synchronous message, got {}", interaction.type_of()))),
           ..proto::VerificationPreparationResponse::default()
         }))
       }
       Err(err) => {
-        return Ok(tonic::Response::new(proto::VerificationPreparationResponse {
+        return Ok(Response::new(proto::VerificationPreparationResponse {
           response: Some(proto::verification_preparation_response::Response::Error(err.to_string())),
           ..proto::VerificationPreparationResponse::default()
         }))
@@ -538,7 +538,7 @@ impl PactPlugin for ProtobufPactPlugin {
     let (file_desc, service_desc, method_desc, package) = match lookup_service_descriptors_for_interaction(&interaction, &pact) {
       Ok(values) => values,
       Err(err) => {
-        return Ok(tonic::Response::new(proto::VerificationPreparationResponse {
+        return Ok(Response::new(proto::VerificationPreparationResponse {
           response: Some(proto::verification_preparation_response::Response::Error(err.to_string())),
           ..proto::VerificationPreparationResponse::default()
         }))
@@ -550,7 +550,7 @@ impl PactPlugin for ProtobufPactPlugin {
     let input_message = match find_message_type_by_name(last_name(input_message_name.as_str()), &file_desc) {
       Ok(message) => message,
       Err(err) => {
-        return Ok(tonic::Response::new(proto::VerificationPreparationResponse {
+        return Ok(Response::new(proto::VerificationPreparationResponse {
           response: Some(proto::verification_preparation_response::Response::Error(err.to_string())),
           ..proto::VerificationPreparationResponse::default()
         }))
@@ -561,7 +561,7 @@ impl PactPlugin for ProtobufPactPlugin {
     let decoded_body = match decode_message(&mut raw_request_body, &input_message, &file_desc) {
       Ok(message) => DynamicMessage::new(&input_message, &message),
       Err(err) => {
-        return Ok(tonic::Response::new(proto::VerificationPreparationResponse {
+        return Ok(Response::new(proto::VerificationPreparationResponse {
           response: Some(proto::verification_preparation_response::Response::Error(err.to_string())),
           ..proto::VerificationPreparationResponse::default()
         }))
@@ -601,7 +601,7 @@ impl PactPlugin for ProtobufPactPlugin {
 
     let mut buffer = BytesMut::new();
     if let Err(err) = decoded_body.write_to(&mut buffer) {
-      return Ok(tonic::Response::new(proto::VerificationPreparationResponse {
+      return Ok(Response::new(proto::VerificationPreparationResponse {
         response: Some(proto::verification_preparation_response::Response::Error(err.to_string())),
         ..proto::VerificationPreparationResponse::default()
       }))
@@ -623,8 +623,8 @@ impl PactPlugin for ProtobufPactPlugin {
 
   async fn verify_interaction(
     &self,
-    request: tonic::Request<proto::VerifyInteractionRequest>
-  ) -> Result<tonic::Response<proto::VerifyInteractionResponse>, tonic::Status> {
+    request: Request<proto::VerifyInteractionRequest>
+  ) -> Result<Response<proto::VerifyInteractionResponse>, Status> {
     debug!("Received verify interaction request");
 
     let request = request.get_ref();
@@ -632,7 +632,7 @@ impl PactPlugin for ProtobufPactPlugin {
 
     let pact = match parse_pact_from_request_json(request.pact.as_str(), "grpc:verify_interaction") {
       Ok(pact) => pact,
-      Err(err) => return Ok(tonic::Response::new(proto::VerifyInteractionResponse {
+      Err(err) => return Ok(Response::new(proto::VerifyInteractionResponse {
         response: Some(proto::verify_interaction_response::Response::Error(format!("Failed to parse Pact JSON: {}", err))),
         .. proto::VerifyInteractionResponse::default()
       }))
@@ -641,13 +641,13 @@ impl PactPlugin for ProtobufPactPlugin {
     let interaction = match lookup_interaction_by_id(request.interaction_key.as_str(), &pact) {
       Ok(interaction) => match interaction.as_v4_sync_message() {
         Some(interaction) => interaction,
-        None => return Ok(tonic::Response::new(proto::VerifyInteractionResponse {
+        None => return Ok(Response::new(proto::VerifyInteractionResponse {
           response: Some(proto::verify_interaction_response::Response::Error(format!("gRPC interactions must be of type V4 synchronous message, got {}", interaction.type_of()))),
           .. proto::VerifyInteractionResponse::default()
         }))
       }
       Err(err) => {
-        return Ok(tonic::Response::new(proto::VerifyInteractionResponse {
+        return Ok(Response::new(proto::VerifyInteractionResponse {
           response: Some(proto::verify_interaction_response::Response::Error(err.to_string())),
           ..proto::VerifyInteractionResponse::default()
         }))
@@ -708,7 +708,7 @@ impl PactPlugin for ProtobufPactPlugin {
             }
           })
           .collect();
-        Ok(tonic::Response::new(proto::VerifyInteractionResponse {
+        Ok(Response::new(proto::VerifyInteractionResponse {
           response: Some(proto::verify_interaction_response::Response::Result(proto::VerificationResult {
             success: result.is_empty(),
             mismatches: results,
@@ -719,7 +719,7 @@ impl PactPlugin for ProtobufPactPlugin {
         }))
       }
       Err(err) => {
-        Ok(tonic::Response::new(proto::VerifyInteractionResponse {
+        Ok(Response::new(proto::VerifyInteractionResponse {
           response: Some(proto::verify_interaction_response::Response::Error(err.to_string())),
           .. proto::VerifyInteractionResponse::default()
         }))

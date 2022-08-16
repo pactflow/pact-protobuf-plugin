@@ -8,8 +8,8 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use anyhow::Context;
 
+use anyhow::Context;
 use clap::{App, Arg, ErrorKind};
 use hyper::header;
 use lazy_static::lazy_static;
@@ -18,7 +18,7 @@ use tokio::net::TcpListener;
 use tokio::sync::oneshot::channel;
 use tokio::time;
 use tonic::{Request, Status};
-use tonic::service::{interceptor, Interceptor};
+use tonic::service::Interceptor;
 use tonic::transport::Server;
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
@@ -35,7 +35,7 @@ use pact_protobuf_plugin::server::ProtobufPactPlugin;
 use pact_protobuf_plugin::tcp::TcpIncoming;
 
 /// Interceptor to check the server key for the request
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct AuthInterceptor {
   pub server_key: String
 }
@@ -159,7 +159,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Build our middleware stack
     let layer = ServiceBuilder::new()
-      .layer(interceptor(AuthInterceptor { server_key }))
       // Compress responses
       .layer(CompressionLayer::new())
       // Mark the `Authorization` header as sensitive so it doesn't show in logs
@@ -197,7 +196,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     Server::builder()
       .layer(layer)
-      .add_service(PactPluginServer::new(plugin))
+      .add_service(PactPluginServer::with_interceptor(plugin, AuthInterceptor { server_key }))
       .serve_with_incoming_shutdown(
         TcpIncoming { inner: listener },
         async move {
