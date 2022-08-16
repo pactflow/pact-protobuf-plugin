@@ -66,3 +66,4 @@ trim-margin = "0.1.0"
 
 [build-dependencies]
 built = { version = "0.5.1", features = [ "git2" ] }
+os_info = "3.0.7"

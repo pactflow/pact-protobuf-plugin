@@ -131,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
           Ok(())
         },
         ErrorKind::DisplayVersion => {
-          println!();
+          println!("{}", clap::crate_version!());
           Ok(())
         },
         _ => {
