@@ -21,6 +21,8 @@ jobs:
           toolchain: stable
           override: true
           target: aarch64-apple-darwin
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
       - name: Install LLVM
         run: choco install -y llvm
         if: runner.os == 'Windows'
