@@ -66,7 +66,7 @@ lazy_static! {
 /// Maximum time to wait when there is no activity to shut the plugin down (10 minutes)
 const MAX_TIME: u64 = 600;
 
-fn integer_value(v: String) -> Result<(), String> {
+fn integer_value(v: &str) -> Result<(), String> {
   v.parse::<u64>().map(|_| ()).map_err(|e| format!("'{}' is not a valid integer value: {}", v, e) )
 }
 
@@ -106,9 +106,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = App::new(program)
       .version(clap::crate_version!())
       .about("Pact Protobuf plugin")
-      .version_short("v")
+      .version_short('v')
       .arg(Arg::with_name("timeout")
-        .short("t")
+        .short('t')
         .long("timeout")
         .takes_value(true)
         .use_delimiter(false)
@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .validator(integer_value)
       )
       .arg(Arg::with_name("host")
-        .short("h")
+        .short('h')
         .long("host")
         .takes_value(true)
         .use_delimiter(false)
@@ -126,11 +126,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let matches = match app.get_matches_safe() {
       Ok(matches) => matches,
       Err(err) => return match err.kind {
-        ErrorKind::HelpDisplayed => {
-          println!("{}", err.message);
+        ErrorKind::DisplayHelp => {
+          println!("{}", err);
           Ok(())
         },
-        ErrorKind::VersionDisplayed => {
+        ErrorKind::DisplayVersion => {
           println!();
           Ok(())
         },
