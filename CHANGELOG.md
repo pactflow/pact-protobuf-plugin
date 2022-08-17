@@ -1,3 +1,18 @@
+# 0.1.11 - Support google.protobuf.StringValue and repeated fields configured with lists of values
+
+* d7b37b0 - fix: return an error if any of the response parts fail to be parsed or constructored (Ronald Holshausen, Wed Aug 17 11:58:50 2022 +1000)
+* 1fea4f4 - fix: Support repeated fields configured with lists of values (Ronald Holshausen, Wed Aug 17 11:50:41 2022 +1000)
+* 5417017 - chore: add protoc to the build (Ronald Holshausen, Tue Aug 16 17:01:34 2022 +1000)
+* f5bc948 - chore: Upgrade Pact, Tonic and Prost crates (Ronald Holshausen, Tue Aug 16 16:35:19 2022 +1000)
+* fe99f4b - chore: add arm64 Linux target to the release build (Ronald Holshausen, Tue Aug 16 15:19:09 2022 +1000)
+* 73b3c2f - chore: fix Alpine build (Ronald Holshausen, Tue Aug 16 15:04:55 2022 +1000)
+* 35e8046 - chore: fix Alpine build (Ronald Holshausen, Tue Aug 16 14:44:49 2022 +1000)
+* e77ec3f - chore: Update dependencies (Ronald Holshausen, Tue Aug 16 14:06:38 2022 +1000)
+* a54dcaf - fix: Support using google.protobuf.StringValue with service method calls (Ronald Holshausen, Tue Aug 16 13:37:32 2022 +1000)
+* 0f5b291 - Merge pull request #7 from pactflow/whitesource/configure (Ronald Holshausen, Tue Aug 9 17:12:42 2022 +1000)
+* 7c137d9 - bump version to 0.1.11 (Ronald Holshausen, Tue Aug 9 17:03:56 2022 +1000)
+* cea4fc0 - Add .whitesource configuration file (mend-for-github-com[bot], Tue Jul 19 20:17:00 2022 +0000)
+
 # 0.1.10 - Maintenance Release
 
 * 4c83a29 - feat: correct the trace logging of protoc command (Ronald Holshausen, Tue Aug 9 16:35:04 2022 +1000)
