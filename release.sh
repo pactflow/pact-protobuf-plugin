@@ -6,6 +6,8 @@ then
     exit
 fi
 
+set -e
+
 echo Building Release for "$1" - "$2"
 
 cargo clean
