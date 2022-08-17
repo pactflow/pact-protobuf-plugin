@@ -29,7 +29,7 @@ use prost_types::value::Kind;
 use serde_json::{json, Value};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
-use tracing::{debug, trace, warn};
+use tracing::{debug, trace, warn, instrument, error};
 use tracing_core::LevelFilter;
 
 use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValueType, RType};
@@ -221,11 +221,13 @@ fn construct_protobuf_interaction_for_service(
           Kind::ListValue(l) => l.values.iter().map(|v| {
             v.kind.as_ref().and_then(|k| match k {
               Kind::StructValue(s) => Some(proto_struct_to_btreemap(s)),
+              Kind::StringValue(s) => Some(btreemap!{ "value".to_string() => v.clone() }),
               _ => None
             })
           })
             .flatten()
             .collect(),
+          Kind::StringValue(s) => vec![ btreemap!{ "value".to_string() => response_config.clone() } ],
           _ => vec![]
         }
       })
@@ -281,6 +283,7 @@ fn configure_protobuf_message(
 }
 
 /// Constructs an interaction for the given Protobuf message descriptor
+#[instrument(skip(message_descriptor, file_descriptor))]
 fn construct_protobuf_interaction_for_message(
   message_descriptor: &DescriptorProto,
   config: &BTreeMap<String, prost_types::Value>,
@@ -411,10 +414,21 @@ fn build_embedded_message_field_value(
 
     match value {
       Value::Array(list) => {
-        for (index, item) in list.iter().enumerate() {
-          let index_path = path.join(index.to_string());
-          build_single_embedded_field_value(&index_path, message_builder, MessageFieldValueType::Repeated, field_descriptor, field, item,
-            matching_rules, generators)?;
+        if let Some((first, rest)) = list.split_first() {
+          let index_path = path.join("0");
+          build_single_embedded_field_value(
+            &index_path, message_builder, MessageFieldValueType::Repeated, field_descriptor,
+            field, first, matching_rules, generators)?;
+          let mut builder = message_builder.clone();
+          for (index, item) in rest.iter().enumerate() {
+            let index_path = path.join((index + 1).to_string());
+            let constructed = build_single_embedded_field_value(
+              &index_path, &mut builder, MessageFieldValueType::Repeated,
+              field_descriptor, field, item, matching_rules, generators)?;
+            if let Some(constructed) = constructed {
+              message_builder.add_repeated_field_value(field_descriptor, field, constructed);
+            }
+          }
         }
         Ok(())
       }
@@ -772,23 +786,8 @@ fn build_field_value(
   match value {
     Value::Null => Ok(None),
     Value::String(s) => {
-      let constructed_value = if is_matcher_def(s.as_str()) {
-        let mrd = parse_matcher_def(s.as_str())?;
-        if !mrd.rules.is_empty() {
-          for rule in &mrd.rules {
-            match rule {
-              Either::Left(rule) => matching_rules.add_rule(path.clone(), rule.clone(), RuleLogic::And),
-              Either::Right(mr) => return Err(anyhow!("Was expecting a value for '{}', but got a matching reference {:?}", path, mr))
-            }
-          }
-        }
-        if let Some(generator) = mrd.generator {
-          generators.insert(path.to_string(), generator);
-        }
-        value_for_type(field_name, mrd.value.as_str(), descriptor, &message_builder.descriptor)?
-      } else {
-        value_for_type(field_name, s.as_str(), descriptor, &message_builder.descriptor)?
-      };
+      let constructed_value = construct_value_from_string(path, message_builder,
+        descriptor, field_name, matching_rules, generators, s)?;
 
       debug!("Setting field {:?} to value {:?}", field_name, constructed_value);
       match field_type {
@@ -797,7 +796,50 @@ fn build_field_value(
       };
       Ok(Some(constructed_value))
     }
+    Value::Array(list) => {
+      if let Some((first, rest)) = list.split_first() {
+        let index_path = path.join("0");
+        let constructed_value = build_field_value(&index_path, message_builder,
+          MessageFieldValueType::Repeated, descriptor, field_name, first, matching_rules, generators)?;
+        for (index, value) in rest.iter().enumerate() {
+          let index_path = path.join((index + 1).to_string());
+          build_field_value(&index_path, message_builder, MessageFieldValueType::Repeated,
+            descriptor, field_name, value, matching_rules, generators)?;
+        }
+        Ok(constructed_value)
+      } else {
+        Ok(None)
+      }
+    }
     _ => Err(anyhow!("Field values must be configured with a string value, got {:?}", value))
+  }
+}
+
+fn construct_value_from_string(
+  path: &DocPath,
+  message_builder: &mut MessageBuilder,
+  descriptor: &FieldDescriptorProto,
+  field_name: &str,
+  matching_rules: &mut MatchingRuleCategory,
+  generators: &mut HashMap<String, Generator>,
+  s: &String
+) -> anyhow::Result<MessageFieldValue> {
+  if is_matcher_def(s.as_str()) {
+    let mrd = parse_matcher_def(s.as_str())?;
+    if !mrd.rules.is_empty() {
+      for rule in &mrd.rules {
+        match rule {
+          Either::Left(rule) => matching_rules.add_rule(path.clone(), rule.clone(), RuleLogic::And),
+          Either::Right(mr) => return Err(anyhow!("Was expecting a value for '{}', but got a matching reference {:?}", path, mr))
+        }
+      }
+    }
+    if let Some(generator) = mrd.generator {
+      generators.insert(path.to_string(), generator);
+    }
+    value_for_type(field_name, mrd.value.as_str(), descriptor, &message_builder.descriptor)
+  } else {
+    value_for_type(field_name, s.as_str(), descriptor, &message_builder.descriptor)
   }
 }
 

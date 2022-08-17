@@ -83,7 +83,11 @@ impl MessageBuilder {
   /// Adds a value to a repeated field. If the field is not defined, configures it first.
   pub fn add_repeated_field_value(&mut self, field_descriptor: &FieldDescriptorProto, field_name: &str, field_value: MessageFieldValue) -> &mut Self {
     match self.fields.entry(field_name.to_string()) {
-      Entry::Occupied(mut e) => e.get_mut().values.push(field_value),
+      Entry::Occupied(mut e) => {
+        let value = e.get_mut();
+        value.field_type = MessageFieldValueType::Repeated;
+        value.values.push(field_value);
+      },
       Entry::Vacant(e) => {
         e.insert(FieldValueInner {
           values: vec![ field_value ],

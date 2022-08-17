@@ -71,7 +71,7 @@ impl GrpcMockServer
   }
 
   /// Start the mock server, consuming this instance and returning the connection details
-  #[instrument]
+  #[instrument(skip(self))]
   pub async fn start_server(mut self, host_interface: &str, port: u32, tls: bool) -> anyhow::Result<SocketAddr> {
     // Get all the descriptors from the Pact file and parse them
     for (key, value) in &self.plugin_config.configuration {
@@ -154,8 +154,6 @@ impl GrpcMockServer
       let service = ServiceBuilder::new()
         // High level logging of requests and responses
         .trace_for_grpc()
-        // Share an `Arc<State>` with all requests
-        // .layer(AddExtensionLayer::new(Arc::new(state)))
         // Compress responses
         .layer(CompressionLayer::new())
         // Wrap a `Service` in our middleware stack
@@ -191,7 +189,7 @@ impl GrpcMockServer
   }
 }
 
-impl Service<hyper::Request<hyper::Body>> for GrpcMockServer  {
+impl Service<Request<hyper::Body>> for GrpcMockServer  {
   type Response = hyper::Response<BoxBody>;
   type Error = anyhow::Error;
   type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
@@ -200,7 +198,7 @@ impl Service<hyper::Request<hyper::Body>> for GrpcMockServer  {
     Poll::Ready(Ok(()))
   }
 
-  #[instrument]
+  #[instrument(skip(self))]
   fn call(&mut self, req: Request<hyper::Body>) -> Self::Future {
     let routes = self.routes.clone();
     let server_key = self.server_key.clone();
