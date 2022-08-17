@@ -23,6 +23,8 @@ jobs:
           target: aarch64-apple-darwin
       - name: Install Protoc
         uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install LLVM
         run: choco install -y llvm
         if: runner.os == 'Windows'
