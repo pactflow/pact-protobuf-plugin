@@ -29,7 +29,7 @@ use prost_types::value::Kind;
 use serde_json::{json, Value};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
-use tracing::{debug, trace, warn, instrument, error};
+use tracing::{debug, trace, warn, instrument};
 use tracing_core::LevelFilter;
 
 use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValueType, RType};
@@ -189,7 +189,7 @@ fn construct_protobuf_interaction_for_service(
       request_config.kind.as_ref().and_then(|kind| {
         match kind {
           Kind::StructValue(s) => Some(Ok(proto_struct_to_btreemap(s))),
-          Kind::StringValue(s) => Some(Ok(btreemap!{ "value".to_string() => request_config.clone() })),
+          Kind::StringValue(_) => Some(Ok(btreemap!{ "value".to_string() => request_config.clone() })),
           _ => {
             warn!("Request contents is of an un-processable type: {:?}", kind);
             Some(Err(anyhow!("Request contents is of an un-processable type: {:?}, it should be either a Struct or a StringValue", kind)))
@@ -221,7 +221,7 @@ fn construct_protobuf_interaction_for_service(
           Kind::ListValue(l) => l.values.iter().map(|v| {
             v.kind.as_ref().and_then(|k| match k {
               Kind::StructValue(s) => Some(proto_struct_to_btreemap(s)),
-              Kind::StringValue(s) => Some(btreemap!{ "value".to_string() => v.clone() }),
+              Kind::StringValue(_) => Some(btreemap!{ "value".to_string() => v.clone() }),
               _ => None
             })
           })
@@ -234,13 +234,13 @@ fn construct_protobuf_interaction_for_service(
     })
       .unwrap_or_default()
   };
-  let response_part = response_part_config.iter().filter_map(|i| {
-      construct_protobuf_interaction_for_message(
-        &response_descriptor, i, output_message_name, "",
-        file_descriptor).ok()
-    })
-    .map(|i| InteractionResponse { part_name: "response".into(), .. i } )
-    .collect();
+  let mut response_part = vec![];
+  for config in response_part_config {
+    let interaction = construct_protobuf_interaction_for_message(
+      &response_descriptor, &config, output_message_name, "",
+      file_descriptor)?;
+    response_part.push(InteractionResponse { part_name: "response".into(), .. interaction });
+  }
 
   Ok((request_part, response_part))
 }
