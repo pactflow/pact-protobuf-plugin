@@ -1,6 +1,7 @@
 //! Decoder for encoded Protobuf messages using the descriptors
 
 use std::fmt::{Display, Formatter};
+use std::mem;
 use std::str::from_utf8;
 
 use anyhow::anyhow;
@@ -335,75 +336,80 @@ fn decode_packed_field(field: FieldDescriptorProto, data: &mut Bytes) -> anyhow:
   let t: Type = field.r#type();
   match t {
     Type::Double => {
-      while data.has_remaining() {
+      while data.remaining() >= mem::size_of::<f64>() {
         values.push((ProtobufFieldData::Double(data.get_f64_le()), WireType::SixtyFourBit));
       }
     }
     Type::Float => {
-      while data.has_remaining() {
+      while data.remaining() >= mem::size_of::<f32>() {
         values.push((ProtobufFieldData::Float(data.get_f32_le()), WireType::ThirtyTwoBit));
       }
     }
     Type::Int64 => {
-      while data.has_remaining() {
+      while data.remaining() > 0 {
         let varint = decode_varint(data)?;
         values.push((ProtobufFieldData::Integer64(varint as i64), WireType::Varint));
       }
     }
     Type::Uint64 => {
-      while data.has_remaining() {
+      while data.remaining() > 0 {
         let varint = decode_varint(data)?;
         values.push((ProtobufFieldData::UInteger64(varint), WireType::Varint));
       }
     }
     Type::Int32 => {
-      while data.has_remaining() {
+      while data.remaining() > 0 {
         let varint = decode_varint(data)?;
         values.push((ProtobufFieldData::Integer32(varint as i32), WireType::Varint));
       }
     }
     Type::Fixed64 => {
-      while data.has_remaining() {
+      while data.remaining() >= mem::size_of::<u64>() {
         values.push((ProtobufFieldData::UInteger64(data.get_u64_le()), WireType::SixtyFourBit));
       }
     }
     Type::Fixed32 => {
-      while data.has_remaining() {
+      while data.remaining() >= mem::size_of::<u32>() {
         values.push((ProtobufFieldData::UInteger32(data.get_u32_le()), WireType::ThirtyTwoBit));
       }
     }
     Type::Uint32 => {
-      while data.has_remaining() {
+      while data.remaining() > 0 {
         let varint = decode_varint(data)?;
         values.push((ProtobufFieldData::UInteger32(varint as u32), WireType::Varint));
       }
     }
     Type::Sfixed32 => {
-      while data.has_remaining() {
+      while data.remaining() >= mem::size_of::<i32>() {
         values.push((ProtobufFieldData::Integer32(data.get_i32_le()), WireType::ThirtyTwoBit));
       }
     }
     Type::Sfixed64 => {
-      while data.has_remaining() {
+      while data.remaining() >= mem::size_of::<i64>() {
         values.push((ProtobufFieldData::Integer64(data.get_i64_le()), WireType::SixtyFourBit));
       }
     }
     Type::Sint32 => {
-      while data.has_remaining() {
+      while data.remaining() > 0 {
         let varint = decode_varint(data)?;
         let value = varint as u32;
         values.push((ProtobufFieldData::Integer32(((value >> 1) as i32) ^ (-((value & 1) as i32))), WireType::Varint));
       }
     }
     Type::Sint64 => {
-      while data.has_remaining() {
+      while data.remaining() > 0 {
         let varint = decode_varint(data)?;
         values.push((ProtobufFieldData::Integer64(((varint >> 1) as i64) ^ (-((varint & 1) as i64))), WireType::Varint));
       }
     }
     _ => return Err(anyhow!("Field type {:?} can not be packed", t))
   };
-  Ok(values)
+
+  if data.is_empty() {
+    Ok(values)
+  } else {
+    Err(anyhow!("Failed to decode packed repeated field, there was still {} bytes in the buffer", data.remaining()))
+  }
 }
 
 fn find_field_descriptor(field_num: i32, descriptor: &DescriptorProto) -> anyhow::Result<FieldDescriptorProto> {
