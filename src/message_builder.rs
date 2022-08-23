@@ -293,8 +293,12 @@ impl MessageBuilder {
   fn encode_repeated_field(&self, buffer: &mut BytesMut, field_value: &FieldValueInner) -> anyhow::Result<()> {
     trace!(">> encode_repeated_field({:?})", field_value);
     if !field_value.values.is_empty() {
-      for value in &field_value.values {
-        self.encode_single_field(buffer, field_value, Some(value.clone()))?;
+      if should_be_packed(field_value) {
+        self.encode_packed_field(buffer, field_value)?;
+      } else {
+        for value in &field_value.values {
+          self.encode_single_field(buffer, field_value, Some(value.clone()))?;
+        }
       }
     }
     Ok(())
@@ -320,6 +324,113 @@ impl MessageBuilder {
     buffer.push_str(format!("{}}}\n```\n", indent).as_str());
 
     Ok(buffer)
+  }
+
+  fn encode_packed_field(
+    &self,
+    buffer: &mut BytesMut,
+    field_value: &FieldValueInner
+  ) -> anyhow::Result<()> {
+    if let Some(tag) = field_value.descriptor.number {
+      match field_value.proto_type {
+        Type::Double => {
+          let values = field_value.values.iter()
+            .map(|v| v.rtype.as_f64().unwrap_or_default())
+              .collect::<Vec<f64>>();
+          prost::encoding::double::encode_packed(tag as u32, &values, buffer);
+          Ok(())
+        }
+        Type::Float => {
+          let values = field_value.values.iter()
+              .map(|v| v.rtype.as_f32().unwrap_or_default())
+              .collect::<Vec<f32>>();
+          prost::encoding::float::encode_packed(tag as u32, &values, buffer);
+          Ok(())
+        }
+        Type::Int64 => {
+          let values = field_value.values.iter()
+              .map(|v| v.rtype.as_i64().unwrap_or_default())
+              .collect::<Vec<i64>>();
+          prost::encoding::int64::encode_packed(tag as u32, &values, buffer);
+          Ok(())
+        }
+        Type::Uint64 => {
+          let values = field_value.values.iter()
+              .map(|v| v.rtype.as_u64().unwrap_or_default())
+              .collect::<Vec<u64>>();
+          prost::encoding::uint64::encode_packed(tag as u32, &values, buffer);
+          Ok(())
+        }
+        Type::Int32 => {
+          let values = field_value.values.iter()
+              .map(|v| v.rtype.as_i32().unwrap_or_default())
+              .collect::<Vec<i32>>();
+          prost::encoding::int32::encode_packed(tag as u32, &values, buffer);
+          Ok(())
+        }
+        Type::Fixed64 => {
+          let values = field_value.values.iter()
+              .map(|v| v.rtype.as_u64().unwrap_or_default())
+              .collect::<Vec<u64>>();
+          prost::encoding::fixed64::encode_packed(tag as u32, &values, buffer);
+          Ok(())
+        }
+        Type::Fixed32 => {
+          let values = field_value.values.iter()
+              .map(|v| v.rtype.as_u32().unwrap_or_default())
+              .collect::<Vec<u32>>();
+          prost::encoding::fixed32::encode_packed(tag as u32, &values, buffer);
+          Ok(())
+        }
+        Type::Uint32 => {
+          let values = field_value.values.iter()
+              .map(|v| v.rtype.as_u32().unwrap_or_default())
+              .collect::<Vec<u32>>();
+          prost::encoding::uint32::encode_packed(tag as u32, &values, buffer);
+          Ok(())
+        }
+        Type::Sfixed32 => {
+          let values = field_value.values.iter()
+              .map(|v| v.rtype.as_i32().unwrap_or_default())
+              .collect::<Vec<i32>>();
+          prost::encoding::sfixed32::encode_packed(tag as u32, &values, buffer);
+          Ok(())
+        }
+        Type::Sfixed64 => {
+          let values = field_value.values.iter()
+              .map(|v| v.rtype.as_i64().unwrap_or_default())
+              .collect::<Vec<i64>>();
+          prost::encoding::sfixed64::encode_packed(tag as u32, &values, buffer);
+          Ok(())
+        }
+        Type::Sint32 => {
+          let values = field_value.values.iter()
+              .map(|v| v.rtype.as_i32().unwrap_or_default())
+              .collect::<Vec<i32>>();
+          prost::encoding::sint32::encode_packed(tag as u32, &values, buffer);
+          Ok(())
+        }
+        Type::Sint64 => {
+          let values = field_value.values.iter()
+              .map(|v| v.rtype.as_i64().unwrap_or_default())
+              .collect::<Vec<i64>>();
+          prost::encoding::sint64::encode_packed(tag as u32, &values, buffer);
+          Ok(())
+        }
+        _ => Err(anyhow!("Can not encode a {:?} field in packaged form", field_value.proto_type))
+      }
+    } else {
+      Err(anyhow!("Unable to encode field {:?} as it has no tag", field_value.descriptor.name))
+    }
+  }
+}
+
+fn should_be_packed(field: &FieldValueInner) -> bool {
+  match field.proto_type {
+    Type::Double | Type::Float | Type::Int64 | Type::Uint64 | Type::Int32 | Type::Fixed64 |
+      Type::Fixed32 | Type::Uint32 | Type::Sfixed32 | Type::Sfixed64 | Type::Sint32 |
+      Type::Sint64 => true,
+    _ => false
   }
 }
 
@@ -948,7 +1059,7 @@ mod tests {
     //   string version = 2;
     // }
 
-    let file_descriptor = get_file_descriptor("plugin.proto").unwrap();
+    let file_descriptor = get_file_descriptor("plugin.proto", ENCODED_MESSAGE).unwrap();
 
     let field1 = string_field_descriptor!("implementation", 1);
     let field2 = string_field_descriptor!("version", 2);
@@ -1015,7 +1126,7 @@ mod tests {
     //   ContentTypeHint contentTypeHint = 3;
     // }
 
-    let file_descriptor = get_file_descriptor("plugin.proto").unwrap();
+    let file_descriptor = get_file_descriptor("plugin.proto", ENCODED_MESSAGE).unwrap();
 
     let body = Body {
       content_type: "application/json".to_string(),
@@ -1122,8 +1233,8 @@ mod tests {
          ".trim_margin().unwrap()));
   }
 
-  fn get_file_descriptor(file_name: &str) -> Option<FileDescriptorProto> {
-    let bytes = base64::decode(ENCODED_MESSAGE).unwrap();
+  fn get_file_descriptor(file_name: &str, descriptor: &str) -> Option<FileDescriptorProto> {
+    let bytes = base64::decode(descriptor).unwrap();
     let bytes1 = Bytes::from(bytes);
     let fds = FileDescriptorSet::decode(bytes1).unwrap();
     fds.file.iter().find(|fd| fd.name.clone().unwrap_or_default() == file_name).cloned()
@@ -1145,7 +1256,7 @@ mod tests {
     //   PluginConfiguration pluginConfiguration = 5;
     // }
 
-    let file_descriptor = get_file_descriptor("plugin.proto").unwrap();
+    let file_descriptor = get_file_descriptor("plugin.proto", ENCODED_MESSAGE).unwrap();
     let file_descriptor_set = FileDescriptorSet {
       file: vec![ file_descriptor.clone() ]
     };
@@ -1588,4 +1699,47 @@ mod tests {
   //
   //   expect!(true).to(be_false());
   // }
+
+  const AREA_CALCULATOR_DESCRIPTOR: &str = "CsMHChVhcmVhX2NhbGN1bGF0b3IucHJvdG8SD2FyZWFfY2FsY3VsYX\
+  RvciK6AgoMU2hhcGVNZXNzYWdlEjEKBnNxdWFyZRgBIAEoCzIXLmFyZWFfY2FsY3VsYXRvci5TcXVhcmVIAFIGc3F1YXJlEj\
+  oKCXJlY3RhbmdsZRgCIAEoCzIaLmFyZWFfY2FsY3VsYXRvci5SZWN0YW5nbGVIAFIJcmVjdGFuZ2xlEjEKBmNpcmNsZRgDIA\
+  EoCzIXLmFyZWFfY2FsY3VsYXRvci5DaXJjbGVIAFIGY2lyY2xlEjcKCHRyaWFuZ2xlGAQgASgLMhkuYXJlYV9jYWxjdWxhdG\
+  9yLlRyaWFuZ2xlSABSCHRyaWFuZ2xlEkYKDXBhcmFsbGVsb2dyYW0YBSABKAsyHi5hcmVhX2NhbGN1bGF0b3IuUGFyYWxsZW\
+  xvZ3JhbUgAUg1wYXJhbGxlbG9ncmFtQgcKBXNoYXBlIikKBlNxdWFyZRIfCgtlZGdlX2xlbmd0aBgBIAEoAlIKZWRnZUxlbm\
+  d0aCI5CglSZWN0YW5nbGUSFgoGbGVuZ3RoGAEgASgCUgZsZW5ndGgSFAoFd2lkdGgYAiABKAJSBXdpZHRoIiAKBkNpcmNsZR\
+  IWCgZyYWRpdXMYASABKAJSBnJhZGl1cyJPCghUcmlhbmdsZRIVCgZlZGdlX2EYASABKAJSBWVkZ2VBEhUKBmVkZ2VfYhgCIA\
+  EoAlIFZWRnZUISFQoGZWRnZV9jGAMgASgCUgVlZGdlQyJICg1QYXJhbGxlbG9ncmFtEh8KC2Jhc2VfbGVuZ3RoGAEgASgCUg\
+  piYXNlTGVuZ3RoEhYKBmhlaWdodBgCIAEoAlIGaGVpZ2h0IkQKC0FyZWFSZXF1ZXN0EjUKBnNoYXBlcxgBIAMoCzIdLmFyZW\
+  FfY2FsY3VsYXRvci5TaGFwZU1lc3NhZ2VSBnNoYXBlcyIkCgxBcmVhUmVzcG9uc2USFAoFdmFsdWUYASADKAJSBXZhbHVlMq\
+  YBCgpDYWxjdWxhdG9yEksKCWNhbGN1bGF0ZRIdLmFyZWFfY2FsY3VsYXRvci5TaGFwZU1lc3NhZ2UaHS5hcmVhX2NhbGN1bG\
+  F0b3IuQXJlYVJlc3BvbnNlIgASSwoKY2FsY3VsYXRlMhIcLmFyZWFfY2FsY3VsYXRvci5BcmVhUmVxdWVzdBodLmFyZWFfY2\
+  FsY3VsYXRvci5BcmVhUmVzcG9uc2UiAEIcWhdpby5wYWN0L2FyZWFfY2FsY3VsYXRvctACAWIGcHJvdG8z";
+
+  #[test_log::test]
+  fn test_packed_repeated_fields() {
+    let file_descriptor = get_file_descriptor("area_calculator.proto", AREA_CALCULATOR_DESCRIPTOR).unwrap();
+    let area_response_descriptor = file_descriptor.message_type.iter()
+        .find(|desc| desc.name.clone().unwrap_or_default() == "AreaResponse")
+        .unwrap();
+    let values_field_descriptor = area_response_descriptor.field.iter()
+        .find(|desc| desc.name.clone().unwrap_or_default() == "value")
+        .unwrap();
+    let mut builder = MessageBuilder::new(area_response_descriptor, "AreaResponse", &file_descriptor);
+    let message_field_value = MessageFieldValue {
+      name: "value".to_string(),
+      raw_value: Some("12.0".to_string()),
+      rtype: RType::Float(12.0)
+    };
+    let message_field_value2 = MessageFieldValue {
+      name: "value".to_string(),
+      raw_value: Some("9.0".to_string()),
+      rtype: RType::Float(9.0)
+    };
+    builder.add_repeated_field_value(values_field_descriptor, "value", message_field_value);
+    builder.add_repeated_field_value(values_field_descriptor, "value", message_field_value2);
+
+    let expected = vec![10, 8, 0, 0, 64, 65, 0, 0, 16, 65];
+    let result = builder.encode_message().unwrap();
+    expect!(result.to_vec()).to(be_equal_to(expected));
+  }
 }
