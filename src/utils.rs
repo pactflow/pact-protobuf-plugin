@@ -5,13 +5,24 @@ use std::fmt::Write;
 
 use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
+use field_descriptor_proto::Type;
 use maplit::hashmap;
 use pact_models::json_utils::json_to_string;
 use pact_models::pact::load_pact_from_json;
 use pact_models::prelude::v4::V4Pact;
 use pact_models::v4::interaction::V4Interaction;
 use prost::Message;
-use prost_types::{DescriptorProto, EnumDescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorProto, FileDescriptorSet, MethodDescriptorProto, ServiceDescriptorProto, Value};
+use prost_types::{
+  DescriptorProto,
+  EnumDescriptorProto,
+  field_descriptor_proto,
+  FieldDescriptorProto,
+  FileDescriptorProto,
+  FileDescriptorSet,
+  MethodDescriptorProto,
+  ServiceDescriptorProto,
+  Value
+};
 use prost_types::field_descriptor_proto::Label;
 use prost_types::value::Kind;
 use serde_json::json;
@@ -50,7 +61,7 @@ pub fn find_message_type_in_file_descriptor(message_name: &str, descriptor: &Fil
 /// If the field is a map field. A field will be a map field if it is a repeated field, the field
 /// type is a message and the nested type has the map flag set on the message options.
 pub fn is_map_field(message_descriptor: &DescriptorProto, field: &FieldDescriptorProto) -> bool {
-  if field.label() == Label::Repeated && field.r#type() == field_descriptor_proto::Type::Message {
+  if field.label() == Label::Repeated && field.r#type() == Type::Message {
     match find_nested_type(message_descriptor, field) {
       Some(nested) => match nested.options {
         None => false,
@@ -66,7 +77,7 @@ pub fn is_map_field(message_descriptor: &DescriptorProto, field: &FieldDescripto
 /// Returns the nested descriptor for this field.
 pub fn find_nested_type(message_descriptor: &DescriptorProto, field: &FieldDescriptorProto) -> Option<DescriptorProto> {
   trace!(">> find_nested_type({:?}, {:?}, {:?}, {:?})", message_descriptor.name, field.name, field.r#type(), field.type_name);
-  if field.r#type() == field_descriptor_proto::Type::Message {
+  if field.r#type() == Type::Message {
     let type_name = field.type_name.clone().unwrap_or_default();
     let message_type = last_name(type_name.as_str());
     trace!("find_nested_type: Looking for nested type '{}'", message_type);
@@ -341,6 +352,17 @@ pub(crate) fn find_service_descriptor<'a>(
   })
     .next()
     .ok_or_else(|| anyhow!("Did not find a descriptor for service '{}'", service_name))
+}
+
+/// If a field type should be packed. These are repeated fields of primitive numeric types
+/// (types which use the varint, 32-bit, or 64-bit wire types)
+pub fn should_be_packed_type(field_type: Type) -> bool {
+  match field_type {
+    Type::Double | Type::Float | Type::Int64 | Type::Uint64 | Type::Int32 | Type::Fixed64 |
+    Type::Fixed32 | Type::Uint32 | Type::Sfixed32 | Type::Sfixed64 | Type::Sint32 |
+    Type::Sint64 => true,
+    _ => false
+  }
 }
 
 #[cfg(test)]

@@ -13,7 +13,7 @@ use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorProto};
 use prost_types::field_descriptor_proto::Type;
 use tracing::trace;
 
-use crate::utils::last_name;
+use crate::utils::{last_name, should_be_packed_type};
 
 /// Enum to set what type of field the value is for
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -293,7 +293,7 @@ impl MessageBuilder {
   fn encode_repeated_field(&self, buffer: &mut BytesMut, field_value: &FieldValueInner) -> anyhow::Result<()> {
     trace!(">> encode_repeated_field({:?})", field_value);
     if !field_value.values.is_empty() {
-      if should_be_packed(field_value) {
+      if should_be_packed_type(field_value.proto_type) {
         self.encode_packed_field(buffer, field_value)?;
       } else {
         for value in &field_value.values {
@@ -422,15 +422,6 @@ impl MessageBuilder {
     } else {
       Err(anyhow!("Unable to encode field {:?} as it has no tag", field_value.descriptor.name))
     }
-  }
-}
-
-fn should_be_packed(field: &FieldValueInner) -> bool {
-  match field.proto_type {
-    Type::Double | Type::Float | Type::Int64 | Type::Uint64 | Type::Int32 | Type::Fixed64 |
-      Type::Fixed32 | Type::Uint32 | Type::Sfixed32 | Type::Sfixed64 | Type::Sint32 |
-      Type::Sint64 => true,
-    _ => false
   }
 }
 
