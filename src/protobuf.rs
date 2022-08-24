@@ -414,6 +414,8 @@ fn build_embedded_message_field_value(
 
     match value {
       Value::Array(list) => {
+        // We have been provided an array of values, so we use the first one to build the type
+        // information, and then just process the remaining values as additional array items
         if let Some((first, rest)) = list.split_first() {
           let index_path = path.join("0");
           build_single_embedded_field_value(
@@ -432,69 +434,80 @@ fn build_embedded_message_field_value(
         }
         Ok(())
       }
-      Value::Object(map) => if let Some(definition) = map.get("pact:match") {
-        let definition = json_to_string(definition);
-        debug!("Configuring repeated field from a matcher definition expression '{}'", definition);
-        let mrd = parse_matcher_def( definition.as_str())?;
+      Value::Object(map) => {
+        if let Some(definition) = map.get("pact:match") {
+          // We have received a map to configure the repeated field with a match value, so we
+          // process the rest of the map as a single example value applied against the pact:match
+          // expression. Normally it should be a matchValues or matchKeys (or both)
+          let definition = json_to_string(definition);
+          debug!("Configuring repeated field from a matcher definition expression '{}'", definition);
+          let mrd = parse_matcher_def( definition.as_str())?;
 
-        let each_value = mrd.rules.iter()
-          .filter_map(|rule| rule.clone().left())
-          .find_map(|rule| match rule {
-            matchingrules::MatchingRule::EachValue(def) => Some(def),
-            _ => None
-          });
-        if let Some(each_value_def) = &each_value {
-          debug!("Found each value matcher");
-          if mrd.rules.len() > 1 {
-            warn!("{}: each value matcher can not be combined with other matchers, ignoring the other matching rules", path);
-          }
+          let each_value = mrd.rules.iter()
+              .filter_map(|rule| rule.clone().left())
+              .find_map(|rule| match rule {
+                matchingrules::MatchingRule::EachValue(def) => Some(def),
+                _ => None
+              });
+          if let Some(each_value_def) = &each_value {
+            debug!("Found each value matcher");
+            if mrd.rules.len() > 1 {
+              warn!("{}: each value matcher can not be combined with other matchers, ignoring the other matching rules", path);
+            }
 
-          match each_value_def.rules.first() {
-            Some(either) => match either {
-              Either::Left(_) => {
-                matching_rules.add_rule(path.clone(), matchingrules::MatchingRule::EachValue(each_value_def.clone()), RuleLogic::And);
-                if let Some(generator) = &each_value_def.generator {
-                  generators.insert(path.to_string(), generator.clone());
+            match each_value_def.rules.first() {
+              Some(either) => match either {
+                Either::Left(_) => {
+                  matching_rules.add_rule(path.clone(), matchingrules::MatchingRule::EachValue(each_value_def.clone()), RuleLogic::And);
+                  if let Some(generator) = &each_value_def.generator {
+                    generators.insert(path.to_string(), generator.clone());
+                  }
+                  let constructed_value = value_for_type(field, each_value_def.value.as_str(), field_descriptor, &message_builder.descriptor)?;
+                  message_builder.set_field_value(field_descriptor, field, constructed_value);
+                  Ok(())
                 }
-                let constructed_value = value_for_type(field, each_value_def.value.as_str(), field_descriptor, &message_builder.descriptor)?;
-                message_builder.set_field_value(field_descriptor, field, constructed_value);
-                Ok(())
+                Either::Right(reference) => if let Some(field_value) = map.get(reference.name.as_str()) {
+                  matching_rules.add_rule(path.clone(), matchingrules::MatchingRule::Values, RuleLogic::And);
+                  let array_path = path.join("*");
+                  matching_rules.add_rule(array_path.clone(), matchingrules::MatchingRule::Type, RuleLogic::And);
+                  build_single_embedded_field_value(&array_path, message_builder, MessageFieldValueType::Repeated,
+                                                    field_descriptor, field, field_value, matching_rules, generators).map(|_| ())
+                } else {
+                  Err(anyhow!("Expression '{}' refers to non-existent item '{}'", definition, reference.name))
+                }
               }
-              Either::Right(reference) => if let Some(field_value) = map.get(reference.name.as_str()) {
-                matching_rules.add_rule(path.clone(), matchingrules::MatchingRule::Values, RuleLogic::And);
-                matching_rules.add_rule(path.join("*"), matchingrules::MatchingRule::Type, RuleLogic::And);
-                build_single_embedded_field_value(path, message_builder, MessageFieldValueType::Repeated,
-                  field_descriptor, field, field_value, matching_rules, generators).map(|_| ())
-              } else {
-                Err(anyhow!("Expression '{}' refers to non-existent item '{}'", definition, reference.name))
+              None => Err(anyhow!("Got an EachValue matcher with no associated matching rules to apply"))
+            }
+          } else {
+            if !mrd.rules.is_empty() {
+              for rule in &mrd.rules {
+                match rule {
+                  Either::Left(rule) => matching_rules.add_rule(path.clone(), rule.clone(), RuleLogic::And),
+                  Either::Right(mr) => return Err(anyhow!("References can only be used with an EachValue matcher - {:?}", mr))
+                }
               }
             }
-            None => Err(anyhow!("Got an EachValue matcher with no associated matching rules to apply"))
+            if let Some(generator) = mrd.generator {
+              generators.insert(path.to_string(), generator);
+            }
+
+            let constructed = value_for_type(field, mrd.value.as_str(), field_descriptor, &message_builder.descriptor)?;
+            message_builder.add_repeated_field_value(field_descriptor, field, constructed);
+
+            Ok(())
           }
         } else {
-          if !mrd.rules.is_empty() {
-            for rule in &mrd.rules {
-              match rule {
-                Either::Left(rule) => matching_rules.add_rule(path.clone(), rule.clone(), RuleLogic::And),
-                Either::Right(mr) => return Err(anyhow!("References can only be used with an EachValue matcher - {:?}", mr))
-              }
-            }
-          }
-          if let Some(generator) = mrd.generator {
-            generators.insert(path.to_string(), generator);
-          }
-
-          let constructed = value_for_type(field, mrd.value.as_str(), field_descriptor, &message_builder.descriptor)?;
-          message_builder.add_repeated_field_value(field_descriptor, field, constructed);
-
-          Ok(())
+          // No matching definition, so we have to assume the map contains the attributes of a
+          // single example.
+          build_single_embedded_field_value(path, message_builder, MessageFieldValueType::Repeated, field_descriptor, field, value,
+                                            matching_rules, generators).map(|_| ())
         }
-      } else {
-        build_single_embedded_field_value(path, message_builder, MessageFieldValueType::Repeated, field_descriptor, field, value,
-          matching_rules, generators).map(|_| ())
       }
-      _ => build_single_embedded_field_value(path, message_builder, MessageFieldValueType::Repeated, field_descriptor, field, value,
-        matching_rules, generators).map(|_| ())
+      _ => {
+        // Not a map or list structure, so could be a primitive repeated field
+        build_single_embedded_field_value(path, message_builder, MessageFieldValueType::Repeated, field_descriptor, field, value,
+                                          matching_rules, generators).map(|_| ())
+      }
     }
   } else {
     build_single_embedded_field_value(path, message_builder, MessageFieldValueType::Normal, field_descriptor, field, value,
@@ -888,15 +901,35 @@ fn value_for_type(
 #[cfg(test)]
 mod tests {
   use expectest::prelude::*;
+  use lazy_static::lazy_static;
   use maplit::{btreemap, hashmap};
+  use pact_models::matchingrules;
+  use pact_models::path_exp::DocPath;
+  use pact_models::prelude::MatchingRuleCategory;
   use pact_plugin_driver::proto::{MatchingRule, MatchingRules};
   use pact_plugin_driver::proto::interaction_response::MarkupType;
-  use prost_types::{DescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorProto, MethodDescriptorProto, ServiceDescriptorProto};
-  use prost_types::field_descriptor_proto::Type;
+  use prost_types::{
+    DescriptorProto,
+    field_descriptor_proto,
+    FieldDescriptorProto,
+    FileDescriptorProto,
+    MethodDescriptorProto,
+    OneofDescriptorProto,
+    ServiceDescriptorProto,
+    MethodOptions,
+    FileOptions
+  };
+  use prost_types::field_descriptor_proto::{Label, Type};
+  use serde_json::json;
   use trim_margin::MarginTrimmable;
 
-  use crate::message_builder::RType;
-  use crate::protobuf::{construct_protobuf_interaction_for_message, construct_protobuf_interaction_for_service, value_for_type};
+  use crate::message_builder::{MessageBuilder, RType};
+  use crate::protobuf::{
+    build_embedded_message_field_value,
+    construct_protobuf_interaction_for_message,
+    construct_protobuf_interaction_for_service,
+    value_for_type
+  };
 
   #[test]
   fn value_for_type_test() {
@@ -1257,5 +1290,334 @@ mod tests {
     let result = construct_protobuf_interaction_for_service(&service_descriptor, &config,
       "test_service", "call", &hashmap!{ "file".to_string() => &file_descriptor }, &file_descriptor);
     expect!(result).to(be_ok());
+  }
+
+  lazy_static! {
+    static ref FILE_DESCRIPTOR: FileDescriptorProto = FileDescriptorProto {
+      name: Some("area_calculator.proto".to_string()),
+      package: Some("area_calculator".to_string()),
+      dependency: vec![],
+      public_dependency: vec![],
+      weak_dependency: vec![],
+      message_type: vec![
+        DescriptorProto {
+          name: Some("ShapeMessage".to_string()),
+          field: vec![
+            FieldDescriptorProto {
+              name: Some("square".to_string()),
+              number: Some(1),
+              label: Some(Label::Optional as i32),
+              r#type: Some(Type::Message as i32),
+              type_name: Some(".area_calculator.Square".to_string()),
+              extendee: None,
+              default_value: None,
+              oneof_index: Some(0),
+              json_name: Some("square".to_string()),
+              options: None,
+              proto3_optional: None
+            },
+            FieldDescriptorProto {
+              name: Some("rectangle".to_string()),
+              number: Some(2),
+              label: Some(Label::Optional as i32),
+              r#type: Some(Type::Message as i32),
+              type_name: Some(".area_calculator.Rectangle".to_string()),
+              extendee: None,
+              default_value: None,
+              oneof_index: Some(0),
+              json_name: Some("rectangle".to_string()),
+              options: None,
+              proto3_optional: None
+            }
+          ],
+          extension: vec![],
+          nested_type: vec![],
+          enum_type: vec![],
+          extension_range: vec![],
+          oneof_decl: vec![
+            OneofDescriptorProto {
+              name: Some("shape".to_string()),
+              options: None
+            }
+          ],
+          options: None,
+          reserved_range: vec![],
+          reserved_name: vec![]
+        },
+        DescriptorProto {
+          name: Some("Square".to_string()),
+          field: vec![
+            FieldDescriptorProto {
+              name: Some("edge_length".to_string()),
+              number: Some(1),
+              label: Some(Label::Optional as i32),
+              r#type: Some(Type::Float as i32),
+              type_name: None,
+              extendee: None,
+              default_value: None,
+              oneof_index: None,
+              json_name: Some("edgeLength".to_string()),
+              options: None,
+              proto3_optional: None
+            }
+          ],
+          extension: vec![],
+          nested_type: vec![],
+          enum_type: vec![],
+          extension_range: vec![],
+          oneof_decl: vec![],
+          options: None,
+          reserved_range: vec![],
+          reserved_name: vec![]
+        },
+        DescriptorProto {
+          name: Some("Rectangle".to_string()),
+          field: vec![
+            FieldDescriptorProto {
+              name: Some("length".to_string()),
+              number: Some(1),
+              label: Some(Label::Optional as i32),
+              r#type: Some(Type::Float as i32),
+              type_name: None,
+              extendee: None,
+              default_value: None,
+              oneof_index: None,
+              json_name: Some("length".to_string()),
+              options: None,
+              proto3_optional: None
+            },
+            FieldDescriptorProto {
+              name: Some("width".to_string()),
+              number: Some(2),
+              label: Some(Label::Optional as i32),
+              r#type: Some(Type::Float as i32),
+              type_name: None,
+              extendee: None,
+              default_value: None,
+              oneof_index: None,
+              json_name: Some("width".to_string()),
+              options: None,
+              proto3_optional: None
+            }
+          ],
+          extension: vec![],
+          nested_type: vec![],
+          enum_type: vec![],
+          extension_range: vec![],
+          oneof_decl: vec![],
+          options: None,
+          reserved_range: vec![],
+          reserved_name: vec![]
+        },
+        DescriptorProto {
+          name: Some("Area".to_string()),
+          field: vec![
+            FieldDescriptorProto {
+              name: Some("id".to_string()),
+              number: Some(1),
+              label: Some(Label::Optional as i32),
+              r#type: Some(Type::String as i32),
+              type_name: None,
+              extendee: None,
+              default_value: None,
+              oneof_index: None,
+              json_name: Some("id".to_string()),
+              options: None,
+              proto3_optional: None
+            },
+            FieldDescriptorProto {
+              name: Some("shape".to_string()),
+              number: Some(2),
+              label: Some(Label::Optional as i32),
+              r#type: Some(Type::String as i32),
+              type_name: None,
+              extendee: None,
+              default_value: None,
+              oneof_index: None,
+              json_name: Some("shape".to_string()),
+              options: None,
+              proto3_optional: None
+            },
+            FieldDescriptorProto {
+              name: Some("value".to_string()),
+              number: Some(3),
+              label: Some(Label::Optional as i32),
+              r#type: Some(Type::Float as i32),
+              type_name: None,
+              extendee: None,
+              default_value: None,
+              oneof_index: None,
+              json_name: Some("value".to_string()),
+              options: None,
+              proto3_optional: None
+            }
+          ],
+          extension: vec![],
+          nested_type: vec![],
+          enum_type: vec![],
+          extension_range: vec![],
+          oneof_decl: vec![],
+          options: None,
+          reserved_range: vec![],
+          reserved_name: vec![]
+        },
+        DescriptorProto {
+          name: Some("AreaResponse".to_string()),
+          field: vec![
+            FieldDescriptorProto {
+              name: Some("value".to_string()),
+              number: Some(1),
+              label: Some(Label::Optional as i32),
+              r#type: Some(Type::Message as i32),
+              type_name: Some(".area_calculator.Area".to_string()),
+              extendee: None,
+              default_value: None,
+              oneof_index: None,
+              json_name: Some("value".to_string()),
+              options: None,
+              proto3_optional: None
+            }
+          ],
+          extension: vec![],
+          nested_type: vec![],
+          enum_type: vec![],
+          extension_range: vec![],
+          oneof_decl: vec![],
+          options: None,
+          reserved_range: vec![],
+          reserved_name: vec![]
+        }
+      ],
+      enum_type: vec![],
+      service: vec![
+        ServiceDescriptorProto {
+          name: Some("Calculator".to_string()),
+          method: vec![
+            MethodDescriptorProto {
+              name: Some("calculateOne".to_string()),
+              input_type: Some(".area_calculator.ShapeMessage".to_string()),
+              output_type: Some(".area_calculator.AreaResponse".to_string()),
+              options: Some(MethodOptions {
+                deprecated: None,
+                idempotency_level: None,
+                uninterpreted_option: vec![]
+              }),
+              client_streaming: None,
+              server_streaming: None
+            },
+            MethodDescriptorProto {
+              name: Some("calculateMulti".to_string()),
+              input_type: Some(".area_calculator.AreaRequest".to_string()),
+              output_type: Some(".area_calculator.AreaResponse".to_string()),
+              options: Some(MethodOptions {
+                deprecated: None,
+                idempotency_level: None,
+                uninterpreted_option: vec![]
+              }),
+              client_streaming: None,
+              server_streaming: None
+            }
+          ],
+          options: None
+        }
+      ],
+      extension: vec![],
+      options: Some(FileOptions {
+        java_package: None,
+        java_outer_classname: None,
+        java_multiple_files: None,
+        java_generate_equals_and_hash: None,
+        java_string_check_utf8: None,
+        optimize_for: None,
+        go_package: Some("io.pact/area_calculator".to_string()),
+        cc_generic_services: None,
+        java_generic_services: None,
+        py_generic_services: None,
+        php_generic_services: Some(true),
+        deprecated: None,
+        cc_enable_arenas: None,
+        objc_class_prefix: None,
+        csharp_namespace: None,
+        swift_prefix: None,
+        php_class_prefix: None,
+        php_namespace: None,
+        php_metadata_namespace: None,
+        ruby_package: None,
+        uninterpreted_option: vec![]
+      }),
+      source_code_info: None,
+      syntax: Some("proto3".to_string())
+    };
+  }
+
+  #[test_log::test]
+  fn build_embedded_message_field_value_with_repeated_field_configured_from_map_test() {
+    let message_descriptor = DescriptorProto {
+      name: Some("AreaResponse".to_string()),
+      field: vec![
+        FieldDescriptorProto {
+          name: Some("value".to_string()),
+          number: Some(1),
+          label: Some(Label::Repeated as i32),
+          r#type: Some(Type::Message as i32),
+          type_name: Some(".area_calculator.Area".to_string()),
+          extendee: None,
+          default_value: None,
+          oneof_index: None,
+          json_name: None,
+          options: None,
+          proto3_optional: None
+        }
+      ],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![]
+    };
+
+    let mut message_builder = MessageBuilder::new(&message_descriptor, "AreaResponse", &FILE_DESCRIPTOR);
+    let path = DocPath::new("$.value").unwrap();
+    let field_descriptor = FieldDescriptorProto {
+      name: Some("value".to_string()),
+      number: Some(1),
+      label: Some(Label::Repeated as i32),
+      r#type: Some(Type::Message as i32),
+      type_name: Some(".area_calculator.Area".to_string()),
+      extendee: None,
+      default_value: None,
+      oneof_index: None,
+      json_name: Some("value".to_string()),
+      options: None,
+      proto3_optional: None
+    };
+    let mut matching_rules = MatchingRuleCategory::empty("body");
+    let mut generators = hashmap!{};
+    let config = json!({
+      "area": {
+        "id": "matching(regex, '\\d+', '1234')",
+        "shape": "matching(type, 'rectangle')",
+        "value": "matching(number, 12)"
+      },
+      "pact:match": "eachValue(matching($'area'))"
+    });
+
+    let result = build_embedded_message_field_value(&mut message_builder, &path, &field_descriptor,
+      "value", &config, &mut matching_rules, &mut generators);
+
+    let expected_rules = matchingrules! {
+       "body" => {
+        "$.value" => [ pact_models::matchingrules::MatchingRule::Values ],
+        "$.value.*" => [ pact_models::matchingrules::MatchingRule::Type ],
+        "$.value.*.id" => [ pact_models::matchingrules::MatchingRule::Regex("\\d+".to_string()) ],
+        "$.value.*.shape" => [ pact_models::matchingrules::MatchingRule::Type ],
+        "$.value.*.value" => [ pact_models::matchingrules::MatchingRule::Number ]
+      }
+    }.rules_for_category("body").unwrap();
+    expect!(result).to(be_ok());
+    expect!(matching_rules).to(be_equal_to(expected_rules));
   }
 }
