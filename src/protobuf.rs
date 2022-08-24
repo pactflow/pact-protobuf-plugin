@@ -499,7 +499,7 @@ fn build_embedded_message_field_value(
         } else {
           // No matching definition, so we have to assume the map contains the attributes of a
           // single example.
-          build_single_embedded_field_value(path, message_builder, MessageFieldValueType::Repeated, field_descriptor, field, value,
+          build_single_embedded_field_value(&path.join("*"), message_builder, MessageFieldValueType::Repeated, field_descriptor, field, value,
                                             matching_rules, generators).map(|_| ())
         }
       }
@@ -1551,7 +1551,7 @@ mod tests {
   }
 
   #[test_log::test]
-  fn build_embedded_message_field_value_with_repeated_field_configured_from_map_test() {
+  fn build_embedded_message_field_value_with_repeated_field_configured_from_map_with_eachvalue_test() {
     let message_descriptor = DescriptorProto {
       name: Some("AreaResponse".to_string()),
       field: vec![
@@ -1612,6 +1612,72 @@ mod tests {
        "body" => {
         "$.value" => [ pact_models::matchingrules::MatchingRule::Values ],
         "$.value.*" => [ pact_models::matchingrules::MatchingRule::Type ],
+        "$.value.*.id" => [ pact_models::matchingrules::MatchingRule::Regex("\\d+".to_string()) ],
+        "$.value.*.shape" => [ pact_models::matchingrules::MatchingRule::Type ],
+        "$.value.*.value" => [ pact_models::matchingrules::MatchingRule::Number ]
+      }
+    }.rules_for_category("body").unwrap();
+    expect!(result).to(be_ok());
+    expect!(matching_rules).to(be_equal_to(expected_rules));
+  }
+
+  #[test_log::test]
+  fn build_embedded_message_field_value_with_repeated_field_configured_from_map_test() {
+    let message_descriptor = DescriptorProto {
+      name: Some("AreaResponse".to_string()),
+      field: vec![
+        FieldDescriptorProto {
+          name: Some("value".to_string()),
+          number: Some(1),
+          label: Some(Label::Repeated as i32),
+          r#type: Some(Type::Message as i32),
+          type_name: Some(".area_calculator.Area".to_string()),
+          extendee: None,
+          default_value: None,
+          oneof_index: None,
+          json_name: None,
+          options: None,
+          proto3_optional: None
+        }
+      ],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![]
+    };
+
+    let mut message_builder = MessageBuilder::new(&message_descriptor, "AreaResponse", &FILE_DESCRIPTOR);
+    let path = DocPath::new("$.value").unwrap();
+    let field_descriptor = FieldDescriptorProto {
+      name: Some("value".to_string()),
+      number: Some(1),
+      label: Some(Label::Repeated as i32),
+      r#type: Some(Type::Message as i32),
+      type_name: Some(".area_calculator.Area".to_string()),
+      extendee: None,
+      default_value: None,
+      oneof_index: None,
+      json_name: Some("value".to_string()),
+      options: None,
+      proto3_optional: None
+    };
+    let mut matching_rules = MatchingRuleCategory::empty("body");
+    let mut generators = hashmap!{};
+    let config = json!({
+      "id": "matching(regex, '\\d+', '1234')",
+      "shape": "matching(type, 'rectangle')",
+      "value": "matching(number, 12)"
+    });
+
+    let result = build_embedded_message_field_value(&mut message_builder, &path, &field_descriptor,
+                                                    "value", &config, &mut matching_rules, &mut generators);
+
+    let expected_rules = matchingrules! {
+       "body" => {
         "$.value.*.id" => [ pact_models::matchingrules::MatchingRule::Regex("\\d+".to_string()) ],
         "$.value.*.shape" => [ pact_models::matchingrules::MatchingRule::Type ],
         "$.value.*.value" => [ pact_models::matchingrules::MatchingRule::Number ]
