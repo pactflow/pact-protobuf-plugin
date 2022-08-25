@@ -62,7 +62,7 @@ impl MockService {
           trace!("Response message has {} bytes", response_bytes.len());
           let response_message = decode_message(&mut response_bytes, &response_descriptor, &self.file_descriptor_set)
             .map_err(|err| Status::invalid_argument(err.to_string()))?;
-          let message = DynamicMessage::new(&response_descriptor, &response_message);
+          let message = DynamicMessage::new(&response_message);
           trace!("Sending message {message:?}");
           Ok(Response::new(message))
         } else {

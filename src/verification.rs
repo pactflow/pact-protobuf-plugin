@@ -216,7 +216,7 @@ fn build_grpc_request(
 ) -> anyhow::Result<tonic::Request<DynamicMessage>> {
   let mut bytes = body.value().unwrap_or_default();
   let message_fields = decode_message(&mut bytes, input_desc, file_desc)?;
-  let mut request = tonic::Request::new(DynamicMessage::new(input_desc, &message_fields));
+  let mut request = tonic::Request::new(DynamicMessage::new(&message_fields));
   let request_metadata = request.metadata_mut();
   for (key, md) in metadata {
     if key != "request-path" {

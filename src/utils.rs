@@ -110,11 +110,6 @@ pub(crate) fn display_bytes(data: &[u8]) -> String {
   }
 }
 
-/// If the message fields include the field with the given descriptor
-pub fn find_message_field<'a>(message: &'a [ProtobufField], field_descriptor: &ProtobufField) -> Option<&'a ProtobufField> {
-  message.iter().find(|v| v.field_num == field_descriptor.field_num)
-}
-
 /// Look for the message field data with the given name
 pub fn find_message_field_by_name(descriptor: &DescriptorProto, field_data: Vec<ProtobufField>, field_name: &str) -> Option<ProtobufField> {
   let field_num = match descriptor.field.iter()
@@ -206,21 +201,6 @@ pub fn field_data_to_json(
   }
 
   Ok(serde_json::Value::Object(object.iter().map(|(k, v)| (k.clone(), v.clone())).collect()))
-}
-
-/// Return the type name of a Prootbuf value
-pub fn proto_type_name(value: &Value) -> String {
-  match &value.kind {
-    Some(kind) => match kind {
-      Kind::NullValue(_) => "Null".to_string(),
-      Kind::NumberValue(_) => "Number".to_string(),
-      Kind::StringValue(_) => "String".to_string(),
-      Kind::BoolValue(_) => "Boolean".to_string(),
-      Kind::StructValue(_) => "Struct".to_string(),
-      Kind::ListValue(_) => "List".to_string(),
-    }
-    None => "Unknown".to_string()
-  }
 }
 
 /// Parse the JSON string into a V4 Pact model

@@ -227,7 +227,7 @@ fn construct_protobuf_interaction_for_service(
           })
             .flatten()
             .collect(),
-          Kind::StringValue(s) => vec![ btreemap!{ "value".to_string() => response_config.clone() } ],
+          Kind::StringValue(_) => vec![ btreemap!{ "value".to_string() => response_config.clone() } ],
           _ => vec![]
         }
       })
@@ -1522,29 +1522,7 @@ mod tests {
         }
       ],
       extension: vec![],
-      options: Some(FileOptions {
-        java_package: None,
-        java_outer_classname: None,
-        java_multiple_files: None,
-        java_generate_equals_and_hash: None,
-        java_string_check_utf8: None,
-        optimize_for: None,
-        go_package: Some("io.pact/area_calculator".to_string()),
-        cc_generic_services: None,
-        java_generic_services: None,
-        py_generic_services: None,
-        php_generic_services: Some(true),
-        deprecated: None,
-        cc_enable_arenas: None,
-        objc_class_prefix: None,
-        csharp_namespace: None,
-        swift_prefix: None,
-        php_class_prefix: None,
-        php_namespace: None,
-        php_metadata_namespace: None,
-        ruby_package: None,
-        uninterpreted_option: vec![]
-      }),
+      options: None,
       source_code_info: None,
       syntax: Some("proto3".to_string())
     };

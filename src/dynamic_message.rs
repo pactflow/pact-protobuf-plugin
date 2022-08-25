@@ -59,14 +59,12 @@ impl Codec for PactCodec {
 
 #[derive(Debug, Clone)]
 pub(crate) struct DynamicMessage {
-  descriptor: DescriptorProto,
   fields: Vec<ProtobufField>,
 }
 
 impl DynamicMessage {
-  pub(crate) fn new(descriptor: &DescriptorProto, fields: &[ProtobufField]) -> DynamicMessage {
+  pub(crate) fn new(fields: &[ProtobufField]) -> DynamicMessage {
     DynamicMessage {
-      descriptor: descriptor.clone(),
       fields: fields.to_vec()
     }
   }
@@ -193,7 +191,7 @@ impl Decoder for DynamicMessageDecoder {
   #[instrument]
   fn decode(&mut self, src: &mut DecodeBuf<'_>) -> Result<Option<Self::Item>, Self::Error> {
     match decode_message(src, &self.descriptor, &self.file_descriptor_set) {
-      Ok(fields) => Ok(Some(DynamicMessage::new(&self.descriptor, &fields))),
+      Ok(fields) => Ok(Some(DynamicMessage::new(&fields))),
       Err(err) => {
         error!("Failed to decode the message - {err}");
         Err(Status::invalid_argument(format!("Failed to decode the message - {err}")))

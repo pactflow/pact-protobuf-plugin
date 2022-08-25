@@ -559,7 +559,7 @@ impl PactPlugin for ProtobufPactPlugin {
 
     // TODO: use any generators here
     let decoded_body = match decode_message(&mut raw_request_body, &input_message, &file_desc) {
-      Ok(message) => DynamicMessage::new(&input_message, &message),
+      Ok(message) => DynamicMessage::new(&message),
       Err(err) => {
         return Ok(Response::new(proto::VerificationPreparationResponse {
           response: Some(proto::verification_preparation_response::Response::Error(err.to_string())),

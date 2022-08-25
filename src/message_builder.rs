@@ -718,8 +718,6 @@ mod tests {
   use pact_plugin_driver::proto::{
     Body,
     CompareContentsRequest,
-    Generator,
-    InteractionResponse,
     MatchingRule,
     MatchingRules
   };
