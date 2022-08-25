@@ -1,3 +1,15 @@
+# 0.1.12 - Fix for repeated fields
+
+* 1e1080c - chore: cleaned up some compiler warnings (Ronald Holshausen, Thu Aug 25 11:44:11 2022 +1000)
+* 5abf1eb - chore: update dependencies (Ronald Holshausen, Thu Aug 25 10:35:23 2022 +1000)
+* 874b362 - fix: matching rule paths for repeated fields were not correct when configured with data in a map form (Ronald Holshausen, Wed Aug 24 17:37:25 2022 +1000)
+* ae823c0 - fix: matching rule paths for repeated fields were not correct when configured with an each value matcher (Ronald Holshausen, Wed Aug 24 17:32:04 2022 +1000)
+* 9d896af - fix: ensure there is the enough bytes to read a repeated packed field (Ronald Holshausen, Tue Aug 23 16:44:49 2022 +1000)
+* 7773c99 - feat: support decoding packed repeated fields (Ronald Holshausen, Tue Aug 23 16:22:32 2022 +1000)
+* c65deb4 - feat: support packed repeated fields (Ronald Holshausen, Tue Aug 23 14:32:02 2022 +1000)
+* 08b7b7e - chore: add github token to avoid throttle errors installing protoc (Ronald Holshausen, Wed Aug 17 14:25:38 2022 +1000)
+* a266c64 - Revert "Revert "bump version to 0.1.12"" (Ronald Holshausen, Wed Aug 17 13:52:57 2022 +1000)
+
 # 0.1.11 - Support google.protobuf.StringValue and repeated fields configured with lists of values
 
 * d7b37b0 - fix: return an error if any of the response parts fail to be parsed or constructored (Ronald Holshausen, Wed Aug 17 11:58:50 2022 +1000)
