@@ -28,14 +28,15 @@ payloads and gRPC.
 
 ## Requirements to use it
 
-This plugin provides matching and verification of Protobuf proto3 encoded messages to the Pact contract testing framework. It requires a version
-of the Pact framework that supports the [V4 Pact specification](https://github.com/pact-foundation/pact-specification/tree/version-4) 
+This plugin provides matching and verification of Protobuf proto3 encoded messages and gRPC service methods to the Pact
+contract testing framework. It requires a version of the Pact framework that supports the [V4 Pact specification](https://github.com/pact-foundation/pact-specification/tree/version-4) 
 as well as the [Pact plugin framework](https://github.com/pact-foundation/pact-plugins).
 
-Supported Pact versions:
+Supported Pact framework versions:
 - [Pact-JVM v4.4.x](https://github.com/pact-foundation/pact-jvm)
 - [Pact-Rust Consumer v0.9.x](https://github.com/pact-foundation/pact-reference/tree/master/rust/pact_consumer)
 - [Pact-Rust Verifier v0.9.x](https://github.com/pact-foundation/pact-reference/tree/master/rust/pact_verifier_cli)
+- [Pact-Go v2.0.0-beta](https://github.com/pact-foundation/pact-go)
 
 To support compiling Protocol Buffer proto files requires a version of the [Protocol Buffer compiler](https://github.com/protocolbuffers/protobuf).
 
@@ -47,7 +48,21 @@ a request to [support@pactflow.io](support@pactflow.io) with the details.
 
 ### Installing the plugin
 To install the plugin requires the plugin executable binary as well as the plugin manifest file to be unpacked/copied into
-a Pact plugin directory. By default, this will be `.pact/plugins/protobuf-<version>` in the home directory (i.e. `$HOME/.pact/plugins/protobuf-0.1.5`).
+a Pact plugin directory. By default, this will be `.pact/plugins/protobuf-<version>` in the home directory (i.e. 
+`$HOME/.pact/plugins/protobuf-0.1.5` for version 0.1.5).
+
+#### Installing the plugin using the pact-plugin-cli
+
+The [pact-plugin-cli](https://github.com/pact-foundation/pact-plugins/tree/main/cli) can be used to install the Protobuf/gRPC
+plugin. See the [CLI installation](https://github.com/pact-foundation/pact-plugins/tree/main/cli#installing) on how to install it.
+
+To install the latest version, run
+
+```shell
+pact-plugin-cli -y install https://github.com/pactflow/pact-protobuf-plugin/releases/latest
+```
+
+#### Manually installing the plugin
 
 Example installation of Linux version 0.1.5 (replace with the actual version you are using): 
 1. Create the plugin directory if needed: `mkdir -p ~/.pact/plugins/protobuf-0.1.5`
@@ -127,6 +142,7 @@ It supports the following:
 * Embedded messages.
 * Map fields (with a string key).
 * Repeated fields.
+* Packed repeated fields.
 * oneOf fields.
 * gRPC Service method calls. 
 
@@ -136,7 +152,6 @@ The following features are currently unsupported, but may be supported in a late
 * Map fields with scalar keys.
 * Map fields with enum keys.
 * default values for fields.
-* packed fields.
 * required fields (note that this is deprecated in Proto 3).
 * Testing/verifying Protobuf options.
 * Testing/verifying gRPC service call metadata.
