@@ -363,6 +363,10 @@ fn construct_protobuf_interaction_for_message(
 }
 
 /// Construct a single field for a message from the provided config
+#[tracing::instrument(ret,
+  skip_all,
+  fields(%path, %field_name, %value)
+)]
 fn construct_message_field(
   message_builder: &mut MessageBuilder,
   matching_rules: &mut MatchingRuleCategory,
@@ -380,7 +384,12 @@ fn construct_message_field(
           build_embedded_message_field_value(message_builder, path, &field, field_name, value, matching_rules, generators)?;
         } else {
           // Non-embedded message field (singular value)
-          build_field_value(path, message_builder, MessageFieldValueType::Normal, &field, field_name, value, matching_rules, generators)?;
+          let field_type = if is_repeated_field(&field) {
+            MessageFieldValueType::Repeated
+          } else {
+            MessageFieldValueType::Normal
+          };
+          build_field_value(path, message_builder, field_type, &field, field_name, value, matching_rules, generators)?;
         }
         None => {
           return Err(anyhow!("Message {} field {} is of an unknown type", message_builder.message_name, field_name))
@@ -784,6 +793,10 @@ fn build_map_field(
 
 /// Constructs a simple message field (non-repeated or map) from the configuration value and
 /// updates the matching rules and generators for it.
+#[tracing::instrument(ret,
+  skip_all,
+  fields(%path, ?field_type, %field_name, %value)
+)]
 fn build_field_value(
   path: &DocPath,
   message_builder: &mut MessageBuilder,
@@ -799,13 +812,22 @@ fn build_field_value(
   match value {
     Value::Null => Ok(None),
     Value::String(s) => {
-      let constructed_value = construct_value_from_string(path, message_builder,
-        descriptor, field_name, matching_rules, generators, s)?;
-
-      debug!("Setting field {:?} to value {:?}", field_name, constructed_value);
-      match field_type {
-        MessageFieldValueType::Repeated => message_builder.add_repeated_field_value(descriptor, field_name, constructed_value.clone()),
-        _ => message_builder.set_field_value(descriptor, field_name, constructed_value.clone()),
+      let constructed_value = match field_type {
+        MessageFieldValueType::Repeated => {
+          let path = path.join("*");
+          let constructed_value = construct_value_from_string(&path, message_builder,
+            descriptor, field_name, matching_rules, generators, s)?;
+          debug!("Setting field {:?}:repeated to value {:?}", field_name, constructed_value);
+          message_builder.add_repeated_field_value(descriptor, field_name, constructed_value.clone());
+          constructed_value
+        },
+        _ => {
+          let constructed_value = construct_value_from_string(path, message_builder,
+            descriptor, field_name, matching_rules, generators, s)?;
+          debug!("Setting field {:?}:{:?} to value {:?}", field_name, field_type, constructed_value);
+          message_builder.set_field_value(descriptor, field_name, constructed_value.clone());
+          constructed_value
+        },
       };
       Ok(Some(constructed_value))
     }
@@ -819,6 +841,7 @@ fn build_field_value(
           build_field_value(&index_path, message_builder, MessageFieldValueType::Repeated,
             descriptor, field_name, value, matching_rules, generators)?;
         }
+        trace!(?message_builder, "Constructed repeated field from array");
         Ok(constructed_value)
       } else {
         Ok(None)

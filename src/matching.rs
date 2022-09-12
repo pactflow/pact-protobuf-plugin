@@ -17,7 +17,7 @@ use pact_models::matchingrules::MatchingRule;
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::MatchingRuleCategory;
 use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet};
-use tracing::{debug, trace, warn};
+use tracing::{debug, trace, warn, instrument};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
 use crate::utils::{display_bytes, enum_name, field_data_to_json, find_message_field_by_name, find_message_type_by_name, find_service_descriptor, is_map_field, is_repeated_field, last_name};
@@ -98,6 +98,7 @@ pub fn match_service(
 }
 
 /// Compare the expected message to the actual one
+#[tracing::instrument(ret, skip_all)]
 pub(crate) fn compare(
   message_descriptor: &DescriptorProto,
   expected_message: &[ProtobufField],
@@ -430,6 +431,7 @@ fn compare_value<T>(
 }
 
 /// Compare a repeated field
+#[tracing::instrument(ret, skip_all, fields(%path))]
 fn compare_repeated_field(
   path: &DocPath,
   descriptor: &FieldDescriptorProto,
@@ -459,6 +461,7 @@ fn compare_repeated_field(
       }
     }
   } else if expected_fields.is_empty() && !actual_fields.is_empty() {
+    debug!("Expected an empty list, but actual has {} fields", actual_fields.len());
     result.push(Mismatch::BodyMismatch {
       path: path.to_string(),
       expected: None,
@@ -469,6 +472,7 @@ fn compare_repeated_field(
       )
     })
   } else {
+    trace!("Comparing repeated fields as a list");
     result.extend(compare_list_content(path, descriptor, expected_fields, actual_fields, matching_context, descriptors));
     if expected_fields.len() != actual_fields.len() {
       result.push(Mismatch::BodyMismatch {
@@ -610,6 +614,7 @@ fn decode_message_map_entry(
 }
 
 /// Compares the items in the actual list against the expected
+#[tracing::instrument(ret, skip_all, fields(%path))]
 fn compare_list_content(
   path: &DocPath,
   descriptor: &FieldDescriptorProto,

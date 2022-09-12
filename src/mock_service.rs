@@ -10,7 +10,7 @@ use pact_models::v4::sync_message::SynchronousMessage;
 use prost_types::{DescriptorProto, FileDescriptorSet, MethodDescriptorProto};
 use tonic::{Request, Response, Status};
 use tower_service::Service;
-use tracing::{error, instrument, trace};
+use tracing::{debug, error, instrument, trace};
 
 use crate::dynamic_message::DynamicMessage;
 use crate::matching::compare;
@@ -45,23 +45,33 @@ impl MockService {
                                            &hashmap!{});
     let mismatches = compare(&message_descriptor, &expected_message, &request.proto_fields(), &context,
                              &expected_message_bytes, &self.file_descriptor_set);
+    trace!("Comparison result = {:?}", mismatches);
     match mismatches {
       Ok(result) => {
-        // record the result in the static store
-        let mut guard = MOCK_SERVER_STATE.lock().unwrap();
-        if let Some((_, results)) = guard.get_mut(self.server_key.as_str()) {
+        {
+          // record the result in the static store
+          let mut guard = MOCK_SERVER_STATE.lock().unwrap();
           let key = format!("{}/{}", self.service_name, self.method_descriptor.name.clone().unwrap_or_else(|| "unknown method".into()));
-          results.push((key, result.clone()));
+          if let Some((_, results)) = guard.get_mut(self.server_key.as_str()) {
+            trace!(store_length = results.len(), "Adding result to mock server '{}' static store", self.server_key);
+            results.push((key.clone(), result.clone()));
+          } else {
+            error!("INTERNAL ERROR: Did not find an entry for '{}' in mock server static store", self.server_key);
+          }
         }
 
         if result.all_matched() {
+          debug!("Request matched OK, returning expected response");
           // TODO: need to invoke any generators
           let mut response_bytes = self.message.response.first()
             .and_then(|d| d.contents.value())
             .unwrap_or_default();
           trace!("Response message has {} bytes", response_bytes.len());
           let response_message = decode_message(&mut response_bytes, &response_descriptor, &self.file_descriptor_set)
-            .map_err(|err| Status::invalid_argument(err.to_string()))?;
+            .map_err(|err| {
+              error!("Failed to encode response message - {}", err);
+              Status::invalid_argument(err.to_string())
+            })?;
           let message = DynamicMessage::new(&response_message);
           trace!("Sending message {message:?}");
           Ok(Response::new(message))
