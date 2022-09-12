@@ -24,7 +24,6 @@ use prost_types::{
   Value
 };
 use prost_types::field_descriptor_proto::Label;
-use prost_types::value::Kind;
 use serde_json::json;
 use tracing::{debug, error, trace, warn};
 

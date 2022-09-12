@@ -170,7 +170,6 @@ impl Encoder for DynamicMessageEncoder {
 #[derive(Debug, Clone)]
 pub(crate) struct DynamicMessageDecoder {
   descriptor: DescriptorProto,
-  message: SynchronousMessage,
   file_descriptor_set: FileDescriptorSet,
 }
 
@@ -178,7 +177,6 @@ impl DynamicMessageDecoder {
   fn new(codec: &PactCodec) -> Self {
     DynamicMessageDecoder {
       descriptor: codec.input_message.clone(),
-      message: codec.message.clone(),
       file_descriptor_set: codec.file_descriptor_set.clone()
     }
   }
