@@ -1,3 +1,10 @@
+# 0.1.13 - Bugfix Release
+
+* 493f476 - chore: cleanup some compiler messages (Ronald Holshausen, Mon Sep 12 12:07:44 2022 +1000)
+* 31a8873 - fix: Generate the correct matching rule paths for repeated fields (Ronald Holshausen, Mon Sep 12 11:55:56 2022 +1000)
+* 2d53f90 - chore: update readme with installation instructions (Ronald Holshausen, Thu Aug 25 14:02:18 2022 +1000)
+* 6d7da55 - bump version to 0.1.13 (Ronald Holshausen, Thu Aug 25 12:07:34 2022 +1000)
+
 # 0.1.12 - Fix for repeated fields
 
 * 1e1080c - chore: cleaned up some compiler warnings (Ronald Holshausen, Thu Aug 25 11:44:11 2022 +1000)
