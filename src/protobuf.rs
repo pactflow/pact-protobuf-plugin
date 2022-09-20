@@ -29,7 +29,7 @@ use prost_types::value::Kind;
 use serde_json::{json, Value};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
-use tracing::{debug, trace, warn, instrument};
+use tracing::{debug, instrument, trace, warn};
 use tracing_core::LevelFilter;
 
 use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValueType, RType};
@@ -37,6 +37,7 @@ use crate::protoc::Protoc;
 use crate::utils::{
   find_enum_value_by_name,
   find_message_type_in_file_descriptor,
+  find_message_type_in_file_descriptors,
   find_nested_type,
   is_map_field,
   is_repeated_field,
@@ -82,7 +83,7 @@ pub(crate) async fn process_proto(
       .ok_or_else(|| anyhow!("Did not get a valid value for 'pact:message-type'. It should be a string"))?;
     debug!("Configuring a Protobuf message {}", message);
     let result = configure_protobuf_message(message.as_str(), config, descriptor,
-      descriptor_hash.as_str())?;
+      descriptor_hash.as_str(), &file_descriptors)?;
     interactions.push(result);
   } else if let Some(service_name) = config.get("pact:proto-service") {
     let service_name = proto_value_to_string(service_name)
@@ -206,7 +207,7 @@ fn construct_protobuf_interaction_for_service(
     None
   } else {
     let interaction = construct_protobuf_interaction_for_message(&request_descriptor,
-      &request_part_config, input_message_name, "", file_descriptor)?;
+      &request_part_config, input_message_name, "", file_descriptor, all_descriptors)?;
     Some(InteractionResponse { part_name: "request".into(), .. interaction } )
   };
 
@@ -237,7 +238,7 @@ fn construct_protobuf_interaction_for_service(
   for config in response_part_config {
     let interaction = construct_protobuf_interaction_for_message(
       &response_descriptor, &config, output_message_name, "",
-      file_descriptor)?;
+      file_descriptor, all_descriptors)?;
     response_part.push(InteractionResponse { part_name: "response".into(), .. interaction });
   }
 
@@ -259,14 +260,15 @@ fn configure_protobuf_message(
   message_name: &str,
   config: &BTreeMap<String, prost_types::Value>,
   descriptor: &FileDescriptorProto,
-  descriptor_hash: &str
+  descriptor_hash: &str,
+  all_descriptors: &HashMap<String, &FileDescriptorProto>
 ) -> anyhow::Result<InteractionResponse> {
   trace!(">> configure_protobuf_message({}, {:?})", message_name, descriptor_hash);
   debug!("Looking for message of type '{}'", message_name);
   let message_descriptor = descriptor.message_type
     .iter().find(|p| p.name.clone().unwrap_or_default() == message_name)
     .ok_or_else(|| anyhow!("Did not find a descriptor for message '{}'", message_name))?;
-  construct_protobuf_interaction_for_message(message_descriptor, config, message_name, "", descriptor)
+  construct_protobuf_interaction_for_message(message_descriptor, config, message_name, "", descriptor, all_descriptors)
     .map(|interaction| {
       InteractionResponse {
         plugin_configuration: Some(PluginConfiguration {
@@ -282,13 +284,14 @@ fn configure_protobuf_message(
 }
 
 /// Constructs an interaction for the given Protobuf message descriptor
-#[instrument(ret, skip(message_descriptor, file_descriptor))]
+#[instrument(ret, skip(message_descriptor, file_descriptor, all_descriptors))]
 fn construct_protobuf_interaction_for_message(
   message_descriptor: &DescriptorProto,
   config: &BTreeMap<String, prost_types::Value>,
   message_name: &str,
   message_part: &str,
-  file_descriptor: &FileDescriptorProto
+  file_descriptor: &FileDescriptorProto,
+  all_descriptors: &HashMap<String, &FileDescriptorProto>
 ) -> anyhow::Result<InteractionResponse> {
   trace!(">> construct_protobuf_interaction_for_message({}, {}, {:?}, {:?})", message_name,
     message_part, file_descriptor.name, config.keys());
@@ -307,7 +310,8 @@ fn construct_protobuf_interaction_for_message(
     if !key.starts_with("pact:") {
       let field_path = path.join(key);
       debug!("Building field for key {}, '{}'", key, field_path);
-      construct_message_field(&mut message_builder, &mut matching_rules, &mut generators, key, &proto_value_to_json(value), &field_path)?;
+      construct_message_field(&mut message_builder, &mut matching_rules, &mut generators,
+        key, &proto_value_to_json(value), &field_path, all_descriptors)?;
     }
   }
 
@@ -372,14 +376,16 @@ fn construct_message_field(
   generators: &mut HashMap<String, Generator>,
   field_name: &str,
   value: &Value,
-  path: &DocPath
+  path: &DocPath,
+  all_descriptors: &HashMap<String, &FileDescriptorProto>
 ) -> anyhow::Result<()> {
   if !field_name.starts_with("pact:") {
     if let Some(field) = message_builder.field_by_name(field_name)  {
       match field.r#type {
         Some(r#type) => if r#type == Type::Message as i32 {
           // Embedded message
-          build_embedded_message_field_value(message_builder, path, &field, field_name, value, matching_rules, generators)?;
+          build_embedded_message_field_value(message_builder, path, &field, field_name,
+            value, matching_rules, generators, all_descriptors)?;
         } else {
           // Non-embedded message field (singular value)
           let field_type = if is_repeated_field(&field) {
@@ -415,7 +421,8 @@ fn build_embedded_message_field_value(
   field: &str,
   value: &Value,
   matching_rules: &mut MatchingRuleCategory,
-  generators: &mut HashMap<String, Generator>
+  generators: &mut HashMap<String, Generator>,
+  all_descriptors: &HashMap<String, &FileDescriptorProto>
 ) -> anyhow::Result<()> {
   if is_repeated_field(field_descriptor) && !is_map_field(&message_builder.descriptor, field_descriptor) {
     debug!("{} is a repeated field", field);
@@ -428,13 +435,14 @@ fn build_embedded_message_field_value(
           let index_path = path.join("0");
           build_single_embedded_field_value(
             &index_path, message_builder, MessageFieldValueType::Repeated, field_descriptor,
-            field, first, matching_rules, generators)?;
+            field, first, matching_rules, generators, all_descriptors)?;
           let mut builder = message_builder.clone();
           for (index, item) in rest.iter().enumerate() {
             let index_path = path.join((index + 1).to_string());
             let constructed = build_single_embedded_field_value(
               &index_path, &mut builder, MessageFieldValueType::Repeated,
-              field_descriptor, field, item, matching_rules, generators)?;
+              field_descriptor, field, item, matching_rules, generators, all_descriptors
+            )?;
             if let Some(constructed) = constructed {
               message_builder.add_repeated_field_value(field_descriptor, field, constructed);
             }
@@ -479,7 +487,8 @@ fn build_embedded_message_field_value(
                   let array_path = path.join("*");
                   matching_rules.add_rule(array_path.clone(), matchingrules::MatchingRule::Type, RuleLogic::And);
                   build_single_embedded_field_value(&array_path, message_builder, MessageFieldValueType::Repeated,
-                                                    field_descriptor, field, field_value, matching_rules, generators).map(|_| ())
+                                                    field_descriptor, field, field_value, matching_rules, generators, all_descriptors)
+                    .map(|_| ())
                 } else {
                   Err(anyhow!("Expression '{}' refers to non-existent item '{}'", definition, reference.name))
                 }
@@ -509,20 +518,22 @@ fn build_embedded_message_field_value(
           // single example.
           trace!("No matching definition, assuming config contains the attributes of a single example");
           build_single_embedded_field_value(&path.join("*"), message_builder, MessageFieldValueType::Repeated, field_descriptor, field, value,
-                                            matching_rules, generators).map(|_| ())
+                                            matching_rules, generators, all_descriptors)
+            .map(|_| ())
         }
       }
       _ => {
         // Not a map or list structure, so could be a primitive repeated field
         trace!("Not a map or list structure, assuming a single field");
         build_single_embedded_field_value(path, message_builder, MessageFieldValueType::Repeated, field_descriptor, field, value,
-                                          matching_rules, generators).map(|_| ())
+                                          matching_rules, generators, all_descriptors)
+          .map(|_| ())
       }
     }
   } else {
     trace!("processing a standard field");
     build_single_embedded_field_value(path, message_builder, MessageFieldValueType::Normal, field_descriptor, field, value,
-      matching_rules, generators)
+                                      matching_rules, generators, all_descriptors)
       .map(|_| ())
   }
 }
@@ -540,7 +551,8 @@ fn build_single_embedded_field_value(
   field: &str,
   value: &Value,
   matching_rules: &mut MatchingRuleCategory,
-  generators: &mut HashMap<String, Generator>
+  generators: &mut HashMap<String, Generator>,
+  all_descriptors: &HashMap<String, &FileDescriptorProto>
 ) -> anyhow::Result<Option<MessageFieldValue>> {
   debug!("Configuring message field '{}' (type {:?})", field, field_descriptor.type_name);
   let type_name = field_descriptor.type_name.clone().unwrap_or_default();
@@ -559,12 +571,12 @@ fn build_single_embedded_field_value(
     }
     _ => if is_map_field(&message_builder.descriptor, field_descriptor) {
       debug!("Message field '{}' is a Map field", field);
-      build_map_field(path, message_builder, field_descriptor, field, value, matching_rules, generators)?;
+      build_map_field(path, message_builder, field_descriptor, field, value, matching_rules, generators, all_descriptors)?;
       Ok(None)
     } else if let Value::Object(config) = value {
       debug!("Configuring the message from config {:?}", config);
       let message_name = last_name(type_name.as_str());
-      let embedded_type = find_message_type_in_file_descriptor(message_name, &message_builder.file_descriptor)?;
+      let embedded_type = find_message_type_in_file_descriptors(message_name, &message_builder.file_descriptor, all_descriptors)?;
       let mut embedded_builder = MessageBuilder::new(&embedded_type, message_name, &message_builder.file_descriptor);
 
       if let Some(definition) = config.get("pact:match") {
@@ -581,7 +593,8 @@ fn build_single_embedded_field_value(
         for (key, value) in config {
           if !key.starts_with("pact:") {
             let field_path = path.join(key);
-            construct_message_field(&mut embedded_builder, matching_rules, generators, key, value, &field_path)?;
+            construct_message_field(&mut embedded_builder, matching_rules, generators,
+              key, value, &field_path, all_descriptors)?;
           }
         }
         let field_value = MessageFieldValue {
@@ -735,7 +748,8 @@ fn build_map_field(
   field: &str,
   value: &Value,
   matching_rules: &mut MatchingRuleCategory,
-  generators: &mut HashMap<String, Generator>
+  generators: &mut HashMap<String, Generator>,
+  all_descriptors: &HashMap<String, &FileDescriptorProto>
 ) -> anyhow::Result<()> {
   trace!(">> build_map_field('{}', {}, {:?}, {:?})", path, field, value, message_builder);
   let field_type = field_descriptor.type_name.clone().unwrap_or_default();
@@ -780,7 +794,7 @@ fn build_map_field(
             key_descriptor, "key", &Value::String(inner_field.clone()), matching_rules, generators)?
             .ok_or_else(|| anyhow!("Was not able to construct map key value {:?}", key_descriptor.type_name))?;
           let value_value = build_single_embedded_field_value(&entry_path, &mut embedded_builder, MessageFieldValueType::Normal,
-            value_descriptor, "value", value, matching_rules, generators)?
+            value_descriptor, "value", value, matching_rules, generators, all_descriptors)?
             .ok_or_else(|| anyhow!("Was not able to construct map value value {:?}", value_descriptor.type_name))?;
           message_builder.add_map_field_value(field_descriptor, field, key_value, value_value);
         }
@@ -926,6 +940,8 @@ fn value_for_type(
 
 #[cfg(test)]
 mod tests {
+  use std::collections::HashMap;
+  use bytes::Bytes;
   use expectest::prelude::*;
   use lazy_static::lazy_static;
   use maplit::{btreemap, hashmap};
@@ -934,28 +950,25 @@ mod tests {
   use pact_models::prelude::MatchingRuleCategory;
   use pact_plugin_driver::proto::{MatchingRule, MatchingRules};
   use pact_plugin_driver::proto::interaction_response::MarkupType;
+  use prost::Message;
   use prost_types::{
     DescriptorProto,
     field_descriptor_proto,
     FieldDescriptorProto,
     FileDescriptorProto,
+    FileDescriptorSet,
+    FileOptions,
     MethodDescriptorProto,
-    OneofDescriptorProto,
-    ServiceDescriptorProto,
     MethodOptions,
-    FileOptions
+    OneofDescriptorProto,
+    ServiceDescriptorProto
   };
   use prost_types::field_descriptor_proto::{Label, Type};
   use serde_json::json;
   use trim_margin::MarginTrimmable;
 
-  use crate::message_builder::{MessageBuilder, RType};
-  use crate::protobuf::{
-    build_embedded_message_field_value,
-    construct_protobuf_interaction_for_message,
-    construct_protobuf_interaction_for_service,
-    value_for_type
-  };
+  use crate::message_builder::{MessageBuilder, MessageFieldValueType, RType};
+  use crate::protobuf::{build_embedded_message_field_value, build_single_embedded_field_value, construct_protobuf_interaction_for_message, construct_protobuf_interaction_for_service, value_for_type};
 
   #[test]
   fn value_for_type_test() {
@@ -1095,7 +1108,7 @@ mod tests {
       "hash".to_string() => prost_types::Value { kind: Some(prost_types::value::Kind::StringValue("matching(integer, 1234)".to_string())) }
     };
 
-    let result = construct_protobuf_interaction_for_message(&message_descriptor, &config, "test_message", "", &file_descriptor).unwrap();
+    let result = construct_protobuf_interaction_for_message(&message_descriptor, &config, "test_message", "", &file_descriptor, &hashmap!{}).unwrap();
 
     let body = result.contents.as_ref().unwrap();
     expect!(body.content_type.as_str()).to(be_equal_to("application/protobuf;message=test_message"));
@@ -1610,7 +1623,8 @@ mod tests {
     });
 
     let result = build_embedded_message_field_value(&mut message_builder, &path, &field_descriptor,
-      "value", &config, &mut matching_rules, &mut generators);
+      "value", &config, &mut matching_rules, &mut generators, &hashmap!{}
+    );
 
     let expected_rules = matchingrules! {
        "body" => {
@@ -1678,7 +1692,8 @@ mod tests {
     });
 
     let result = build_embedded_message_field_value(&mut message_builder, &path, &field_descriptor,
-                                                    "value", &config, &mut matching_rules, &mut generators);
+      "value", &config, &mut matching_rules, &mut generators, &hashmap!{}
+    );
 
     let expected_rules = matchingrules! {
        "body" => {
@@ -1689,5 +1704,106 @@ mod tests {
     }.rules_for_category("body").unwrap();
     expect!(result).to(be_ok());
     expect!(matching_rules).to(be_equal_to(expected_rules));
+  }
+
+  const DESCRIPTOR_BYTES: &str = "CrYHCgxjb21tb24ucHJvdG8SD2FyZWFfY2FsY3VsYXRvciL9AwoPTGlzdGVuZXJDb\
+    250ZXh0EiMKC2xpc3RlbmVyX2lkGAEgASgDQgIwAVIKbGlzdGVuZXJJZBIaCgh1c2VybmFtZRgCIAEoCVIIdXNlcm5hbW\
+    USMgoVbGlzdGVuZXJfZGF0ZV9jcmVhdGVkGAMgASgDUhNsaXN0ZW5lckRhdGVDcmVhdGVkEjYKF2ZpbHRlcl9leHBsaWN\
+    pdF9jb250ZW50GAQgASgIUhVmaWx0ZXJFeHBsaWNpdENvbnRlbnQSGQoIemlwX2NvZGUYBSABKAlSB3ppcENvZGUSIQoMY\
+    291bnRyeV9jb2RlGAYgASgJUgtjb3VudHJ5Q29kZRIdCgpiaXJ0aF95ZWFyGAcgASgFUgliaXJ0aFllYXISFgoGZ2VuZGV\
+    yGAggASgJUgZnZW5kZXISJwoPbGFzdF9leHBpcmF0aW9uGAkgASgDUg5sYXN0RXhwaXJhdGlvbhIuChNzcG9uc29yZWRfY\
+    29tcF9uYW1lGAogASgJUhFzcG9uc29yZWRDb21wTmFtZRIdCgp1c2VkX3RyaWFsGAsgASgIUgl1c2VkVHJpYWwSKQoRdXN\
+    lZF9pbl9hcHBfdHJpYWwYDCABKAhSDnVzZWRJbkFwcFRyaWFsEiUKDmxpc3RlbmVyX3N0YXRlGA0gASgJUg1saXN0ZW5lc\
+    lN0YXRlIswBCg5TdGF0aW9uQ29udGV4dBI1ChdzdGF0aW9uX3NlZWRfcGFuZG9yYV9pZBgBIAEoCVIUc3RhdGlvblNlZWR\
+    QYW5kb3JhSWQSLAoSc3RhdGlvbl9wYW5kb3JhX2lkGAIgASgJUhBzdGF0aW9uUGFuZG9yYUlkEiEKDHN0YXRpb25fdHlwZ\
+    RgDIAEoCVILc3RhdGlvblR5cGUSMgoVaXNfYWR2ZXJ0aXNlcl9zdGF0aW9uGAQgASgIUhNpc0FkdmVydGlzZXJTdGF0aW9\
+    uImsKBlN0YXR1cxI8CgtzdGF0dXNfY29kZRgBIAEoDjIbLmFyZWFfY2FsY3VsYXRvci5TdGF0dXNDb2RlUgpzdGF0dXNDb\
+    2RlEiMKDWVycm9yX21lc3NhZ2UYAiABKAlSDGVycm9yTWVzc2FnZSo0CgpTdGF0dXNDb2RlEgYKAk9LEAASEwoPSU5WQUx\
+    JRF9SRVFVRVNUEAESCQoFRVJST1IQAkIbUAFaF2lvLnBhY3QvYXJlYV9jYWxjdWxhdG9yYgZwcm90bzMK9QwKFWFyZWFfY\
+    2FsY3VsYXRvci5wcm90bxIPYXJlYV9jYWxjdWxhdG9yGgxjb21tb24ucHJvdG8i0gMKDFNoYXBlTWVzc2FnZRIxCgZzcXV\
+    hcmUYASABKAsyFy5hcmVhX2NhbGN1bGF0b3IuU3F1YXJlSABSBnNxdWFyZRI6CglyZWN0YW5nbGUYAiABKAsyGi5hcmVhX\
+    2NhbGN1bGF0b3IuUmVjdGFuZ2xlSABSCXJlY3RhbmdsZRIxCgZjaXJjbGUYAyABKAsyFy5hcmVhX2NhbGN1bGF0b3IuQ2l\
+    yY2xlSABSBmNpcmNsZRI3Cgh0cmlhbmdsZRgEIAEoCzIZLmFyZWFfY2FsY3VsYXRvci5UcmlhbmdsZUgAUgh0cmlhbmdsZ\
+    RJGCg1wYXJhbGxlbG9ncmFtGAUgASgLMh4uYXJlYV9jYWxjdWxhdG9yLlBhcmFsbGVsb2dyYW1IAFINcGFyYWxsZWxvZ3J\
+    hbRJHCg5kZXZpY2VfY29udGV4dBgGIAEoCzIeLmFyZWFfY2FsY3VsYXRvci5EZXZpY2VDb250ZXh0SABSDWRldmljZUNvb\
+    nRleHQSTQoQbGlzdGVuZXJfY29udGV4dBgHIAEoCzIgLmFyZWFfY2FsY3VsYXRvci5MaXN0ZW5lckNvbnRleHRIAFIPbGl\
+    zdGVuZXJDb250ZXh0QgcKBXNoYXBlIoIECg1EZXZpY2VDb250ZXh0EhsKCXZlbmRvcl9pZBgBIAEoBVIIdmVuZG9ySWQSH\
+    woJZGV2aWNlX2lkGAIgASgDQgIwAVIIZGV2aWNlSWQSIQoMY2Fycmllcl9uYW1lGAMgASgJUgtjYXJyaWVyTmFtZRIdCgp\
+    1c2VyX2FnZW50GAQgASgJUgl1c2VyQWdlbnQSIQoMbmV0d29ya190eXBlGAUgASgJUgtuZXR3b3JrVHlwZRIlCg5zeXN0Z\
+    W1fdmVyc2lvbhgGIAEoCVINc3lzdGVtVmVyc2lvbhIfCgthcHBfdmVyc2lvbhgHIAEoCVIKYXBwVmVyc2lvbhIfCgt2ZW5\
+    kb3JfbmFtZRgIIAEoCVIKdmVuZG9yTmFtZRIhCgxhY2Nlc3NvcnlfaWQYCSABKAlSC2FjY2Vzc29yeUlkEicKD2RldmljZ\
+    V9jYXRlZ29yeRgKIAEoCVIOZGV2aWNlQ2F0ZWdvcnkSHwoLZGV2aWNlX3R5cGUYCyABKAlSCmRldmljZVR5cGUSKQoQcmV\
+    wb3J0aW5nX3ZlbmRvchgMIAEoCVIPcmVwb3J0aW5nVmVuZG9yEiwKEmRldmljZV9hZF9jYXRlZ29yeRgNIAEoCVIQZGV2a\
+    WNlQWRDYXRlZ29yeRIfCgtkZXZpY2VfY29kZRgOIAEoCVIKZGV2aWNlQ29kZSIpCgZTcXVhcmUSHwoLZWRnZV9sZW5ndGg\
+    YASABKAJSCmVkZ2VMZW5ndGgiOQoJUmVjdGFuZ2xlEhYKBmxlbmd0aBgBIAEoAlIGbGVuZ3RoEhQKBXdpZHRoGAIgASgCU\
+    gV3aWR0aCIgCgZDaXJjbGUSFgoGcmFkaXVzGAEgASgCUgZyYWRpdXMiTwoIVHJpYW5nbGUSFQoGZWRnZV9hGAEgASgCUgV\
+    lZGdlQRIVCgZlZGdlX2IYAiABKAJSBWVkZ2VCEhUKBmVkZ2VfYxgDIAEoAlIFZWRnZUMiSAoNUGFyYWxsZWxvZ3JhbRIfC\
+    gtiYXNlX2xlbmd0aBgBIAEoAlIKYmFzZUxlbmd0aBIWCgZoZWlnaHQYAiABKAJSBmhlaWdodCJECgtBcmVhUmVxdWVzdBI\
+    1CgZzaGFwZXMYASADKAsyHS5hcmVhX2NhbGN1bGF0b3IuU2hhcGVNZXNzYWdlUgZzaGFwZXMiJAoMQXJlYVJlc3BvbnNlE\
+    hQKBXZhbHVlGAEgAygCUgV2YWx1ZTKtAQoKQ2FsY3VsYXRvchJOCgxjYWxjdWxhdGVPbmUSHS5hcmVhX2NhbGN1bGF0b3I\
+    uU2hhcGVNZXNzYWdlGh0uYXJlYV9jYWxjdWxhdG9yLkFyZWFSZXNwb25zZSIAEk8KDmNhbGN1bGF0ZU11bHRpEhwuYXJlY\
+    V9jYWxjdWxhdG9yLkFyZWFSZXF1ZXN0Gh0uYXJlYV9jYWxjdWxhdG9yLkFyZWFSZXNwb25zZSIAQhxaF2lvLnBhY3QvYXJ\
+    lYV9jYWxjdWxhdG9y0AIBYgZwcm90bzM=";
+
+  #[test_log::test]
+  fn build_embedded_message_field_value_with_field_from_different_proto_file() {
+    let bytes = base64::decode(DESCRIPTOR_BYTES).unwrap();
+    let bytes1 = Bytes::copy_from_slice(bytes.as_slice());
+    let fds: FileDescriptorSet = FileDescriptorSet::decode(bytes1).unwrap();
+
+    let main_descriptor = fds.file.iter()
+      .find(|fd| fd.name.clone().unwrap_or_default() == "area_calculator.proto")
+      .unwrap();
+    let message_descriptor = main_descriptor.message_type.iter()
+      .find(|md| md.name.clone().unwrap_or_default() == "ShapeMessage").unwrap();
+    let mut message_builder = MessageBuilder::new(&message_descriptor, "ShapeMessage", main_descriptor);
+    let path = DocPath::new("$.listener_context").unwrap();
+    let field_descriptor = message_descriptor.field.iter()
+      .find(|fd| fd.name.clone().unwrap_or_default() == "listener_context")
+      .unwrap();
+    let field_config = json!({
+      "listener_id": "matching(number, 4)"
+    });
+    let mut matching_rules = MatchingRuleCategory::empty("body");
+    let mut generators = hashmap!{};
+    let file_descriptors: HashMap<String, &FileDescriptorProto> = fds.file
+      .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
+      .collect();
+
+    let result = build_embedded_message_field_value(&mut message_builder, &path, field_descriptor,
+      "listener_context", &field_config, &mut matching_rules, &mut generators, &file_descriptors
+    );
+    expect!(result).to(be_ok());
+  }
+
+  #[test_log::test]
+  fn build_single_embedded_field_value_with_field_from_different_proto_file() {
+    let bytes = base64::decode(DESCRIPTOR_BYTES).unwrap();
+    let bytes1 = Bytes::copy_from_slice(bytes.as_slice());
+    let fds: FileDescriptorSet = FileDescriptorSet::decode(bytes1).unwrap();
+
+    let main_descriptor = fds.file.iter()
+      .find(|fd| fd.name.clone().unwrap_or_default() == "area_calculator.proto")
+      .unwrap();
+    let message_descriptor = main_descriptor.message_type.iter()
+      .find(|md| md.name.clone().unwrap_or_default() == "ShapeMessage").unwrap();
+    let mut message_builder = MessageBuilder::new(&message_descriptor, "ShapeMessage", main_descriptor);
+    let path = DocPath::new("$.listener_context").unwrap();
+    let field_descriptor = message_descriptor.field.iter()
+      .find(|fd| fd.name.clone().unwrap_or_default() == "listener_context")
+      .unwrap();
+    let field_config = json!({
+      "listener_id": "matching(number, 4)"
+    });
+    let mut matching_rules = MatchingRuleCategory::empty("body");
+    let mut generators = hashmap!{};
+    let file_descriptors: HashMap<String, &FileDescriptorProto> = fds.file
+      .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
+      .collect();
+
+    let result = build_single_embedded_field_value(
+      &path, &mut message_builder, MessageFieldValueType::Normal, field_descriptor,
+      "listener_context", &field_config, &mut matching_rules, &mut generators, &file_descriptors);
+    expect!(result).to(be_ok());
   }
 }

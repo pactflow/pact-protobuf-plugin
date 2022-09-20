@@ -53,8 +53,23 @@ pub fn find_message_type_in_file_descriptor(message_name: &str, descriptor: &Fil
   descriptor.message_type.iter()
     .find(|message| message.name.clone().unwrap_or_default() == message_name)
     .cloned()
-    .ok_or_else(|| anyhow!("Did not find a message type '{}' in the file descriptor '{:?}'",
-      message_name, descriptor.name))
+    .ok_or_else(|| anyhow!("Did not find a message type '{}' in the file descriptor '{}'",
+      message_name, descriptor.name.as_ref().map(|n| n.as_str()).unwrap_or("unknown")))
+}
+
+/// Search for a message by type name in the file descriptor, and if not found, search in all the
+/// descriptors
+pub fn find_message_type_in_file_descriptors(
+  message_type: &str,
+  file_descriptor: &FileDescriptorProto,
+  all_descriptors: &HashMap<String, &FileDescriptorProto>
+) -> anyhow::Result<DescriptorProto> {
+  find_message_type_in_file_descriptor(message_type, file_descriptor)
+    .or_else(|_| {
+      all_descriptors.values()
+        .find_map(|fd| find_message_type_in_file_descriptor(message_type, fd).ok())
+        .ok_or(anyhow!("Did not find a message type '{}' in any of file descriptors", message_type))
+    })
 }
 
 /// If the field is a map field. A field will be a map field if it is a repeated field, the field
