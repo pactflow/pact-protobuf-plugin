@@ -17,7 +17,7 @@ use pact_models::matchingrules::MatchingRule;
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::MatchingRuleCategory;
 use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet};
-use tracing::{debug, trace, warn, instrument};
+use tracing::{debug, trace, warn};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
 use crate::utils::{display_bytes, enum_name, field_data_to_json, find_message_field_by_name, find_message_type_by_name, find_service_descriptor, is_map_field, is_repeated_field, last_name};

@@ -23,7 +23,7 @@ use pact_plugin_driver::proto::{
 use pact_plugin_driver::proto::body::ContentTypeHint;
 use pact_plugin_driver::proto::interaction_response::MarkupType;
 use pact_plugin_driver::utils::{proto_value_to_json, proto_value_to_string, to_proto_struct};
-use prost_types::{DescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorProto, ServiceDescriptorProto};
+use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorProto, ServiceDescriptorProto};
 use prost_types::field_descriptor_proto::Type;
 use prost_types::value::Kind;
 use serde_json::{json, Value};
@@ -36,7 +36,6 @@ use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValu
 use crate::protoc::Protoc;
 use crate::utils::{
   find_enum_value_by_name,
-  find_message_type_in_file_descriptor,
   find_message_type_in_file_descriptors,
   find_nested_type,
   is_map_field,
