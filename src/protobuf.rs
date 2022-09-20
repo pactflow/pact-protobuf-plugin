@@ -205,10 +205,9 @@ fn construct_protobuf_interaction_for_service(
   let request_part = if request_part_config.is_empty() {
     None
   } else {
-    construct_protobuf_interaction_for_message(&request_descriptor,
-      &request_part_config, input_message_name, "", file_descriptor)
-      .ok()
-      .map(|i| InteractionResponse { part_name: "request".into(), .. i } )
+    let interaction = construct_protobuf_interaction_for_message(&request_descriptor,
+      &request_part_config, input_message_name, "", file_descriptor)?;
+    Some(InteractionResponse { part_name: "request".into(), .. interaction } )
   };
 
   let response_part_config = if service_part == "response" {
@@ -283,7 +282,7 @@ fn configure_protobuf_message(
 }
 
 /// Constructs an interaction for the given Protobuf message descriptor
-#[instrument(skip(message_descriptor, file_descriptor))]
+#[instrument(ret, skip(message_descriptor, file_descriptor))]
 fn construct_protobuf_interaction_for_message(
   message_descriptor: &DescriptorProto,
   config: &BTreeMap<String, prost_types::Value>,
@@ -375,11 +374,10 @@ fn construct_message_field(
   value: &Value,
   path: &DocPath
 ) -> anyhow::Result<()> {
-  trace!(">> construct_message_field({}, {}, {:?}, {:?}, {:?})", field_name, path, message_builder, matching_rules, generators);
   if !field_name.starts_with("pact:") {
     if let Some(field) = message_builder.field_by_name(field_name)  {
       match field.r#type {
-        Some(r#type) => if r#type == field_descriptor_proto::Type::Message as i32 {
+        Some(r#type) => if r#type == Type::Message as i32 {
           // Embedded message
           build_embedded_message_field_value(message_builder, path, &field, field_name, value, matching_rules, generators)?;
         } else {
@@ -402,11 +400,14 @@ fn construct_message_field(
       return Err(anyhow!("Message {} has no field {}. Fields are {:?}", message_builder.message_name, field_name, fields))
     }
   }
-  trace!(">> construct_message_field done ({}, {})", field_name, path);
   Ok(())
 }
 
 /// Constructs the field value for a field in a message.
+#[tracing::instrument(ret,
+  skip_all,
+  fields(%path, ?field, %value)
+)]
 fn build_embedded_message_field_value(
   message_builder: &mut MessageBuilder,
   path: &DocPath,
@@ -416,8 +417,6 @@ fn build_embedded_message_field_value(
   matching_rules: &mut MatchingRuleCategory,
   generators: &mut HashMap<String, Generator>
 ) -> anyhow::Result<()> {
-  trace!(">> build_embedded_message_field_value({}, {}, {:?}, {:?}, {:?}, {:?})", path, field, value, message_builder, matching_rules, generators);
-
   if is_repeated_field(field_descriptor) && !is_map_field(&message_builder.descriptor, field_descriptor) {
     debug!("{} is a repeated field", field);
 
@@ -508,17 +507,20 @@ fn build_embedded_message_field_value(
         } else {
           // No matching definition, so we have to assume the map contains the attributes of a
           // single example.
+          trace!("No matching definition, assuming config contains the attributes of a single example");
           build_single_embedded_field_value(&path.join("*"), message_builder, MessageFieldValueType::Repeated, field_descriptor, field, value,
                                             matching_rules, generators).map(|_| ())
         }
       }
       _ => {
         // Not a map or list structure, so could be a primitive repeated field
+        trace!("Not a map or list structure, assuming a single field");
         build_single_embedded_field_value(path, message_builder, MessageFieldValueType::Repeated, field_descriptor, field, value,
                                           matching_rules, generators).map(|_| ())
       }
     }
   } else {
+    trace!("processing a standard field");
     build_single_embedded_field_value(path, message_builder, MessageFieldValueType::Normal, field_descriptor, field, value,
       matching_rules, generators)
       .map(|_| ())
@@ -526,6 +528,10 @@ fn build_embedded_message_field_value(
 }
 
 /// Construct a non-repeated embedded message field
+#[tracing::instrument(ret,
+  skip_all,
+  fields(%path, ?field_type, %field, %value)
+)]
 fn build_single_embedded_field_value(
   path: &DocPath,
   message_builder: &mut MessageBuilder,
@@ -536,9 +542,6 @@ fn build_single_embedded_field_value(
   matching_rules: &mut MatchingRuleCategory,
   generators: &mut HashMap<String, Generator>
 ) -> anyhow::Result<Option<MessageFieldValue>> {
-  trace!(">> build_single_embedded_field_value('{}', {:?}, {}, {:?}, {:?}, {:?})", path, field_descriptor.name,
-    field, value, matching_rules, generators);
-
   debug!("Configuring message field '{}' (type {:?})", field, field_descriptor.type_name);
   let type_name = field_descriptor.type_name.clone().unwrap_or_default();
   match type_name.as_str() {
