@@ -1,3 +1,10 @@
+# 0.1.14 - Bugfix Release
+
+* 127a318 - chore: cleanup compiler warnings (Ronald Holshausen, Tue Sep 20 15:56:59 2022 +1000)
+* 59a1bd2 - fix: Support matching on fields that are defined in imported proto files (Ronald Holshausen, Tue Sep 20 15:38:40 2022 +1000)
+* 0c37f1b - fix: errors configuring request fields were being swallowed (Ronald Holshausen, Tue Sep 20 12:26:06 2022 +1000)
+* 8d8cc90 - bump version to 0.1.14 (Ronald Holshausen, Mon Sep 12 12:09:31 2022 +1000)
+
 # 0.1.13 - Bugfix Release
 
 * 493f476 - chore: cleanup some compiler messages (Ronald Holshausen, Mon Sep 12 12:07:44 2022 +1000)
