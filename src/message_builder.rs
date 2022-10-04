@@ -9,9 +9,9 @@ use itertools::Itertools;
 use maplit::btreemap;
 use prost::encoding::{encode_key, encode_varint, string, WireType};
 use prost::Message;
-use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorProto};
+use prost_types::{DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, FileDescriptorProto};
 use prost_types::field_descriptor_proto::Type;
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::utils::{last_name, should_be_packed_type};
 
@@ -28,7 +28,7 @@ pub enum MessageFieldValueType {
 
 /// Inner struct to store the values for a field
 #[derive(Clone, Debug, PartialEq)]
-struct FieldValueInner {
+pub(crate) struct FieldValueInner {
   /// Values for the field, only repeated and map fields will have more than one value.
   values: Vec<MessageFieldValue>,
   /// Descriptor for the field.
@@ -48,7 +48,7 @@ pub struct MessageBuilder {
   pub descriptor: DescriptorProto,
   /// Message name
   pub message_name: String,
-  fields: BTreeMap<String, FieldValueInner>,
+  pub(crate) fields: BTreeMap<String, FieldValueInner>,
 }
 
 impl MessageBuilder {
@@ -193,8 +193,8 @@ impl MessageBuilder {
           } else {
             return Err(anyhow!("Mismatched types, expected a byte array but got {:?}", value.rtype));
           }
-          Type::Enum => if let RType::Enum(name) = &value.rtype {
-            self.encode_enum_value(&field_data.descriptor, &value, tag, name, buffer)?;
+          Type::Enum => if let RType::Enum(n, desc) = &value.rtype {
+            self.encode_enum_value(&field_data.descriptor, &value, tag, n, desc, buffer)?;
           } else if let RType::Integer32(i) = &value.rtype {
             encode_key(tag as u32, WireType::Varint, buffer);
             encode_varint(*i as u64, buffer);
@@ -217,23 +217,21 @@ impl MessageBuilder {
     descriptor: &FieldDescriptorProto,
     field_value: &MessageFieldValue,
     tag: i32,
-    enum_value_name: &str,
+    enum_value: &i32,
+    enum_proto: &EnumDescriptorProto,
     buffer: &mut BytesMut
   ) -> anyhow::Result<()> {
-    trace!(">> encode_enum_value({:?}, {}, '{}')", field_value, tag, enum_value_name);
+    trace!(">> encode_enum_value({:?}, {}, {})", field_value, tag, enum_value);
     let enum_type_name = descriptor.type_name.as_ref().ok_or_else(|| anyhow!("Type name is missing from the descriptor for enum field {}", field_value.name))?;
-    let enum_name = enum_type_name.split('.').last().unwrap_or(enum_type_name);
-    let enum_proto = self.descriptor.enum_type.iter().find(|enum_type| enum_type.name.clone().unwrap_or_default() == enum_name)
-      .ok_or_else(|| anyhow!("Did not find the enum {} for the type {} in the Protobuf descriptor", enum_name, enum_type_name))?;
-    let enum_value = enum_proto.value.iter().find(|enum_val| enum_val.name.clone().unwrap_or_default() == enum_value_name)
-      .ok_or_else(|| anyhow!("Did not find the enum value {} for the enum {} in the Protobuf descriptor", enum_value_name, enum_type_name))?;
+    let enum_value = enum_proto.value.iter().find(|enum_val| enum_val.number == Some(*enum_value))
+      .ok_or_else(|| anyhow!("Did not find the enum value {} for the enum {} in the Protobuf descriptor", enum_value, enum_type_name))?;
     if let Some(enum_value_number) = enum_value.number {
       encode_key(tag as u32, WireType::Varint, buffer);
       encode_varint(enum_value_number as u64, buffer);
-      Ok(())
     } else {
-      Err(anyhow!("Enum value {} for enum {} does not have a numeric value set", enum_value_name, enum_type_name))
+      warn!("Enum value {:?} for enum {} does not have a numeric value set, will use the default", enum_value, enum_type_name);
     }
+    Ok(())
   }
 
   fn encode_map_field(&self, buffer: &mut BytesMut, field_value: &FieldValueInner) -> anyhow::Result<()> {
@@ -478,7 +476,7 @@ pub enum RType {
   /// Array of bytes
   Bytes(Vec<u8>),
   /// Enum value
-  Enum(String),
+  Enum(i32, EnumDescriptorProto),
   /// Embedded message
   Message(Box<MessageBuilder>),
   /// Embedded google.protobuf.Struct
@@ -587,7 +585,7 @@ impl RType {
       RType::Integer64(i) => Ok(i.to_string()),
       RType::Float(f) => Ok(f.to_string()),
       RType::Double(d) => Ok(d.to_string()),
-      RType::Enum(s) => Ok(s.clone()),
+      RType::Enum(n, _) => Ok(n.to_string()),
       _ => Err(anyhow!("Can't convert {:?} to a string", self))
     }
   }
@@ -742,6 +740,7 @@ mod tests {
   use crate::message_builder::{MessageBuilder, MessageFieldValue, RType};
   use crate::message_builder::MessageFieldValueType::Repeated;
   use crate::message_decoder::{decode_message, ProtobufFieldData};
+  use crate::protobuf::tests::DESCRIPTOR_WITH_ENUM_BYTES;
 
   const ENCODED_MESSAGE: &str = "CuIFChxnb29nbGUvcHJvdG9idWYvc3RydWN0LnByb3RvEg9nb29nbGUucHJv\
   dG9idWYimAEKBlN0cnVjdBI7CgZmaWVsZHMYASADKAsyIy5nb29nbGUucHJvdG9idWYuU3RydWN0LkZpZWxkc0VudHJ5\
@@ -1127,6 +1126,29 @@ mod tests {
     let field1 = string_field_descriptor!("contentType".to_string(), 1);
     let field2 = message_field_descriptor!("content", 2, ".google.protobuf.BytesValue");
     let field3 = enum_field_descriptor!("contentTypeHint", 3, ".io.pact.plugin.Body.ContentTypeHint");
+    let enum_proto = EnumDescriptorProto {
+      name: Some("ContentTypeHint".to_string()),
+      value: vec![
+        EnumValueDescriptorProto {
+          name: Some("DEFAULT".to_string()),
+          number: Some(0),
+          options: None
+        },
+        EnumValueDescriptorProto {
+          name: Some("TEXT".to_string()),
+          number: Some(1),
+          options: None
+        },
+        EnumValueDescriptorProto {
+          name: Some("BINARY".to_string()),
+          number: Some(2),
+          options: None
+        }
+      ],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![]
+    };
     let descriptor = DescriptorProto {
       name: Some("Body".to_string()),
       field: vec![
@@ -1136,31 +1158,7 @@ mod tests {
       ],
       extension: vec![],
       nested_type: vec![],
-      enum_type: vec![
-        EnumDescriptorProto {
-          name: Some("ContentTypeHint".to_string()),
-          value: vec![
-              EnumValueDescriptorProto {
-                  name: Some("DEFAULT".to_string()),
-                  number: Some(0),
-                  options: None
-              },
-              EnumValueDescriptorProto {
-                  name: Some("TEXT".to_string()),
-                  number: Some(1),
-                  options: None
-              },
-              EnumValueDescriptorProto {
-                  name: Some("BINARY".to_string()),
-                  number: Some(2),
-                  options: None
-              }
-          ],
-          options: None,
-          reserved_range: vec![],
-          reserved_name: vec![]
-        },
-      ],
+      enum_type: vec![ enum_proto.clone() ],
       extension_range: vec![],
       oneof_decl: vec![],
       options: None,
@@ -1204,7 +1202,7 @@ mod tests {
     message.set_field_value(&field3, "contentTypeHint", MessageFieldValue {
       name: "contentTypeHint".to_string(),
       raw_value: Some("TEXT".to_string()),
-      rtype: RType::Enum("TEXT".to_string())
+      rtype: RType::Enum(1, enum_proto)
     });
 
     let result = message.encode_message().unwrap();
@@ -1729,6 +1727,37 @@ mod tests {
 
     let expected = vec![10, 8, 0, 0, 64, 65, 0, 0, 16, 65];
     let result = builder.encode_message().unwrap();
+    expect!(result.to_vec()).to(be_equal_to(expected));
+  }
+
+  #[test_log::test]
+  fn test_field_with_global_enum() {
+    let bytes: &[u8] = &DESCRIPTOR_WITH_ENUM_BYTES;
+    let buffer = Bytes::from(bytes);
+    let fds: FileDescriptorSet = FileDescriptorSet::decode(buffer).unwrap();
+
+    let main_descriptor = fds.file.iter()
+      .find(|fd| fd.name.clone().unwrap_or_default() == "area_calculator.proto")
+      .unwrap();
+    let message_descriptor = main_descriptor.message_type.iter()
+      .find(|md| md.name.clone().unwrap_or_default() == "Rectangle").unwrap();
+    let mut message_builder = MessageBuilder::new(&message_descriptor, "Rectangle", main_descriptor);
+
+    let value_field_descriptor = message_descriptor.field.iter()
+      .find(|desc| desc.name.clone().unwrap_or_default() == "ad_break_type")
+      .unwrap();
+    let field_value = MessageFieldValue {
+      name: "ad_break_type".to_string(),
+      raw_value: Some("AUDIO_AD_BREAK".to_string()),
+      rtype: RType::Enum(1, main_descriptor.enum_type.first().cloned().unwrap())
+    };
+    message_builder.set_field_value(value_field_descriptor, "ad_break_type", field_value);
+
+    let expected = vec![
+      40, // Field 5, VARINT
+      1   // Value 1
+    ];
+    let result = message_builder.encode_message().unwrap();
     expect!(result.to_vec()).to(be_equal_to(expected));
   }
 }

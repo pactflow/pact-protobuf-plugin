@@ -34,15 +34,7 @@ use tracing_core::LevelFilter;
 
 use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValueType, RType};
 use crate::protoc::Protoc;
-use crate::utils::{
-  find_enum_value_by_name,
-  find_message_type_in_file_descriptors,
-  find_nested_type,
-  is_map_field,
-  is_repeated_field,
-  last_name,
-  proto_struct_to_btreemap
-};
+use crate::utils::{find_enum_value_by_name, find_enum_value_by_name_in_message, find_message_type_in_file_descriptors, find_nested_type, is_map_field, is_repeated_field, last_name, proto_struct_to_btreemap};
 
 /// Process the provided protobuf file and configure the interaction
 pub(crate) async fn process_proto(
@@ -56,6 +48,7 @@ pub(crate) async fn process_proto(
   let proto_file = Path::new(proto_file.as_str());
   let (descriptors, digest, descriptor_bytes) = protoc.parse_proto_file(proto_file).await?;
   debug!("Parsed proto file OK, file descriptors = {:?}", descriptors.file.iter().map(|file| file.name.as_ref()).collect_vec());
+  trace!("Descriptor bytes {:?}", descriptor_bytes.as_slice());
 
   let file_descriptors: HashMap<String, &FileDescriptorProto> = descriptors.file
     .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
@@ -392,7 +385,8 @@ fn construct_message_field(
           } else {
             MessageFieldValueType::Normal
           };
-          build_field_value(path, message_builder, field_type, &field, field_name, value, matching_rules, generators)?;
+          build_field_value(path, message_builder, field_type, &field, field_name, value,
+                            matching_rules, generators, all_descriptors)?;
         }
         None => {
           return Err(anyhow!("Message {} field {} is of an unknown type", message_builder.message_name, field_name))
@@ -477,7 +471,8 @@ fn build_embedded_message_field_value(
                   if let Some(generator) = &each_value_def.generator {
                     generators.insert(path.to_string(), generator.clone());
                   }
-                  let constructed_value = value_for_type(field, each_value_def.value.as_str(), field_descriptor, &message_builder.descriptor)?;
+                  let constructed_value = value_for_type(field, each_value_def.value.as_str(),
+                    field_descriptor, &message_builder.descriptor, all_descriptors)?;
                   message_builder.set_field_value(field_descriptor, field, constructed_value);
                   Ok(())
                 }
@@ -507,7 +502,8 @@ fn build_embedded_message_field_value(
               generators.insert(path.to_string(), generator);
             }
 
-            let constructed = value_for_type(field, mrd.value.as_str(), field_descriptor, &message_builder.descriptor)?;
+            let constructed = value_for_type(field, mrd.value.as_str(),
+              field_descriptor, &message_builder.descriptor, all_descriptors)?;
             message_builder.add_repeated_field_value(field_descriptor, field, constructed);
 
             Ok(())
@@ -559,7 +555,8 @@ fn build_single_embedded_field_value(
     ".google.protobuf.BytesValue" => {
       debug!("Field is a Protobuf BytesValue");
       if let Value::String(_) = value {
-        build_field_value(path, message_builder, field_type, field_descriptor, field, value, matching_rules, generators)
+        build_field_value(path, message_builder, field_type, field_descriptor, field,
+                          value, matching_rules, generators, all_descriptors)
       } else {
         Err(anyhow!("Fields of type google.protobuf.BytesValue must be configured with a single string value"))
       }
@@ -790,7 +787,9 @@ fn build_map_field(
           let entry_path = path.join(inner_field);
 
           let key_value = build_field_value(&entry_path, &mut embedded_builder, MessageFieldValueType::Normal,
-            key_descriptor, "key", &Value::String(inner_field.clone()), matching_rules, generators)?
+            key_descriptor, "key", &Value::String(inner_field.clone()),
+            matching_rules, generators, all_descriptors
+          )?
             .ok_or_else(|| anyhow!("Was not able to construct map key value {:?}", key_descriptor.type_name))?;
           let value_value = build_single_embedded_field_value(&entry_path, &mut embedded_builder, MessageFieldValueType::Normal,
             value_descriptor, "value", value, matching_rules, generators, all_descriptors)?
@@ -821,7 +820,8 @@ fn build_field_value(
   field_name: &str,
   value: &Value,
   matching_rules: &mut MatchingRuleCategory,
-  generators: &mut HashMap<String, Generator>
+  generators: &mut HashMap<String, Generator>,
+  all_descriptors: &HashMap<String, &FileDescriptorProto>
 ) -> anyhow::Result<Option<MessageFieldValue>> {
   trace!(">> build_field_value({}, {}, {:?})", path, field_name, value);
 
@@ -832,14 +832,14 @@ fn build_field_value(
         MessageFieldValueType::Repeated => {
           let path = path.join("*");
           let constructed_value = construct_value_from_string(&path, message_builder,
-            descriptor, field_name, matching_rules, generators, s)?;
+            descriptor, field_name, matching_rules, generators, s, all_descriptors)?;
           debug!("Setting field {:?}:repeated to value {:?}", field_name, constructed_value);
           message_builder.add_repeated_field_value(descriptor, field_name, constructed_value.clone());
           constructed_value
         },
         _ => {
           let constructed_value = construct_value_from_string(path, message_builder,
-            descriptor, field_name, matching_rules, generators, s)?;
+            descriptor, field_name, matching_rules, generators, s, all_descriptors)?;
           debug!("Setting field {:?}:{:?} to value {:?}", field_name, field_type, constructed_value);
           message_builder.set_field_value(descriptor, field_name, constructed_value.clone());
           constructed_value
@@ -851,11 +851,14 @@ fn build_field_value(
       if let Some((first, rest)) = list.split_first() {
         let index_path = path.join("0");
         let constructed_value = build_field_value(&index_path, message_builder,
-          MessageFieldValueType::Repeated, descriptor, field_name, first, matching_rules, generators)?;
+          MessageFieldValueType::Repeated, descriptor, field_name, first,
+          matching_rules, generators, all_descriptors
+        )?;
         for (index, value) in rest.iter().enumerate() {
           let index_path = path.join((index + 1).to_string());
           build_field_value(&index_path, message_builder, MessageFieldValueType::Repeated,
-            descriptor, field_name, value, matching_rules, generators)?;
+            descriptor, field_name, value, matching_rules, generators, all_descriptors
+          )?;
         }
         trace!(?message_builder, "Constructed repeated field from array");
         Ok(constructed_value)
@@ -874,7 +877,8 @@ fn construct_value_from_string(
   field_name: &str,
   matching_rules: &mut MatchingRuleCategory,
   generators: &mut HashMap<String, Generator>,
-  s: &String
+  s: &String,
+  all_descriptors: &HashMap<String, &FileDescriptorProto>
 ) -> anyhow::Result<MessageFieldValue> {
   if is_matcher_def(s.as_str()) {
     let mrd = parse_matcher_def(s.as_str())?;
@@ -889,9 +893,11 @@ fn construct_value_from_string(
     if let Some(generator) = mrd.generator {
       generators.insert(path.to_string(), generator);
     }
-    value_for_type(field_name, mrd.value.as_str(), descriptor, &message_builder.descriptor)
+    value_for_type(field_name, mrd.value.as_str(), descriptor, &message_builder.descriptor,
+      all_descriptors)
   } else {
-    value_for_type(field_name, s.as_str(), descriptor, &message_builder.descriptor)
+    value_for_type(field_name, s.as_str(), descriptor, &message_builder.descriptor,
+      all_descriptors)
   }
 }
 
@@ -899,7 +905,8 @@ fn value_for_type(
   field_name: &str,
   field_value: &str,
   descriptor: &FieldDescriptorProto,
-  message_descriptor: &DescriptorProto
+  message_descriptor: &DescriptorProto,
+  all_descriptors: &HashMap<String, &FileDescriptorProto>
 ) -> anyhow::Result<MessageFieldValue> {
   trace!("value_for_type({}, {}, _)", field_name, field_value);
 
@@ -924,21 +931,25 @@ fn value_for_type(
       }
     }
     Type::Bytes => Ok(MessageFieldValue::bytes(field_name, field_value)),
-    Type::Enum => if let Some(n) = find_enum_value_by_name(message_descriptor, type_name.as_str(), field_value) {
-      Ok(MessageFieldValue {
-        name: field_name.to_string(),
-        raw_value: Some(field_value.to_string()),
-        rtype: RType::Integer32(n)
-      })
-    } else {
-      Err(anyhow!("Protobuf enum value {} has no value {}", type_name, field_value))
+    Type::Enum => {
+      let result = find_enum_value_by_name_in_message(&message_descriptor.enum_type, type_name.as_str(), field_value)
+        .or_else(|| find_enum_value_by_name(all_descriptors, type_name.as_str(), field_value));
+      if let Some((n, desc)) = result {
+        Ok(MessageFieldValue {
+          name: field_name.to_string(),
+          raw_value: Some(field_value.to_string()),
+          rtype: RType::Enum(n, desc)
+        })
+      } else {
+        Err(anyhow!("Protobuf enum value {} has no value {}", type_name, field_value))
+      }
     }
     _ => Err(anyhow!("Protobuf field {} has an unsupported type {:?}", field_name, t))
   }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
   use std::collections::HashMap;
   use bytes::Bytes;
   use expectest::prelude::*;
@@ -956,18 +967,24 @@ mod tests {
     FieldDescriptorProto,
     FileDescriptorProto,
     FileDescriptorSet,
-    FileOptions,
     MethodDescriptorProto,
     MethodOptions,
     OneofDescriptorProto,
     ServiceDescriptorProto
   };
   use prost_types::field_descriptor_proto::{Label, Type};
-  use serde_json::json;
+  use serde_json::{json, Value};
   use trim_margin::MarginTrimmable;
 
   use crate::message_builder::{MessageBuilder, MessageFieldValueType, RType};
-  use crate::protobuf::{build_embedded_message_field_value, build_single_embedded_field_value, construct_protobuf_interaction_for_message, construct_protobuf_interaction_for_service, value_for_type};
+  use crate::protobuf::{
+    build_embedded_message_field_value,
+    build_single_embedded_field_value,
+    construct_message_field,
+    construct_protobuf_interaction_for_message,
+    construct_protobuf_interaction_for_service,
+    value_for_type
+  };
 
   #[test]
   fn value_for_type_test() {
@@ -996,7 +1013,7 @@ mod tests {
       options: None,
       proto3_optional: None
     };
-    let result = value_for_type("test", "test", &descriptor, &message_descriptor).unwrap();
+    let result = value_for_type("test", "test", &descriptor, &message_descriptor, &hashmap!{}).unwrap();
     expect!(result.name).to(be_equal_to("test"));
     expect!(result.raw_value).to(be_some().value("test".to_string()));
     expect!(result.rtype).to(be_equal_to(RType::String("test".to_string())));
@@ -1014,7 +1031,7 @@ mod tests {
       options: None,
       proto3_optional: None
     };
-    let result = value_for_type("test", "100", &descriptor, &message_descriptor).unwrap();
+    let result = value_for_type("test", "100", &descriptor, &message_descriptor, &hashmap!{}).unwrap();
     expect!(result.name).to(be_equal_to("test"));
     expect!(result.raw_value).to(be_some().value("100".to_string()));
     expect!(result.rtype).to(be_equal_to(RType::UInteger64(100)));
@@ -1804,5 +1821,89 @@ mod tests {
       &path, &mut message_builder, MessageFieldValueType::Normal, field_descriptor,
       "listener_context", &field_config, &mut matching_rules, &mut generators, &file_descriptors);
     expect!(result).to(be_ok());
+  }
+
+  pub(crate) const DESCRIPTOR_WITH_ENUM_BYTES: [u8; 1128] = [
+  10, 229, 8, 10, 21, 97, 114, 101, 97, 95, 99, 97, 108, 99, 117, 108, 97, 116, 111, 114, 46,
+  112, 114, 111, 116, 111, 18, 15, 97, 114, 101, 97, 95, 99, 97, 108, 99, 117, 108, 97, 116,
+  111, 114, 34, 186, 2, 10, 12, 83, 104, 97, 112, 101, 77, 101, 115, 115, 97, 103, 101, 18,
+  49, 10, 6, 115, 113, 117, 97, 114, 101, 24, 1, 32, 1, 40, 11, 50, 23, 46, 97, 114, 101, 97,
+  95, 99, 97, 108, 99, 117, 108, 97, 116, 111, 114, 46, 83, 113, 117, 97, 114, 101, 72, 0, 82,
+  6, 115, 113, 117, 97, 114, 101, 18, 58, 10, 9, 114, 101, 99, 116, 97, 110, 103, 108, 101, 24,
+  2, 32, 1, 40, 11, 50, 26, 46, 97, 114, 101, 97, 95, 99, 97, 108, 99, 117, 108, 97, 116, 111,
+  114, 46, 82, 101, 99, 116, 97, 110, 103, 108, 101, 72, 0, 82, 9, 114, 101, 99, 116, 97, 110,
+  103, 108, 101, 18, 49, 10, 6, 99, 105, 114, 99, 108, 101, 24, 3, 32, 1, 40, 11, 50, 23, 46,
+  97, 114, 101, 97, 95, 99, 97, 108, 99, 117, 108, 97, 116, 111, 114, 46, 67, 105, 114, 99,
+  108, 101, 72, 0, 82, 6, 99, 105, 114, 99, 108, 101, 18, 55, 10, 8, 116, 114, 105, 97, 110,
+  103, 108, 101, 24, 4, 32, 1, 40, 11, 50, 25, 46, 97, 114, 101, 97, 95, 99, 97, 108, 99, 117,
+  108, 97, 116, 111, 114, 46, 84, 114, 105, 97, 110, 103, 108, 101, 72, 0, 82, 8, 116, 114,
+  105, 97, 110, 103, 108, 101, 18, 70, 10, 13, 112, 97, 114, 97, 108, 108, 101, 108, 111, 103,
+  114, 97, 109, 24, 5, 32, 1, 40, 11, 50, 30, 46, 97, 114, 101, 97, 95, 99, 97, 108, 99, 117,
+  108, 97, 116, 111, 114, 46, 80, 97, 114, 97, 108, 108, 101, 108, 111, 103, 114, 97, 109, 72,
+  0, 82, 13, 112, 97, 114, 97, 108, 108, 101, 108, 111, 103, 114, 97, 109, 66, 7, 10, 5, 115,
+  104, 97, 112, 101, 34, 41, 10, 6, 83, 113, 117, 97, 114, 101, 18, 31, 10, 11, 101, 100, 103,
+  101, 95, 108, 101, 110, 103, 116, 104, 24, 1, 32, 1, 40, 2, 82, 10, 101, 100, 103, 101, 76,
+  101, 110, 103, 116, 104, 34, 125, 10, 9, 82, 101, 99, 116, 97, 110, 103, 108, 101, 18, 22,
+  10, 6, 108, 101, 110, 103, 116, 104, 24, 1, 32, 1, 40, 2, 82, 6, 108, 101, 110, 103, 116,
+  104, 18, 20, 10, 5, 119, 105, 100, 116, 104, 24, 2, 32, 1, 40, 2, 82, 5, 119, 105, 100, 116,
+  104, 18, 66, 10, 13, 97, 100, 95, 98, 114, 101, 97, 107, 95, 116, 121, 112, 101, 24, 5, 32,
+  1, 40, 14, 50, 30, 46, 97, 114, 101, 97, 95, 99, 97, 108, 99, 117, 108, 97, 116, 111, 114,
+  46, 65, 100, 66, 114, 101, 97, 107, 65, 100, 84, 121, 112, 101, 82, 11, 97, 100, 66, 114,
+  101, 97, 107, 84, 121, 112, 101, 34, 32, 10, 6, 67, 105, 114, 99, 108, 101, 18, 22, 10, 6,
+  114, 97, 100, 105, 117, 115, 24, 1, 32, 1, 40, 2, 82, 6, 114, 97, 100, 105, 117, 115, 34, 79,
+  10, 8, 84, 114, 105, 97, 110, 103, 108, 101, 18, 21, 10, 6, 101, 100, 103, 101, 95, 97, 24,
+  1, 32, 1, 40, 2, 82, 5, 101, 100, 103, 101, 65, 18, 21, 10, 6, 101, 100, 103, 101, 95, 98,
+  24, 2, 32, 1, 40, 2, 82, 5, 101, 100, 103, 101, 66, 18, 21, 10, 6, 101, 100, 103, 101, 95,
+  99, 24, 3, 32, 1, 40, 2, 82, 5, 101, 100, 103, 101, 67, 34, 72, 10, 13, 80, 97, 114, 97,
+  108, 108, 101, 108, 111, 103, 114, 97, 109, 18, 31, 10, 11, 98, 97, 115, 101, 95, 108, 101,
+  110, 103, 116, 104, 24, 1, 32, 1, 40, 2, 82, 10, 98, 97, 115, 101, 76, 101, 110, 103, 116,
+  104, 18, 22, 10, 6, 104, 101, 105, 103, 104, 116, 24, 2, 32, 1, 40, 2, 82, 6, 104, 101, 105,
+  103, 104, 116, 34, 68, 10, 11, 65, 114, 101, 97, 82, 101, 113, 117, 101, 115, 116, 18, 53,
+  10, 6, 115, 104, 97, 112, 101, 115, 24, 1, 32, 3, 40, 11, 50, 29, 46, 97, 114, 101, 97, 95,
+  99, 97, 108, 99, 117, 108, 97, 116, 111, 114, 46, 83, 104, 97, 112, 101, 77, 101, 115, 115,
+  97, 103, 101, 82, 6, 115, 104, 97, 112, 101, 115, 34, 36, 10, 12, 65, 114, 101, 97, 82, 101,
+  115, 112, 111, 110, 115, 101, 18, 20, 10, 5, 118, 97, 108, 117, 101, 24, 1, 32, 3, 40, 2, 82,
+  5, 118, 97, 108, 117, 101, 42, 85, 10, 13, 65, 100, 66, 114, 101, 97, 107, 65, 100, 84, 121,
+  112, 101, 18, 28, 10, 24, 77, 73, 83, 83, 73, 78, 71, 95, 65, 68, 95, 66, 82, 69, 65, 75, 95,
+  65, 68, 95, 84, 89, 80, 69, 16, 0, 18, 18, 10, 14, 65, 85, 68, 73, 79, 95, 65, 68, 95, 66, 82,
+  69, 65, 75, 16, 1, 18, 18, 10, 14, 86, 73, 68, 69, 79, 95, 65, 68, 95, 66, 82, 69, 65, 75, 16,
+  2, 50, 173, 1, 10, 10, 67, 97, 108, 99, 117, 108, 97, 116, 111, 114, 18, 78, 10, 12, 99, 97,
+  108, 99, 117, 108, 97, 116, 101, 79, 110, 101, 18, 29, 46, 97, 114, 101, 97, 95, 99, 97, 108,
+  99, 117, 108, 97, 116, 111, 114, 46, 83, 104, 97, 112, 101, 77, 101, 115, 115, 97, 103, 101,
+  26, 29, 46, 97, 114, 101, 97, 95, 99, 97, 108, 99, 117, 108, 97, 116, 111, 114, 46, 65, 114,
+  101, 97, 82, 101, 115, 112, 111, 110, 115, 101, 34, 0, 18, 79, 10, 14, 99, 97, 108, 99, 117,
+  108, 97, 116, 101, 77, 117, 108, 116, 105, 18, 28, 46, 97, 114, 101, 97, 95, 99, 97, 108, 99,
+  117, 108, 97, 116, 111, 114, 46, 65, 114, 101, 97, 82, 101, 113, 117, 101, 115, 116, 26, 29,
+  46, 97, 114, 101, 97, 95, 99, 97, 108, 99, 117, 108, 97, 116, 111, 114, 46, 65, 114, 101, 97,
+  82, 101, 115, 112, 111, 110, 115, 101, 34, 0, 66, 28, 90, 23, 105, 111, 46, 112, 97, 99, 116,
+  47, 97, 114, 101, 97, 95, 99, 97, 108, 99, 117, 108, 97, 116, 111, 114, 208, 2, 1, 98, 6, 112,
+  114, 111, 116, 111, 51];
+
+  #[test_log::test]
+  fn construct_message_field_with_global_enum_test() {
+    let bytes: &[u8] = &DESCRIPTOR_WITH_ENUM_BYTES;
+    let buffer = Bytes::from(bytes);
+    let fds: FileDescriptorSet = FileDescriptorSet::decode(buffer).unwrap();
+
+    let main_descriptor = fds.file.iter()
+      .find(|fd| fd.name.clone().unwrap_or_default() == "area_calculator.proto")
+      .unwrap();
+    let message_descriptor = main_descriptor.message_type.iter()
+      .find(|md| md.name.clone().unwrap_or_default() == "Rectangle").unwrap();
+    let mut message_builder = MessageBuilder::new(&message_descriptor, "Rectangle", main_descriptor);
+    let path = DocPath::new("$.rectangle.ad_break_type").unwrap();
+    let mut matching_rules = MatchingRuleCategory::empty("body");
+    let mut generators = hashmap!{};
+    let file_descriptors: HashMap<String, &FileDescriptorProto> = fds.file
+      .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
+      .collect();
+
+    let result = construct_message_field(&mut message_builder, &mut matching_rules,
+      &mut generators, "ad_break_type", &Value::String("AUDIO_AD_BREAK".to_string()),
+      &path, &file_descriptors);
+    expect!(result).to(be_ok());
+
+    let field = message_builder.fields.get("ad_break_type");
+    expect!(field).to(be_some());
   }
 }

@@ -148,18 +148,23 @@ pub fn enum_name(enum_value: i32, descriptor: &EnumDescriptorProto) -> String {
     .unwrap_or_else(|| format!("Unknown enum {}", enum_value))
 }
 
-/// Find the integer value of the given enum type and name.
-pub fn find_enum_value_by_name(message_descriptor: &DescriptorProto, enum_name: &str, enum_value: &str) -> Option<i32> {
-  trace!(">> find_enum_value_by_name({:?}, {}, {})", message_descriptor.name, enum_name, enum_value);
-  message_descriptor.enum_type.iter()
+/// Find the integer value of the given enum type and name in the message descriptor.
+#[tracing::instrument(ret, skip_all, fields(%enum_name, %enum_value))]
+pub fn find_enum_value_by_name_in_message(
+  enum_types: &Vec<EnumDescriptorProto>,
+  enum_name: &str,
+  enum_value: &str
+) -> Option<(i32, EnumDescriptorProto)> {
+  trace!(">> find_enum_value_by_name_in_message({}, {})",enum_name, enum_value);
+  enum_types.iter()
     .find_map(|enum_descriptor| {
-      trace!("find_enum_value_by_name: enum type = {:?}", enum_descriptor.name);
+      trace!("find_enum_value_by_name_in_message: enum type = {:?}", enum_descriptor.name);
       if let Some(name) = &enum_descriptor.name {
         if name == last_name(enum_name) {
           enum_descriptor.value.iter().find_map(|val| {
             if let Some(name) = &val.name {
               if name == enum_value {
-                val.number
+                val.number.map(|n| (n, enum_descriptor.clone()))
               } else {
                 None
               }
@@ -174,6 +179,57 @@ pub fn find_enum_value_by_name(message_descriptor: &DescriptorProto, enum_name: 
         None
       }
     })
+}
+
+/// Find the enum type by name in the message descriptor.
+#[tracing::instrument(ret, skip_all, fields(%enum_name))]
+pub fn find_enum_by_name_in_message(
+  enum_types: &Vec<EnumDescriptorProto>,
+  enum_name: &str
+) -> Option<EnumDescriptorProto> {
+  trace!(">> find_enum_value_by_name_in_message({})",enum_name);
+  enum_types.iter()
+    .find_map(|enum_descriptor| {
+      trace!("find_enum_by_name_in_message: enum type = {:?}", enum_descriptor.name);
+      if let Some(name) = &enum_descriptor.name {
+        if name == last_name(enum_name) {
+          Some(enum_descriptor.clone())
+        } else {
+          None
+        }
+      } else {
+        None
+      }
+    })
+}
+
+/// Find the integer value of the given enum type and name in all the descriptors.
+#[tracing::instrument(ret, skip_all, fields(%enum_name, %enum_value))]
+pub fn find_enum_value_by_name(
+  descriptors: &HashMap<String, &FileDescriptorProto>,
+  enum_name: &str,
+  enum_value: &str
+) -> Option<(i32, EnumDescriptorProto)> {
+  trace!(">> find_enum_value_by_name({}, {})", enum_name, enum_value);
+  let package_names = enum_name.split('.').filter(|v| !v.is_empty()).collect::<Vec<_>>();
+  let package = package_names.first().map(|v| v.to_string()).unwrap_or_default();
+  descriptors.values()
+    .find(|fd| fd.package == Some(package.to_string()))
+    .and_then(|fd| find_enum_value_by_name_in_message(&fd.enum_type, enum_name, enum_value))
+}
+
+/// Find the given enum type by name in all the descriptors.
+#[tracing::instrument(ret, skip_all, fields(%enum_name))]
+pub fn find_enum_by_name(
+  descriptors: &FileDescriptorSet,
+  enum_name: &str
+) -> Option<EnumDescriptorProto> {
+  trace!(">> find_enum_by_name({})", enum_name);
+  let package_names = enum_name.split('.').filter(|v| !v.is_empty()).collect::<Vec<_>>();
+  let package = package_names.first().map(|v| v.to_string()).unwrap_or_default();
+  descriptors.file.iter()
+    .find(|fd| fd.package == Some(package.to_string()))
+    .and_then(|fd| find_enum_by_name_in_message(&fd.enum_type, enum_name))
 }
 
 /// Convert the message field data into a JSON value

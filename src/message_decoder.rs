@@ -12,7 +12,15 @@ use prost_types::{DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, Fi
 use prost_types::field_descriptor_proto::Type;
 use tracing::{debug, error, trace, warn};
 
-use crate::utils::{as_hex, find_message_type_by_name, is_repeated_field, last_name, should_be_packed_type};
+use crate::utils::{
+  as_hex,
+  find_enum_by_name,
+  find_enum_by_name_in_message,
+  find_message_type_by_name,
+  is_repeated_field,
+  last_name,
+  should_be_packed_type
+};
 
 /// Decoded Protobuf field
 #[derive(Clone, Debug, PartialEq)]
@@ -218,9 +226,10 @@ pub fn decode_message<B>(
               Type::Bool => vec![ (ProtobufFieldData::Boolean(varint > 0), wire_type) ],
               Type::Uint32 => vec![ (ProtobufFieldData::UInteger32(varint as u32), wire_type) ],
               Type::Enum => {
-                let enum_proto = descriptor.enum_type.iter()
-                  .find(|enum_type| enum_type.name.clone().unwrap_or_default() == last_name(field_descriptor.type_name.clone().unwrap_or_default().as_str()))
-                  .ok_or_else(|| anyhow!("Did not find the enum {:?} for the field {} in the Protobuf descriptor", field_descriptor.type_name, field_num))?;
+                let enum_type_name = field_descriptor.type_name.clone().unwrap_or_default();
+                let enum_proto = find_enum_by_name_in_message(&descriptor.enum_type, enum_type_name.as_str())
+                  .or_else(|| find_enum_by_name(descriptors, enum_type_name.as_str()))
+                  .ok_or_else(|| anyhow!("Did not find the enum {} for the field {} in the Protobuf descriptor", enum_type_name, field_num))?;
                 vec![ (ProtobufFieldData::Enum(varint as i32, enum_proto.clone()), wire_type) ]
               },
               Type::Sint32 => {
@@ -447,6 +456,7 @@ mod tests {
     bytes_field_descriptor
   };
   use crate::message_decoder::{decode_message, ProtobufFieldData};
+  use crate::protobuf::tests::DESCRIPTOR_WITH_ENUM_BYTES;
 
   const FIELD_1_MESSAGE: [u8; 2] = [8, 1];
   const FIELD_2_MESSAGE: [u8; 2] = [16, 55];
@@ -1115,5 +1125,29 @@ mod tests {
     expect!(field_result.field_num).to(be_equal_to(1));
     expect!(field_result.wire_type).to(be_equal_to(WireType::ThirtyTwoBit));
     expect!(&field_result.data).to(be_equal_to(&ProtobufFieldData::Float(12.0)));
+  }
+
+  #[test_log::test]
+  fn decode_message_with_global_enum_field() {
+    let bytes: &[u8] = &DESCRIPTOR_WITH_ENUM_BYTES;
+    let buffer = Bytes::from(bytes);
+    let fds: FileDescriptorSet = FileDescriptorSet::decode(buffer).unwrap();
+    let main_descriptor = fds.file.iter()
+      .find(|fd| fd.name.clone().unwrap_or_default() == "area_calculator.proto")
+      .unwrap();
+    let message_descriptor = main_descriptor.message_type.iter()
+      .find(|md| md.name.clone().unwrap_or_default() == "Rectangle").unwrap();
+    let enum_proto = main_descriptor.enum_type.first().unwrap();
+
+    let message_bytes: &[u8] = &[13, 0, 0, 64, 64, 21, 0, 0, 128, 64, 40, 1];
+    let mut buffer = Bytes::from(message_bytes);
+    let result = decode_message(&mut buffer, &message_descriptor, &fds).unwrap();
+    expect!(result.len()).to(be_equal_to(3));
+
+    let field_result = result.last().unwrap();
+
+    expect!(field_result.field_num).to(be_equal_to(5));
+    expect!(field_result.wire_type).to(be_equal_to(WireType::Varint));
+    expect!(&field_result.data).to(be_equal_to(&ProtobufFieldData::Enum(1, enum_proto.clone())));
   }
 }
