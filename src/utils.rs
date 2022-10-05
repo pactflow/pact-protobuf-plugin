@@ -68,7 +68,7 @@ pub fn find_message_type_in_file_descriptors(
     .or_else(|_| {
       all_descriptors.values()
         .find_map(|fd| find_message_type_in_file_descriptor(message_type, fd).ok())
-        .ok_or(anyhow!("Did not find a message type '{}' in any of file descriptors", message_type))
+        .ok_or(anyhow!("Did not find a message type '{}' in any of the file descriptors", message_type))
     })
 }
 

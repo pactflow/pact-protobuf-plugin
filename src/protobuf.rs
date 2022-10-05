@@ -572,7 +572,9 @@ fn build_single_embedded_field_value(
     } else if let Value::Object(config) = value {
       debug!("Configuring the message from config {:?}", config);
       let message_name = last_name(type_name.as_str());
-      let embedded_type = find_message_type_in_file_descriptors(message_name, &message_builder.file_descriptor, all_descriptors)?;
+      let embedded_type = find_nested_type(&message_builder.descriptor, field_descriptor)
+        .or_else(|| find_message_type_in_file_descriptors(message_name, &message_builder.file_descriptor, all_descriptors).ok())
+        .ok_or_else(|| anyhow!("Did not find message '{}' in the current message or in the file descriptors", type_name))?;
       let mut embedded_builder = MessageBuilder::new(&embedded_type, message_name, &message_builder.file_descriptor);
 
       if let Some(definition) = config.get("pact:match") {
@@ -1905,5 +1907,69 @@ pub(crate) mod tests {
 
     let field = message_builder.fields.get("ad_break_type");
     expect!(field).to(be_some());
+  }
+
+  pub(crate) const DESCRIPTOR_WITH_EMBEDDED_MESSAGE: [u8; 644] = [
+    10, 129, 5, 10, 21, 97, 114, 101, 97, 95, 99, 97, 108, 99, 117, 108, 97, 116, 111, 114, 46,
+    112, 114, 111, 116, 111, 18, 15, 97, 114, 101, 97, 95, 99, 97, 108, 99, 117, 108, 97, 116, 111,
+    114, 34, 211, 2, 10, 14, 65, 100, 66, 114, 101, 97, 107, 82, 101, 113, 117, 101, 115, 116, 18,
+    88, 10, 16, 97, 100, 95, 98, 114, 101, 97, 107, 95, 99, 111, 110, 116, 101, 120, 116, 24, 1,
+    32, 3, 40, 11, 50, 46, 46, 97, 114, 101, 97, 95, 99, 97, 108, 99, 117, 108, 97, 116, 111, 114,
+    46, 65, 100, 66, 114, 101, 97, 107, 82, 101, 113, 117, 101, 115, 116, 46, 65, 100, 66, 114,
+    101, 97, 107, 67, 111, 110, 116, 101, 120, 116, 82, 14, 97, 100, 66, 114, 101, 97, 107, 67,
+    111, 110, 116, 101, 120, 116, 26, 230, 1, 10, 14, 65, 100, 66, 114, 101, 97, 107, 67, 111,
+    110, 116, 101, 120, 116, 18, 36, 10, 14, 102, 111, 114, 99, 101, 100, 95, 108, 105, 110, 101,
+    95, 105, 100, 24, 1, 32, 1, 40, 9, 82, 12, 102, 111, 114, 99, 101, 100, 76, 105, 110, 101, 73,
+    100, 18, 44, 10, 18, 102, 111, 114, 99, 101, 100, 95, 99, 114, 101, 97, 116, 105, 118, 101, 95,
+    105, 100, 24, 2, 32, 1, 40, 9, 82, 16, 102, 111, 114, 99, 101, 100, 67, 114, 101, 97, 116, 105,
+    118, 101, 73, 100, 18, 30, 10, 11, 97, 100, 95, 98, 114, 101, 97, 107, 95, 105, 100, 24, 3, 32,
+    1, 40, 9, 82, 9, 97, 100, 66, 114, 101, 97, 107, 73, 100, 18, 28, 10, 9, 115, 101, 115, 115,
+    105, 111, 110, 73, 100, 24, 4, 32, 1, 40, 9, 82, 9, 115, 101, 115, 115, 105, 111, 110, 73, 100,
+    18, 66, 10, 13, 97, 100, 95, 98, 114, 101, 97, 107, 95, 116, 121, 112, 101, 24, 5, 32, 1, 40,
+    14, 50, 30, 46, 97, 114, 101, 97, 95, 99, 97, 108, 99, 117, 108, 97, 116, 111, 114, 46, 65,
+    100, 66, 114, 101, 97, 107, 65, 100, 84, 121, 112, 101, 82, 11, 97, 100, 66, 114, 101, 97, 107,
+    84, 121, 112, 101, 34, 36, 10, 12, 65, 114, 101, 97, 82, 101, 115, 112, 111, 110, 115, 101, 18,
+    20, 10, 5, 118, 97, 108, 117, 101, 24, 1, 32, 3, 40, 2, 82, 5, 118, 97, 108, 117, 101, 42, 85,
+    10, 13, 65, 100, 66, 114, 101, 97, 107, 65, 100, 84, 121, 112, 101, 18, 28, 10, 24, 77, 73, 83,
+    83, 73, 78, 71, 95, 65, 68, 95, 66, 82, 69, 65, 75, 95, 65, 68, 95, 84, 89, 80, 69, 16, 0, 18,
+    18, 10, 14, 65, 85, 68, 73, 79, 95, 65, 68, 95, 66, 82, 69, 65, 75, 16, 1, 18, 18, 10, 14, 86,
+    73, 68, 69, 79, 95, 65, 68, 95, 66, 82, 69, 65, 75, 16, 2, 50, 94, 10, 10, 67, 97, 108, 99,
+    117, 108, 97, 116, 111, 114, 18, 80, 10, 12, 99, 97, 108, 99, 117, 108, 97, 116, 101, 79, 110,
+    101, 18, 31, 46, 97, 114, 101, 97, 95, 99, 97, 108, 99, 117, 108, 97, 116, 111, 114, 46, 65,
+    100, 66, 114, 101, 97, 107, 82, 101, 113, 117, 101, 115, 116, 26, 29, 46, 97, 114, 101, 97, 95,
+    99, 97, 108, 99, 117, 108, 97, 116, 111, 114, 46, 65, 114, 101, 97, 82, 101, 115, 112, 111,
+    110, 115, 101, 34, 0, 66, 28, 90, 23, 105, 111, 46, 112, 97, 99, 116, 47, 97, 114, 101, 97, 95,
+    99, 97, 108, 99, 117, 108, 97, 116, 111, 114, 208, 2, 1, 98, 6, 112, 114, 111, 116, 111, 51
+  ];
+
+  #[test_log::test]
+  fn build_single_embedded_field_value_with_embedded_message() {
+    let bytes: &[u8] = &DESCRIPTOR_WITH_EMBEDDED_MESSAGE;
+    let buffer = Bytes::from(bytes);
+    let fds: FileDescriptorSet = FileDescriptorSet::decode(buffer).unwrap();
+
+    let main_descriptor = fds.file.iter()
+      .find(|fd| fd.name.clone().unwrap_or_default() == "area_calculator.proto")
+      .unwrap();
+    let message_descriptor = main_descriptor.message_type.iter()
+      .find(|md| md.name.clone().unwrap_or_default() == "AdBreakRequest").unwrap();
+    let mut message_builder = MessageBuilder::new(&message_descriptor, "AdBreakRequest", main_descriptor);
+    let path = DocPath::new("$.ad_break_context").unwrap();
+    let field_descriptor = message_descriptor.field.iter()
+      .find(|fd| fd.name.clone().unwrap_or_default() == "ad_break_context")
+      .unwrap();
+    let field_config = json!({
+      "ad_break_type": "AUDIO_AD_BREAK"
+    });
+    let mut matching_rules = MatchingRuleCategory::empty("body");
+    let mut generators = hashmap!{};
+    let file_descriptors: HashMap<String, &FileDescriptorProto> = fds.file
+      .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
+      .collect();
+
+    let result = build_single_embedded_field_value(
+      &path, &mut message_builder, MessageFieldValueType::Normal, field_descriptor,
+      "ad_break_type", &field_config, &mut matching_rules, &mut generators, &file_descriptors);
+    expect!(result).to(be_ok());
   }
 }
