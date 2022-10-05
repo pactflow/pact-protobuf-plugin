@@ -1,3 +1,10 @@
+# 0.1.15 - Bugfix Release
+
+* 8eb7d55 - chore: add a test with message types from an imported proto file #11 (Ronald Holshausen, Wed Oct 5 13:43:35 2022 +1100)
+* 9ebdf4f - fix: Suppport message types embedded in other message types (Ronald Holshausen, Wed Oct 5 12:14:54 2022 +1100)
+* 473f61b - fix: support message fields with global enum values (not local to a message) (Ronald Holshausen, Tue Oct 4 18:14:27 2022 +1100)
+* 644dcc1 - bump version to 0.1.15 (Ronald Holshausen, Tue Sep 20 15:59:29 2022 +1000)
+
 # 0.1.14 - Bugfix Release
 
 * 127a318 - chore: cleanup compiler warnings (Ronald Holshausen, Tue Sep 20 15:56:59 2022 +1000)
