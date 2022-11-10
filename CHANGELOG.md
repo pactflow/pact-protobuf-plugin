@@ -1,3 +1,8 @@
+# 0.1.16 - Bugfix Release
+
+* dbacfa4 - fix: was not finding enums where the package had more than one element in the path (Ronald Holshausen, Thu Nov 10 14:35:02 2022 +1100)
+* 23a9a92 - bump version to 0.1.16 (Ronald Holshausen, Wed Oct 5 13:48:07 2022 +1100)
+
 # 0.1.15 - Bugfix Release
 
 * 8eb7d55 - chore: add a test with message types from an imported proto file #11 (Ronald Holshausen, Wed Oct 5 13:43:35 2022 +1100)
