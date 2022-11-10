@@ -981,6 +981,7 @@ pub(crate) mod tests {
   use crate::message_builder::{MessageBuilder, MessageFieldValueType, RType};
   use crate::protobuf::{
     build_embedded_message_field_value,
+    build_field_value, 
     build_single_embedded_field_value,
     construct_message_field,
     construct_protobuf_interaction_for_message,
@@ -1970,6 +1971,56 @@ pub(crate) mod tests {
     let result = build_single_embedded_field_value(
       &path, &mut message_builder, MessageFieldValueType::Normal, field_descriptor,
       "ad_break_type", &field_config, &mut matching_rules, &mut generators, &file_descriptors);
+    expect!(result).to(be_ok());
+  }
+
+  const DESCRIPTORS_ROUTE_GUIDE_WITH_ENUM_BASIC: [u8; 320] = [
+    10, 189, 2, 10, 15, 116, 101, 115, 116, 95, 101, 110, 117, 109, 46, 112, 114, 111, 116, 111,
+    18, 13, 114, 111, 117, 116, 101, 103, 117, 105, 100, 101, 46, 118, 50, 34, 65, 10, 5, 80, 111,
+    105, 110, 116, 18, 26, 10, 8, 108, 97, 116, 105, 116, 117, 100, 101, 24, 1, 32, 1, 40, 5, 82,
+    8, 108, 97, 116, 105, 116, 117, 100, 101, 18, 28, 10, 9, 108, 111, 110, 103, 105, 116, 117,
+    100, 101, 24, 2, 32, 1, 40, 5, 82, 9, 108, 111, 110, 103, 105, 116, 117, 100, 101, 34, 58, 10,
+    7, 70, 101, 97, 116, 117, 114, 101, 18, 47, 10, 6, 114, 101, 115, 117, 108, 116, 24, 1, 32, 1,
+    40, 14, 50, 23, 46, 114, 111, 117, 116, 101, 103, 117, 105, 100, 101, 46, 118, 50, 46, 84, 101,
+    115, 116, 69, 110, 117, 109, 82, 6, 114, 101, 115, 117, 108, 116, 42, 56, 10, 8, 84, 101, 115,
+    116, 69, 110, 117, 109, 18, 14, 10, 10, 86, 65, 76, 85, 69, 95, 90, 69, 82, 79, 16, 0, 18, 13,
+    10, 9, 86, 65, 76, 85, 69, 95, 79, 78, 69, 16, 1, 18, 13, 10, 9, 86, 65, 76, 85, 69, 95, 84,
+    87, 79, 16, 2, 50, 69, 10, 4, 84, 101, 115, 116, 18, 61, 10, 11, 71, 101, 116, 70, 101, 97,
+    116, 117, 114, 101, 50, 18, 20, 46, 114, 111, 117, 116, 101, 103, 117, 105, 100, 101, 46, 118,
+    50, 46, 80, 111, 105, 110, 116, 26, 22, 46, 114, 111, 117, 116, 101, 103, 117, 105, 100, 101,
+    46, 118, 50, 46, 70, 101, 97, 116, 117, 114, 101, 34, 0, 66, 19, 90, 17, 105, 111, 46, 112,
+    97, 99, 116, 47, 116, 101, 115, 116, 95, 101, 110, 117, 109, 98, 6, 112, 114, 111, 116, 111,
+    51
+  ];
+
+  #[test_log::test]
+  fn build_field_value_with_global_enum() {
+    let bytes: &[u8] = &DESCRIPTORS_ROUTE_GUIDE_WITH_ENUM_BASIC;
+    let buffer = Bytes::from(bytes);
+    let fds: FileDescriptorSet = FileDescriptorSet::decode(buffer).unwrap();
+
+    let main_descriptor = fds.file.iter()
+      .find(|fd| fd.name.clone().unwrap_or_default() == "test_enum.proto")
+      .unwrap();
+    let message_descriptor = main_descriptor.message_type.iter()
+      .find(|md| md.name.clone().unwrap_or_default() == "Feature").unwrap();
+    let mut message_builder = MessageBuilder::new(&message_descriptor, "Feature", main_descriptor);
+    let path = DocPath::new("$.result").unwrap();
+    let field_descriptor = message_descriptor.field.iter()
+      .find(|fd| fd.name.clone().unwrap_or_default() == "result")
+      .unwrap();
+    let field_config = json!("matching(type, 'VALUE_ONE')");
+    let mut matching_rules = MatchingRuleCategory::empty("body");
+    let mut generators = hashmap!{};
+    let file_descriptors: HashMap<String, &FileDescriptorProto> = fds.file
+      .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
+      .collect();
+
+
+    let result = build_field_value(&path, &mut message_builder,
+      MessageFieldValueType::Normal, field_descriptor, "result", &field_config,
+      &mut matching_rules, &mut generators, &file_descriptors
+    );
     expect!(result).to(be_ok());
   }
 }

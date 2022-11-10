@@ -212,10 +212,14 @@ pub fn find_enum_value_by_name(
 ) -> Option<(i32, EnumDescriptorProto)> {
   trace!(">> find_enum_value_by_name({}, {})", enum_name, enum_value);
   let package_names = enum_name.split('.').filter(|v| !v.is_empty()).collect::<Vec<_>>();
-  let package = package_names.first().map(|v| v.to_string()).unwrap_or_default();
-  descriptors.values()
-    .find(|fd| fd.package == Some(package.to_string()))
-    .and_then(|fd| find_enum_value_by_name_in_message(&fd.enum_type, enum_name, enum_value))
+  if let Some((_name, package)) = package_names.split_last() {
+    let package = package.join(".");
+    descriptors.values()
+      .find(|fd| fd.package.clone().unwrap_or_default() == package)
+      .and_then(|fd| find_enum_value_by_name_in_message(&fd.enum_type, enum_name, enum_value))
+  } else {
+    None
+  }
 }
 
 /// Find the given enum type by name in all the descriptors.
@@ -419,11 +423,20 @@ pub fn should_be_packed_type(field_type: Type) -> bool {
 pub(crate) mod tests {
   use bytes::Bytes;
   use expectest::prelude::*;
+  use maplit::hashmap;
   use prost::Message;
-  use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet, MessageOptions};
+  use prost_types::{
+    DescriptorProto,
+    EnumDescriptorProto,
+    EnumValueDescriptorProto,
+    FieldDescriptorProto,
+    FileDescriptorSet,
+    FileDescriptorProto,
+    MessageOptions
+  };
   use prost_types::field_descriptor_proto::{Label, Type};
 
-  use crate::utils::{as_hex, find_message_type_by_name, find_nested_type, is_map_field, last_name};
+  use crate::utils::{as_hex, find_enum_value_by_name, find_message_type_by_name, find_nested_type, is_map_field, last_name};
 
   #[test]
   fn last_name_test() {
@@ -594,5 +607,116 @@ pub(crate) mod tests {
   fn as_hex_test() {
     expect!(as_hex(&[])).to(be_equal_to(""));
     expect!(as_hex(&[1, 2, 3, 255])).to(be_equal_to("010203ff"));
+  }
+
+  #[test]
+  fn find_enum_value_by_name_test() {
+    let enum1 = EnumDescriptorProto {
+      name: Some("TestEnum".to_string()),
+      value: vec![
+        EnumValueDescriptorProto {
+          name: Some("VALUE_ZERO".to_string()),
+          number: Some(0),
+          options: None,
+        },
+        EnumValueDescriptorProto {
+          name: Some("VALUE_ONE".to_string()),
+          number: Some(1),
+          options: None,
+        },
+        EnumValueDescriptorProto {
+          name: Some("VALUE_TWO".to_string()),
+          number: Some(2),
+          options: None,
+        },
+      ],
+      .. EnumDescriptorProto::default()
+    };
+    let fds = FileDescriptorProto {
+      name: Some("test_enum.proto".to_string()),
+      package: Some("routeguide.v2".to_string()),
+      message_type: vec![
+        DescriptorProto {
+          name: Some("Feature".to_string()),
+          field: vec![
+            FieldDescriptorProto {
+              name: Some("result".to_string()),
+              number: Some(1),
+              label: Some(1),
+              r#type: Some(14),
+              type_name: Some(".routeguide.v2.TestEnum".to_string()),
+              .. FieldDescriptorProto::default()
+            },
+          ],
+          .. DescriptorProto::default()
+        }
+      ],
+      enum_type: vec![
+        enum1.clone()
+      ],
+      .. FileDescriptorProto::default()
+    };
+    let fds2 = FileDescriptorProto {
+      name: Some("test_enum2.proto".to_string()),
+      package: Some("routeguide".to_string()),
+      message_type: vec![
+        DescriptorProto {
+          name: Some("Feature".to_string()),
+          field: vec![
+            FieldDescriptorProto {
+              name: Some("result".to_string()),
+              number: Some(1),
+              label: Some(1),
+              r#type: Some(14),
+              type_name: Some(".routeguide.TestEnum".to_string()),
+              .. FieldDescriptorProto::default()
+            },
+          ],
+          .. DescriptorProto::default()
+        }
+      ],
+      enum_type: vec![
+        enum1.clone()
+      ],
+      .. FileDescriptorProto::default()
+    };
+    let fds3 = FileDescriptorProto {
+      name: Some("test_enum3.proto".to_string()),
+      package: Some("".to_string()),
+      message_type: vec![
+        DescriptorProto {
+          name: Some("Feature".to_string()),
+          field: vec![
+            FieldDescriptorProto {
+              name: Some("result".to_string()),
+              number: Some(1),
+              label: Some(1),
+              r#type: Some(14),
+              type_name: Some(".TestEnum".to_string()),
+              .. FieldDescriptorProto::default()
+            },
+          ],
+          .. DescriptorProto::default()
+        }
+      ],
+      enum_type: vec![
+        enum1.clone()
+      ],
+      .. FileDescriptorProto::default()
+    };
+    let descriptors = hashmap!{
+      "test_enum.proto".to_string() => &fds,
+      "test_enum2.proto".to_string() => &fds2,
+      "test_enum3.proto".to_string() => &fds3
+    };
+
+    let result = find_enum_value_by_name(&descriptors, ".routeguide.v2.TestEnum", "VALUE_ONE");
+    expect!(result).to(be_some().value((1, enum1.clone())));
+
+    let result2 = find_enum_value_by_name(&descriptors, ".routeguide.TestEnum", "VALUE_ONE");
+    expect!(result2).to(be_some().value((1, enum1.clone())));
+
+    let result3 = find_enum_value_by_name(&descriptors, ".TestEnum", "VALUE_TWO");
+    expect!(result3).to(be_some().value((2, enum1.clone())));
   }
 }
