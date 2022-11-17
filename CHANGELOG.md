@@ -1,3 +1,9 @@
+# 0.1.17 - Bugfix Release
+
+* 45e67e3 - fix: was not finding enums where the package had more than one element in the path (Ronald Holshausen, Thu Nov 17 11:02:14 2022 +1100)
+* 8b02d88 - fix: revert the pact crate update as it was breaking access via FFI (Ronald Holshausen, Thu Nov 17 10:36:06 2022 +1100)
+* ab326e4 - bump version to 0.1.17 (Ronald Holshausen, Thu Nov 10 14:56:19 2022 +1100)
+
 # 0.1.16 - Bugfix Release
 
 * dbacfa4 - fix: was not finding enums where the package had more than one element in the path (Ronald Holshausen, Thu Nov 10 14:35:02 2022 +1100)
