@@ -230,10 +230,21 @@ pub fn find_enum_by_name(
 ) -> Option<EnumDescriptorProto> {
   trace!(">> find_enum_by_name({})", enum_name);
   let package_names = enum_name.split('.').filter(|v| !v.is_empty()).collect::<Vec<_>>();
-  let package = package_names.first().map(|v| v.to_string()).unwrap_or_default();
-  descriptors.file.iter()
-    .find(|fd| fd.package == Some(package.to_string()))
-    .and_then(|fd| find_enum_by_name_in_message(&fd.enum_type, enum_name))
+  trace!("package_names={:?}", package_names);
+  if let Some((_name, package)) = package_names.split_last() {
+    let package = package.join(".");
+    descriptors.file.iter()
+      .find(|fd| {
+        if let Some(fd_package) = &fd.package {
+          package == fd_package.as_str()
+        } else {
+          false
+        }
+      })
+      .and_then(|fd| find_enum_by_name_in_message(&fd.enum_type, enum_name))
+  } else {
+    None
+  }
 }
 
 /// Convert the message field data into a JSON value
