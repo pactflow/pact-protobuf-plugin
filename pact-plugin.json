@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "pluginInterfaceVersion": 1,
   "name": "protobuf",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "executableType": "exec",
   "entryPoint": "pact-protobuf-plugin",
   "pluginConfig": {
