@@ -423,9 +423,9 @@ dependencies = [
 
 [[package]]
 name = "chrono-tz"
-version = "0.6.3"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29c39203181991a7dd4343b8005bd804e7a9a37afb8ac070e43771e8c820bbde"
+checksum = "a87b30366b6766751277791b473b674f3bf7fb75696841c784a3eb7e7fbf44ee"
 dependencies = [
  "chrono",
  "chrono-tz-build",
@@ -434,9 +434,9 @@ dependencies = [
 
 [[package]]
 name = "chrono-tz-build"
-version = "0.0.3"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f509c3a87b33437b05e2458750a0700e5bdd6956176773e6c7d6dd15a283a0c"
+checksum = "d9998fb9f7e9b2111641485bf8beb32f92945f97f92a3d061f744cfef335f751"
 dependencies = [
  "parse-zoneinfo",
  "phf",
@@ -1604,9 +1604,9 @@ dependencies = [
 
 [[package]]
 name = "ntapi"
-version = "0.3.7"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c28774a7fd2fbb4f0babd8237ce554b73af68021b5f695a3cebd6c59bac0980f"
+checksum = "bc51db7b362b205941f71232e56c625156eb9a929f8cf74a428fd5bc094a4afc"
 dependencies = [
  "winapi",
 ]
@@ -1717,9 +1717,9 @@ checksum = "9b7820b9daea5457c9f21c69448905d723fbd21136ccf521748f23fd49e723ee"
 
 [[package]]
 name = "pact-plugin-driver"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0a0c2db7c75c57f7beed1a5e7981cbf63a8bd4f6ad1682364c876edfb12b168"
+checksum = "955632cf5aeaa6f462dbef669712e2811388c56dd638e72a1f2147f5235559f3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1801,9 +1801,9 @@ dependencies = [
 
 [[package]]
 name = "pact_matching"
-version = "0.12.13"
+version = "0.12.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b5556c5bdad180163852c755af6f76465542a8d08ed8edc878a7486bdeedcb1"
+checksum = "a8c0e5291356c66d47175963ace5f46bec274068a88ef4d6cb9af3be2f6c18b7"
 dependencies = [
  "ansi_term",
  "anyhow",
@@ -1839,9 +1839,9 @@ dependencies = [
 
 [[package]]
 name = "pact_models"
-version = "0.4.6"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d9e125fae522bf24b6fdeddf1ea983149aaad87589f995ddef996a9e21ce3cb"
+checksum = "e846b56b4d7a2e9e3170e0ce598fa497b24f0e18838aea3d0754fb65df9dba9d"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -1877,9 +1877,9 @@ dependencies = [
 
 [[package]]
 name = "pact_verifier"
-version = "0.13.14"
+version = "0.13.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9375cb204c50fc56041054f9c8ef0336345fb95f1bf6a5d8efa284778889bbb"
+checksum = "4a05338a05558b0cde599c5ab96224f2e447eca566fbac111b4477805bb88a94"
 dependencies = [
  "ansi_term",
  "anyhow",
@@ -1891,7 +1891,6 @@ dependencies = [
  "http",
  "itertools",
  "lazy_static",
- "libc",
  "maplit",
  "mime",
  "pact-plugin-driver",
@@ -2045,7 +2044,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1fb5f6f826b772a8d4c0394209441e7d37cbbb967ae9c7e0e8134365c9ee676"
 dependencies = [
  "siphasher",
- "uncased",
 ]
 
 [[package]]
@@ -2824,9 +2822,9 @@ checksum = "20518fe4a4c9acf048008599e464deb21beeae3d3578418951a189c235a7a9a8"
 
 [[package]]
 name = "sysinfo"
-version = "0.25.3"
+version = "0.26.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71eb43e528fdc239f08717ec2a378fdb017dddbc3412de15fff527554591a66c"
+checksum = "c375d5fd899e32847b8566e10598d6e9f1d9b55ec6de3cdf9e7da4bdc51371bc"
 dependencies = [
  "cfg-if",
  "core-foundation-sys",
@@ -3146,9 +3144,9 @@ checksum = "b6bc1c9ce2b5135ac7f93c72918fc37feb872bdc6a5533a8b85eb4b86bfdae52"
 
 [[package]]
 name = "tracing"
-version = "0.1.36"
+version = "0.1.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fce9567bd60a67d08a16488756721ba392f24f29006402881e43b19aac64307"
+checksum = "8ce8c33a8d48bd45d624a6e523445fd21ec13d3653cd51f681abf67418f54eb8"
 dependencies = [
  "cfg-if",
  "log",
@@ -3198,9 +3196,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-core"
-version = "0.1.29"
+version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5aeea4303076558a00714b823f9ad67d58a3bbda1df83d8827d21193156e22f7"
+checksum = "24eb03ba0eab1fd845050058ce5e616558e8f8d8fca633e6b163fe25c797213a"
 dependencies = [
  "once_cell",
  "valuable",
