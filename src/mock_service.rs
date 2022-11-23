@@ -53,8 +53,10 @@ impl MockService {
           let mut guard = MOCK_SERVER_STATE.lock().unwrap();
           let key = format!("{}/{}", self.service_name, self.method_descriptor.name.clone().unwrap_or_else(|| "unknown method".into()));
           if let Some((_, results)) = guard.get_mut(self.server_key.as_str()) {
-            trace!(store_length = results.len(), "Adding result to mock server '{}' static store", self.server_key);
-            results.push((key.clone(), result.clone()));
+            let mut route_results = results.entry(key).or_insert((0, vec![]));
+            trace!(store_length = route_results.1.len(), "Adding result to mock server '{}' static store", self.server_key);
+            route_results.0 += 1;
+            route_results.1.push(result.clone());
           } else {
             error!("INTERNAL ERROR: Did not find an entry for '{}' in mock server static store", self.server_key);
           }
