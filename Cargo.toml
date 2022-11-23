@@ -63,6 +63,9 @@ serde = "1.0.130"
 rocket = "0.5.0-rc.1"
 test-log = "0.2.10"
 trim-margin = "0.1.0"
+pact_consumer = "0.10.0"
+home = "0.5.4"
+panic-message = "0.3.0"
 
 [build-dependencies]
 built = { version = "0.5.1", features = [ "git2" ] }

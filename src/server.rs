@@ -461,7 +461,7 @@ impl PactPlugin for ProtobufPactPlugin {
     if let Some((_, results)) = guard.get(&request.server_key) {
       let (ok, results) = Self::get_mock_server_results(results);
       guard.remove(&request.server_key);
-      Ok(tonic::Response::new(proto::ShutdownMockServerResponse {
+      Ok(Response::new(proto::ShutdownMockServerResponse {
         ok,
         results
       }))
@@ -810,6 +810,7 @@ mod tests {
   use pact_plugin_driver::proto;
   use pact_plugin_driver::proto::catalogue_entry::EntryType;
   use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
+  use pact_plugin_driver::proto::start_mock_server_response;
   use serde_json::json;
   use tonic::Request;
 
@@ -1046,5 +1047,69 @@ mod tests {
     expect!(results.len()).to(be_equal_to(3));
     let path_1_result = results.iter().find(|it| it.path == "Req/Path1").unwrap().clone();
     expect!(path_1_result.error).to(be_equal_to("Did not receive any requests for path 'Req/Path1'"));
+  }
+
+  #[test_log::test(tokio::test)]
+  async fn start_mock_server_returns_an_error_if_the_pact_json_is_invalid() {
+    let plugin = ProtobufPactPlugin { manifest: Default::default() };
+    let request = proto::StartMockServerRequest {
+      host_interface: "".to_string(),
+      port: 0,
+      tls: false,
+      pact: "I'm not JSON!".to_string(),
+    };
+    let result = plugin.start_mock_server(Request::new(request)).await;
+    let response = result.unwrap();
+    if let Some(start_mock_server_response::Response::Error(message)) = &response.get_ref().response {
+      expect!(message.starts_with("Failed to parse Pact JSON")).to(be_true());
+    } else {
+      panic!("Was expecting an error message");
+    }
+  }
+
+  #[test_log::test(tokio::test)]
+  async fn start_mock_server_returns_an_error_if_the_pact_does_not_have_any_descriptors() {
+    let plugin = ProtobufPactPlugin { manifest: Default::default() };
+    let request = proto::StartMockServerRequest {
+      host_interface: "".to_string(),
+      port: 0,
+      tls: false,
+      pact: "{}".to_string(),
+    };
+    let result = plugin.start_mock_server(Request::new(request)).await;
+    let response = result.unwrap();
+    if let Some(start_mock_server_response::Response::Error(message)) = &response.get_ref().response {
+      expect!(message).to(be_equal_to("Provided Pact file does not have any Protobuf descriptors"));
+    } else {
+      panic!("Was expecting an error message");
+    }
+  }
+
+  #[test_log::test(tokio::test)]
+  async fn shutdown_mock_server_returns_an_error_if_the_server_key_was_not_found() {
+    let plugin = ProtobufPactPlugin { manifest: Default::default() };
+    let request = proto::ShutdownMockServerRequest {
+      server_key: "1234abcd".to_string(),
+    };
+    let result = plugin.shutdown_mock_server(Request::new(request)).await;
+    let response = result.unwrap();
+    let shutdown_response = response.get_ref();
+    expect!(shutdown_response.ok).to(be_false());
+    let error_response = shutdown_response.results.get(0).unwrap();
+    expect!(&error_response.error).to(be_equal_to("Did not find any mock server results for a server with ID 1234abcd"));
+  }
+
+  #[test_log::test(tokio::test)]
+  async fn get_mock_server_results_returns_an_error_if_the_server_key_was_not_found() {
+    let plugin = ProtobufPactPlugin { manifest: Default::default() };
+    let request = proto::MockServerRequest {
+      server_key: "1234abcd".to_string(),
+    };
+    let result = plugin.get_mock_server_results(Request::new(request)).await;
+    let response = result.unwrap();
+    let get_mock_server_results_response = response.get_ref();
+    expect!(get_mock_server_results_response.ok).to(be_false());
+    let error_response = get_mock_server_results_response.results.get(0).unwrap();
+    expect!(&error_response.error).to(be_equal_to("Did not find any mock server results for a server with ID 1234abcd"));
   }
 }
