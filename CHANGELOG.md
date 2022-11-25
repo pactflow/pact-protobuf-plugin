@@ -1,3 +1,12 @@
+# 0.2.0 - Bugfix Release
+
+* 04cb32d - chore: Bump minor version (Ronald Holshausen, Fri Nov 25 11:20:21 2022 +1100)
+* 839650b - feat: add an integration test for mock server not getting any requests #15 (Ronald Holshausen, Wed Nov 23 18:15:18 2022 +1100)
+* 75d7343 - fix(mock-server): return an error if we don't get a request for any service method #15 (Ronald Holshausen, Wed Nov 23 16:47:14 2022 +1100)
+* 62cf24f - chore: Upgrade the Pact libs (Ronald Holshausen, Tue Nov 22 17:10:26 2022 +1100)
+* 2868bc7 - chore: upgrade dependencies (Ronald Holshausen, Tue Nov 22 16:57:46 2022 +1100)
+* 287cf89 - bump version to 0.1.18 (Ronald Holshausen, Thu Nov 17 11:21:52 2022 +1100)
+
 # 0.1.17 - Bugfix Release
 
 * 45e67e3 - fix: was not finding enums where the package had more than one element in the path (Ronald Holshausen, Thu Nov 17 11:02:14 2022 +1100)
