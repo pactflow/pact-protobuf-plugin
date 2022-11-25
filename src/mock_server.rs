@@ -43,7 +43,7 @@ use crate::tcp::TcpIncoming;
 use crate::utils::{find_message_type_by_name, last_name};
 
 lazy_static! {
-  pub static ref MOCK_SERVER_STATE: Mutex<HashMap<String, (Sender<()>, Vec<(String, BodyMatchResult)>)>> = Mutex::new(hashmap!{});
+  pub static ref MOCK_SERVER_STATE: Mutex<HashMap<String, (Sender<()>, HashMap<String, (usize, Vec<BodyMatchResult>)>)>> = Mutex::new(hashmap!{});
 }
 
 /// Main mock server that will use the provided Pact to provide behaviour
@@ -136,7 +136,11 @@ impl GrpcMockServer
     let (snd, rcr) = channel::<()>();
     {
       let mut guard = MOCK_SERVER_STATE.lock().unwrap();
-      guard.insert(self.server_key.clone(), (snd, vec![]));
+      // Initialise all the routes with an initial state of not received
+      let initial_state = self.routes.iter()
+        .map(|(k, _v)| (k.clone(), (0, vec![])))
+        .collect();
+      guard.insert(self.server_key.clone(), (snd, initial_state));
     }
 
     let listener = TcpListener::bind(addr).await?;

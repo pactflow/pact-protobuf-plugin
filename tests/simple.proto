@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+message MessageIn {
+  bool in = 1;
+}
+
+message MessageOut {
+  bool out = 1;
+}
+
+service Test {
+  rpc GetTest(MessageIn) returns (MessageOut) {}
+}

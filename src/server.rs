@@ -14,9 +14,9 @@ use pact_models::path_exp::DocPath;
 use pact_models::prelude::{ContentType, MatchingRuleCategory, OptionalBody, RuleLogic};
 use pact_plugin_driver::plugin_models::PactPluginManifest;
 use pact_plugin_driver::proto;
+use pact_plugin_driver::proto::{CompareContentsResponse, MockServerResult};
 use pact_plugin_driver::proto::body::ContentTypeHint;
 use pact_plugin_driver::proto::catalogue_entry::EntryType;
-use pact_plugin_driver::proto::CompareContentsResponse;
 use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
 use pact_plugin_driver::utils::{proto_struct_to_json, proto_struct_to_map, proto_value_to_json, proto_value_to_string, to_proto_value};
 use pact_verifier::verification_result::MismatchResult;
@@ -90,6 +90,53 @@ impl ProtobufPactPlugin {
         }
       })
       .unwrap_or_default()
+  }
+
+  fn get_mock_server_results(results: &HashMap<String, (usize, Vec<BodyMatchResult>)>) -> (bool, Vec<MockServerResult>) {
+    // All OK if there are no mismatches and all routes got at least one request
+    let ok = results.iter().all(|(_, (req, r))| {
+      *req > 0 && r.iter().all(|r| *r == BodyMatchResult::Ok)
+    });
+    let results = results.iter().flat_map(|(path, (req, r))| {
+      let mut route_results = vec![];
+
+      if *req == 0 {
+        route_results.push(MockServerResult {
+          path: path.clone(),
+          error: format!("Did not receive any requests for path '{}'", path),
+          ..MockServerResult::default()
+        });
+      } else {
+        route_results.push(proto::MockServerResult {
+          path: path.clone(),
+          mismatches: r.iter().flat_map(|result| {
+            let mismatches = result.mismatches();
+            mismatches.iter().map(|m| {
+              match m {
+                Mismatch::BodyMismatch { path, mismatch, expected, actual } => {
+                  proto::ContentMismatch {
+                    expected: expected.as_ref().map(|d| d.to_vec()),
+                    actual: actual.as_ref().map(|d| d.to_vec()),
+                    mismatch: mismatch.clone(),
+                    path: path.clone(),
+                    ..proto::ContentMismatch::default()
+                  }
+                }
+                _ => proto::ContentMismatch {
+                  mismatch: m.description(),
+                  ..proto::ContentMismatch::default()
+                }
+              }
+            })
+            .collect::<Vec<proto::ContentMismatch>>()
+          }).collect(),
+          ..MockServerResult::default()
+        });
+      }
+
+      route_results
+    }).collect();
+    (ok, results)
   }
 }
 
@@ -412,32 +459,9 @@ impl PactPlugin for ProtobufPactPlugin {
     let request = request.get_ref();
     let mut guard = MOCK_SERVER_STATE.lock().unwrap();
     if let Some((_, results)) = guard.get(&request.server_key) {
-      let ok = results.iter().all(|(_, r)| *r == BodyMatchResult::Ok);
-      let results = results.iter().map(|(path, r)| {
-        proto::MockServerResult {
-          path: path.clone(),
-          mismatches: r.mismatches().iter().map(|m| {
-            match m {
-              Mismatch::BodyMismatch { path, mismatch, expected, actual } => {
-                proto::ContentMismatch {
-                  expected: expected.as_ref().map(|d| d.to_vec()),
-                  actual: actual.as_ref().map(|d| d.to_vec()),
-                  mismatch: mismatch.clone(),
-                  path: path.clone(),
-                  .. proto::ContentMismatch::default()
-                }
-              }
-              _ => proto::ContentMismatch {
-                mismatch: m.description(),
-                .. proto::ContentMismatch::default()
-              }
-            }
-          }).collect(),
-          .. proto::MockServerResult::default()
-        }
-      }).collect();
+      let (ok, results) = Self::get_mock_server_results(results);
       guard.remove(&request.server_key);
-      Ok(tonic::Response::new(proto::ShutdownMockServerResponse {
+      Ok(Response::new(proto::ShutdownMockServerResponse {
         ok,
         results
       }))
@@ -461,30 +485,7 @@ impl PactPlugin for ProtobufPactPlugin {
     let request = request.get_ref();
     let guard = MOCK_SERVER_STATE.lock().unwrap();
     if let Some((_, results)) = guard.get(&request.server_key) {
-      let ok = results.iter().all(|(_, r)| *r == BodyMatchResult::Ok);
-      let results = results.iter().map(|(path, r)| {
-        proto::MockServerResult {
-          path: path.clone(),
-          mismatches: r.mismatches().iter().map(|m| {
-            match m {
-              Mismatch::BodyMismatch { path, mismatch, expected, actual } => {
-                proto::ContentMismatch {
-                  expected: expected.as_ref().map(|d| d.to_vec()),
-                  actual: actual.as_ref().map(|d| d.to_vec()),
-                  mismatch: mismatch.clone(),
-                  path: path.clone(),
-                  .. proto::ContentMismatch::default()
-                }
-              }
-              _ => proto::ContentMismatch {
-                mismatch: m.description(),
-                .. proto::ContentMismatch::default()
-              }
-            }
-          }).collect(),
-          .. proto::MockServerResult::default()
-        }
-      }).collect();
+      let (ok, results) = Self::get_mock_server_results(results);
       Ok(tonic::Response::new(proto::MockServerResults {
         ok,
         results
@@ -804,10 +805,12 @@ fn mismatch_to_proto_mismatch(mismatch: &Mismatch) -> proto::ContentMismatch {
 mod tests {
   use expectest::prelude::*;
   use maplit::{btreemap, hashmap};
+  use pact_matching::{BodyMatchResult, Mismatch};
   use pact_plugin_driver::plugin_models::PactPluginManifest;
   use pact_plugin_driver::proto;
   use pact_plugin_driver::proto::catalogue_entry::EntryType;
   use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
+  use pact_plugin_driver::proto::start_mock_server_response;
   use serde_json::json;
   use tonic::Request;
 
@@ -951,5 +954,162 @@ mod tests {
       "/path1".to_string(),
       "200".to_string()
     ]));
+  }
+
+  #[test_log::test]
+  fn get_mock_server_results_test() {
+    let mock_results = hashmap!{};
+    let (ok, results) = ProtobufPactPlugin::get_mock_server_results(&mock_results);
+    expect!(ok).to(be_true());
+    expect!(results.len()).to(be_equal_to(0));
+  }
+
+  #[test_log::test]
+  fn get_mock_server_results_test_with_no_mismatches() {
+    let mock_results = hashmap!{
+      "Req/Path1".to_string() => (1, vec![]),
+      "Req/Path2".to_string() => (1, vec![ BodyMatchResult::Ok ]),
+      "Req/Path3".to_string() => (1, vec![ BodyMatchResult::Ok, BodyMatchResult::Ok ])
+    };
+    let (ok, results) = ProtobufPactPlugin::get_mock_server_results(&mock_results);
+    expect!(ok).to(be_true());
+    expect!(results.len()).to(be_equal_to(3));
+  }
+
+  #[test_log::test]
+  fn get_mock_server_results_test_with_mismatches() {
+    let mismatches = hashmap! {
+      "$".to_string() => vec![]
+    };
+    let mismatches2 = hashmap! {
+      "$".to_string() => vec![
+        Mismatch::BodyMismatch {
+          path: "$".to_string(),
+          expected: None,
+          actual: None,
+          mismatch: "boom".to_string()
+        }
+      ]
+    };
+    let mock_results = hashmap!{
+      "Req/Path1".to_string() => (1, vec![ BodyMatchResult::BodyTypeMismatch {
+        expected_type: "blob".to_string(),
+        actual_type: "blob".to_string(),
+        message: "it was a blob".to_string(),
+        expected: None,
+        actual: None
+      } ]),
+      "Req/Path2".to_string() => (1, vec![ BodyMatchResult::BodyMismatches(mismatches) ]),
+      "Req/Path3".to_string() => (1, vec![ BodyMatchResult::BodyMismatches(mismatches2) ])
+    };
+    let (ok, results) = ProtobufPactPlugin::get_mock_server_results(&mock_results);
+    expect!(ok).to(be_false());
+    expect!(results.len()).to(be_equal_to(3));
+  }
+
+  #[test_log::test]
+  fn get_mock_server_results_test_with_a_mix_of_mismatches_and_no_mismatches() {
+    let mismatches = hashmap! {
+      "$".to_string() => vec![
+        Mismatch::BodyMismatch {
+          path: "$".to_string(),
+          expected: None,
+          actual: None,
+          mismatch: "boom".to_string()
+        }
+      ]
+    };
+    let mock_results = hashmap!{
+      "Req/Path1".to_string() => (1, vec![ BodyMatchResult::BodyTypeMismatch {
+        expected_type: "blob".to_string(),
+        actual_type: "blob".to_string(),
+        message: "it was a blob".to_string(),
+        expected: None,
+        actual: None
+      } ]),
+      "Req/Path2".to_string() => (1, vec![ BodyMatchResult::Ok ]),
+      "Req/Path3".to_string() => (1, vec![ BodyMatchResult::BodyMismatches(mismatches) ])
+    };
+    let (ok, results) = ProtobufPactPlugin::get_mock_server_results(&mock_results);
+    expect!(ok).to(be_false());
+    expect!(results.len()).to(be_equal_to(3));
+  }
+
+  #[test_log::test]
+  fn get_mock_server_results_test_with_a_path_with_no_requests() {
+    let mock_results = hashmap!{
+      "Req/Path1".to_string() => (0, vec![]),
+      "Req/Path2".to_string() => (1, vec![ BodyMatchResult::Ok ]),
+      "Req/Path3".to_string() => (1, vec![ BodyMatchResult::Ok, BodyMatchResult::Ok ])
+    };
+    let (ok, results) = ProtobufPactPlugin::get_mock_server_results(&mock_results);
+    expect!(ok).to(be_false());
+    expect!(results.len()).to(be_equal_to(3));
+    let path_1_result = results.iter().find(|it| it.path == "Req/Path1").unwrap().clone();
+    expect!(path_1_result.error).to(be_equal_to("Did not receive any requests for path 'Req/Path1'"));
+  }
+
+  #[test_log::test(tokio::test)]
+  async fn start_mock_server_returns_an_error_if_the_pact_json_is_invalid() {
+    let plugin = ProtobufPactPlugin { manifest: Default::default() };
+    let request = proto::StartMockServerRequest {
+      host_interface: "".to_string(),
+      port: 0,
+      tls: false,
+      pact: "I'm not JSON!".to_string(),
+    };
+    let result = plugin.start_mock_server(Request::new(request)).await;
+    let response = result.unwrap();
+    if let Some(start_mock_server_response::Response::Error(message)) = &response.get_ref().response {
+      expect!(message.starts_with("Failed to parse Pact JSON")).to(be_true());
+    } else {
+      panic!("Was expecting an error message");
+    }
+  }
+
+  #[test_log::test(tokio::test)]
+  async fn start_mock_server_returns_an_error_if_the_pact_does_not_have_any_descriptors() {
+    let plugin = ProtobufPactPlugin { manifest: Default::default() };
+    let request = proto::StartMockServerRequest {
+      host_interface: "".to_string(),
+      port: 0,
+      tls: false,
+      pact: "{}".to_string(),
+    };
+    let result = plugin.start_mock_server(Request::new(request)).await;
+    let response = result.unwrap();
+    if let Some(start_mock_server_response::Response::Error(message)) = &response.get_ref().response {
+      expect!(message).to(be_equal_to("Provided Pact file does not have any Protobuf descriptors"));
+    } else {
+      panic!("Was expecting an error message");
+    }
+  }
+
+  #[test_log::test(tokio::test)]
+  async fn shutdown_mock_server_returns_an_error_if_the_server_key_was_not_found() {
+    let plugin = ProtobufPactPlugin { manifest: Default::default() };
+    let request = proto::ShutdownMockServerRequest {
+      server_key: "1234abcd".to_string(),
+    };
+    let result = plugin.shutdown_mock_server(Request::new(request)).await;
+    let response = result.unwrap();
+    let shutdown_response = response.get_ref();
+    expect!(shutdown_response.ok).to(be_false());
+    let error_response = shutdown_response.results.get(0).unwrap();
+    expect!(&error_response.error).to(be_equal_to("Did not find any mock server results for a server with ID 1234abcd"));
+  }
+
+  #[test_log::test(tokio::test)]
+  async fn get_mock_server_results_returns_an_error_if_the_server_key_was_not_found() {
+    let plugin = ProtobufPactPlugin { manifest: Default::default() };
+    let request = proto::MockServerRequest {
+      server_key: "1234abcd".to_string(),
+    };
+    let result = plugin.get_mock_server_results(Request::new(request)).await;
+    let response = result.unwrap();
+    let get_mock_server_results_response = response.get_ref();
+    expect!(get_mock_server_results_response.ok).to(be_false());
+    let error_response = get_mock_server_results_response.results.get(0).unwrap();
+    expect!(&error_response.error).to(be_equal_to("Did not find any mock server results for a server with ID 1234abcd"));
   }
 }
