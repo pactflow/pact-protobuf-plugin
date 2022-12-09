@@ -19,7 +19,7 @@ use reqwest::Url;
 use serde_json::Value;
 use tempfile::NamedTempFile;
 use tokio::process::Command;
-use tracing::{debug, trace};
+use tracing::{debug, error, trace};
 use zip::ZipArchive;
 
 /// Encapsulation over the Protocol Buffers compiler.
@@ -41,7 +41,7 @@ impl Protoc {
 
   /// Try to invoke the protoc binary
   async fn invoke(&self) -> anyhow::Result<String> {
-    trace!("Invoking protoc: '{} --version'", self.protoc_path);
+    debug!("Invoking protoc: '{} --version'", self.protoc_path);
     match Command::new(&self.protoc_path).arg("--version").output().await {
       Ok(out) => {
         if out.status.success() {
@@ -49,8 +49,8 @@ impl Protoc {
           debug!("Protoc binary invoked OK: {}", version);
           Ok(version.to_string())
         } else {
-          debug!("Protoc output: {}", from_utf8(out.stdout.as_slice()).unwrap_or_default());
-          debug!("Protoc stderr: {}", from_utf8(out.stderr.as_slice()).unwrap_or_default());
+          error!("Protoc output: {}", from_utf8(out.stdout.as_slice()).unwrap_or_default());
+          error!("Protoc stderr: {}", from_utf8(out.stderr.as_slice()).unwrap_or_default());
           Err(anyhow!("Failed to invoke protoc binary: exit code {}", out.status))
         }
       }
@@ -94,7 +94,7 @@ impl Protoc {
       cmd.arg(include2);
     }
 
-    trace!("Invoking protoc: {:?}", cmd);
+    debug!("Invoking protoc: {:?}", cmd);
     match cmd.output().await {
       Ok(out) => {
         if out.status.success() {
@@ -103,8 +103,8 @@ impl Protoc {
             .map(|descriptor| (descriptor, md5::compute(data.as_slice()), data))
             .map_err(|err| anyhow!("Failed to load file descriptor set - {}", err))
         } else {
-          debug!("Protoc output: {}", from_utf8(out.stdout.as_slice()).unwrap_or_default());
-          debug!("Protoc stderr: {}", from_utf8(out.stderr.as_slice()).unwrap_or_default());
+          error!("Protoc output: {}", from_utf8(out.stdout.as_slice()).unwrap_or_default());
+          error!("Protoc stderr: {}", from_utf8(out.stderr.as_slice()).unwrap_or_default());
           Err(anyhow!("Failed to invoke protoc binary: exit code {}", out.status))
         }
       }
