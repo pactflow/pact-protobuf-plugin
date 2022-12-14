@@ -1,3 +1,9 @@
+# 0.2.1 - Support Date/Time generators
+
+* b6be68d - feat: add partial support for generators with Protobufs (date/time only) (Ronald Holshausen, Wed Dec 14 17:20:38 2022 +1100)
+* ec3dd88 - fix: set the protoc command and error logs to better levels (Ronald Holshausen, Fri Dec 9 16:00:43 2022 +1100)
+* f992968 - bump version to 0.2.1 (Ronald Holshausen, Fri Nov 25 14:03:28 2022 +1100)
+
 # 0.2.0 - Bugfix Release
 
 * 04cb32d - chore: Bump minor version (Ronald Holshausen, Fri Nov 25 11:20:21 2022 +1100)
