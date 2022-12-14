@@ -40,11 +40,14 @@ pub fn proto_struct_to_btreemap(val: &prost_types::Struct) -> BTreeMap<String, V
 }
 
 /// Search for a message by type name in all the descriptors
-pub fn find_message_type_by_name(message_name: &str, descriptors: &FileDescriptorSet) -> anyhow::Result<DescriptorProto> {
+pub fn find_message_type_by_name(message_name: &str, descriptors: &FileDescriptorSet) -> anyhow::Result<(DescriptorProto, FileDescriptorProto)> {
   descriptors.file.iter()
-    .map(|descriptor| find_message_type_in_file_descriptor(message_name, descriptor).ok())
+    .map(|descriptor| {
+      find_message_type_in_file_descriptor(message_name, descriptor).map(|ds| (ds, descriptor)).ok()
+    })
     .find(|result| result.is_some())
     .flatten()
+    .map(|(m, f)| (m, f.clone()))
     .ok_or_else(|| anyhow!("Did not find a message type '{}' in the descriptors", message_name))
 }
 
@@ -502,10 +505,10 @@ pub(crate) mod tests {
     expect!(find_message_type_by_name("", &fds)).to(be_err());
     expect!(find_message_type_by_name("Does not exist", &fds)).to(be_err());
 
-    let result = find_message_type_by_name("AdBreakRequest", &fds).unwrap();
+    let (result, _) = find_message_type_by_name("AdBreakRequest", &fds).unwrap();
     expect!(result.name).to(be_some().value("AdBreakRequest"));
 
-    let result = find_message_type_by_name("AdBreakContext", &fds).unwrap();
+    let (result, _) = find_message_type_by_name("AdBreakContext", &fds).unwrap();
     expect!(result.name).to(be_some().value("AdBreakContext"));
   }
 

@@ -239,8 +239,8 @@ impl Service<Request<hyper::Body>> for GrpcMockServer  {
                 let output_message_name = method_descriptor.output_type.clone().unwrap_or_default();
                 let output_message = find_message_type_by_name(last_name(output_message_name.as_str()), file);
 
-                if let Ok(input_message) = input_message {
-                  if let Ok(output_message) = output_message {
+                if let Ok((input_message, _)) = input_message {
+                  if let Ok((output_message, _)) = output_message {
                     let codec = PactCodec::new(file, &input_message, &output_message, message);
                     let mock_service = MockService::new(file, service_name, method_descriptor, &input_message, &output_message, message, server_key.as_str());
                     let mut grpc = tonic::server::Grpc::new(codec);

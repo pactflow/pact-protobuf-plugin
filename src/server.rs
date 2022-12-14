@@ -1,6 +1,6 @@
 //! Module provides the main gRPC server for the plugin process
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::BufReader;
 
@@ -8,26 +8,34 @@ use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
 use maplit::hashmap;
 use pact_matching::{BodyMatchResult, Mismatch};
+use pact_models::generators::{GenerateValue, Generator, NoopVariantMatcher, VariantMatcher};
 use pact_models::json_utils::json_to_string;
 use pact_models::matchingrules::MatchingRule;
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::{ContentType, MatchingRuleCategory, OptionalBody, RuleLogic};
 use pact_plugin_driver::plugin_models::PactPluginManifest;
 use pact_plugin_driver::proto;
-use pact_plugin_driver::proto::{CompareContentsResponse, MockServerResult};
+use pact_plugin_driver::proto::{Body, body, CompareContentsRequest, CompareContentsResponse, GenerateContentRequest, GenerateContentResponse, MockServerResult, PluginConfiguration};
 use pact_plugin_driver::proto::body::ContentTypeHint;
 use pact_plugin_driver::proto::catalogue_entry::EntryType;
 use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
-use pact_plugin_driver::utils::{proto_struct_to_json, proto_struct_to_map, proto_value_to_json, proto_value_to_string, to_proto_value};
+use pact_plugin_driver::utils::{
+  proto_struct_to_json,
+  proto_struct_to_map,
+  proto_value_to_json,
+  proto_value_to_string,
+  to_proto_value
+};
 use pact_verifier::verification_result::MismatchResult;
+use prost_types::{DescriptorProto, FileDescriptorProto, FileDescriptorSet};
 use serde_json::Value;
 use tonic::{Request, Response, Status};
 use tonic::metadata::KeyAndValueRef;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, instrument, trace};
 
 use crate::dynamic_message::DynamicMessage;
 use crate::matching::{match_message, match_service};
-use crate::message_decoder::decode_message;
+use crate::message_decoder::{decode_message, ProtobufField};
 use crate::mock_server::{GrpcMockServer, MOCK_SERVER_STATE};
 use crate::protobuf::process_proto;
 use crate::protoc::setup_protoc;
@@ -138,6 +146,217 @@ impl ProtobufPactPlugin {
     }).collect();
     (ok, results)
   }
+
+  fn compare_contents_impl(&self, request: &CompareContentsRequest) -> anyhow::Result<CompareContentsResponse> {
+    // Check for the plugin specific configuration for the interaction
+    let plugin_configuration = request.plugin_configuration.clone().unwrap_or_default();
+    let interaction_config = get_interaction_config(&plugin_configuration)?;
+
+    // From the plugin configuration for the interaction, get the descriptor key. This key is used
+    // to lookup the encoded Protobuf descriptors in the Pact level plugin configuration
+    let message_key = Self::lookup_message_key(&interaction_config)?;
+    debug!("compare_contents: message_key = {}", message_key);
+
+    // From the plugin configuration for the interaction, there should be either a message type name
+    // or a service name. Check for either.
+    let (message, service) = Self::lookup_message_and_service(interaction_config)?;
+
+    let descriptors = Self::lookup_descriptors(plugin_configuration, message_key)?;
+
+    let mut expected_body = request.expected.as_ref()
+      .and_then(|body| body.content.clone().map(Bytes::from))
+      .unwrap_or_default();
+    let mut actual_body = request.actual.as_ref()
+      .map(|body| body.content.clone().map(Bytes::from))
+      .flatten()
+      .unwrap_or_default();
+    let mut matching_rules = MatchingRuleCategory::empty("body");
+    for (key, rules) in &request.rules {
+      for rule in &rules.rule {
+        let values = rule.values.as_ref().map(proto_struct_to_json).unwrap_or_default();
+        let doc_path = match DocPath::new(key) {
+          Ok(path) => path,
+          Err(err) => return Err(anyhow!(err))
+        };
+        let matching_rule = match MatchingRule::create(&rule.r#type, &values) {
+          Ok(rule) => rule,
+          Err(err) => return Err(anyhow!(err))
+        };
+        matching_rules.add_rule(doc_path, matching_rule, RuleLogic::And);
+      }
+    }
+
+    let result = if let Some(message_name) = message {
+      debug!("Received compare_contents request for message {}", message_name);
+      match_message(
+        message_name.as_str(),
+        &descriptors,
+        &mut expected_body,
+        &mut actual_body,
+        &matching_rules,
+        request.allow_unexpected_keys
+      )
+    } else if let Some(service_name) = service {
+      debug!("Received compareContents request for service {}", service_name);
+      let (service, method) = match service_name.split_once('/') {
+        Some(result) => result,
+        None => return Err(anyhow!("Service name '{}' is not valid, it should be of the form <SERVICE>/<METHOD>", service_name))
+      };
+      let content_type = request.expected.as_ref().map(|body| body.content_type.clone())
+        .unwrap_or_default();
+      let expected_content_type = match ContentType::parse(content_type.as_str()) {
+        Ok(ct) => ct,
+        Err(err) => return Err(anyhow!("Expected content type is not set or not valid - {}", err))
+      };
+      match_service(
+        service,
+        method,
+        &descriptors,
+        &mut expected_body,
+        &mut actual_body,
+        &matching_rules,
+        request.allow_unexpected_keys,
+        &expected_content_type
+      )
+    } else {
+      Err(anyhow!("Did not get a message or service to match"))
+    };
+
+    match result {
+      Ok(result) => match result {
+        BodyMatchResult::Ok => Ok(proto::CompareContentsResponse::default()),
+        BodyMatchResult::BodyTypeMismatch { message, expected_type, actual_type, .. } => {
+          error!("Got a BodyTypeMismatch - {}", message);
+          Ok(CompareContentsResponse {
+            type_mismatch: Some(proto::ContentTypeMismatch {
+              expected: expected_type.clone(),
+              actual: actual_type.clone()
+            }),
+            ..proto::CompareContentsResponse::default()
+          })
+        }
+        BodyMatchResult::BodyMismatches(mismatches) => {
+          Ok(CompareContentsResponse {
+            results: mismatches.iter().map(|(k, v)| {
+              (k.clone(), proto::ContentMismatches {
+                mismatches: v.iter().map(mismatch_to_proto_mismatch).collect()
+              })
+            }).collect(),
+            ..proto::CompareContentsResponse::default()
+          })
+        }
+      }
+      Err(err) => Err(err)
+    }
+  }
+
+  fn lookup_descriptors(plugin_configuration: PluginConfiguration, message_key: String) -> anyhow::Result<FileDescriptorSet> {
+    let pact_configuration = plugin_configuration.pact_configuration.unwrap_or_default();
+    debug!("Pact level configuration keys: {:?}", pact_configuration.fields.keys());
+
+    let config_for_interaction = pact_configuration.fields.iter()
+      .map(|(key, config)| (key.clone(), proto_value_to_json(config)))
+      .collect();
+    get_descriptors_for_interaction(message_key.as_str(), &config_for_interaction)
+  }
+
+  fn lookup_message_and_service(
+    interaction_config: BTreeMap<String, prost_types::Value>
+  ) -> anyhow::Result<(Option<String>, Option<String>)> {
+    let message = interaction_config.get("message").and_then(proto_value_to_string);
+    let service = interaction_config.get("service").and_then(proto_value_to_string);
+    if message.is_none() && service.is_none() {
+      error!("Plugin configuration item with key 'message' or 'service' is required");
+      Err(anyhow!("Plugin configuration item with key 'message' or 'service' is required"))
+    } else {
+      Ok((message, service))
+    }
+  }
+
+  fn lookup_message_key(interaction_config: &BTreeMap<String, prost_types::Value>) -> anyhow::Result<String> {
+    match interaction_config.get("descriptorKey").and_then(proto_value_to_string) {
+      Some(key) => Ok(key),
+      None => {
+        error!("Plugin configuration item with key 'descriptorKey' is required");
+        Err(anyhow!("Plugin configuration item with key 'descriptorKey' is required"))
+      }
+    }
+  }
+
+  #[instrument(ret, fields(request))]
+  fn generate_contents_impl(&self, request: &GenerateContentRequest) -> anyhow::Result<GenerateContentResponse> {
+    // Check for the plugin specific configuration for the interaction
+    let plugin_configuration = request.plugin_configuration.clone().unwrap_or_default();
+    let interaction_config = get_interaction_config(&plugin_configuration)?;
+
+    // From the plugin configuration for the interaction, get the descriptor key. This key is used
+    // to lookup the encoded Protobuf descriptors in the Pact level plugin configuration
+    let message_key = Self::lookup_message_key(&interaction_config)?;
+    debug!("generate_contents: message_key = {}", message_key);
+
+    let descriptors = Self::lookup_descriptors(plugin_configuration, message_key)?;
+
+    if let Some(contents) = &request.contents {
+      let content_type = ContentType::parse(contents.content_type.as_str())?;
+      match content_type.attributes.get("message") {
+        Some(message_type) => {
+          debug!("Generating contents for message {}", message_type);
+          let (message_descriptor, file_descriptor) = find_message_type_by_name(message_type, &descriptors)?;
+          let mut body = contents.content.clone().map(Bytes::from).unwrap_or_default();
+          if body.is_empty() {
+            Ok(GenerateContentResponse::default())
+          } else {
+            let message = decode_message(&mut body, &message_descriptor, &descriptors)?;
+            debug!("message to generate = {:?}", message);
+            let generated_message = generate_protobuf_contents(&message, &content_type, &request.generators,
+              &message_descriptor, &file_descriptor, &descriptors)?;
+            Ok(GenerateContentResponse {
+              contents: Some(generated_message),
+            })
+          }
+        }
+        None => Err(anyhow!("Content type does not contain a message attribute"))
+      }
+    } else {
+      Ok(GenerateContentResponse::default())
+    }
+  }
+}
+
+#[instrument]
+fn generate_protobuf_contents(
+  fields: &Vec<ProtobufField>,
+  content_type: &ContentType,
+  generators: &HashMap<String, proto::Generator>,
+  message_descriptor: &DescriptorProto,
+  file_descriptor: &FileDescriptorProto,
+  all_descriptors: &FileDescriptorSet
+) -> anyhow::Result<Body> {
+  let mut message = DynamicMessage::new(fields, all_descriptors);
+  let variant_matcher = NoopVariantMatcher {};
+  let vm_boxed = variant_matcher.boxed();
+  let context = hashmap!{};
+
+  for (key, generator) in generators {
+    let path = DocPath::new(key)?;
+    let value = message.fetch_value(&path);
+    if let Some(value) = value {
+      let generator_values = generator.values.as_ref().map(proto_struct_to_json).unwrap_or_default();
+      let generator = Generator::create(generator.r#type.as_str(),
+                                        &generator_values)?;
+      let generated_value = generator.generate_value(&value.data, &context, &vm_boxed)?;
+      message.set_value(&path, generated_value)?;
+    }
+  }
+
+  trace!(?message, "Writing generated message");
+  let mut buffer = BytesMut::new();
+  message.write_to(&mut buffer)?;
+  Ok(Body {
+    content_type: content_type.to_string(),
+    content: Some(buffer.to_vec()),
+    content_type_hint: i32::from(body::ContentTypeHint::Binary),
+  })
 }
 
 #[tonic::async_trait]
@@ -191,139 +410,13 @@ impl PactPlugin for ProtobufPactPlugin {
   // Request to compare the contents and return the results of the comparison.
   async fn compare_contents(
     &self,
-    request: Request<proto::CompareContentsRequest>,
-  ) -> Result<Response<proto::CompareContentsResponse>, Status> {
+    request: Request<CompareContentsRequest>,
+  ) -> Result<Response<CompareContentsResponse>, Status> {
     trace!("Got compare_contents request {:?}", request.get_ref());
-
     let request = request.get_ref();
-
-    // Check for the plugin specific configuration for the interaction
-    let plugin_configuration = request.plugin_configuration.clone().unwrap_or_default();
-    let interaction_config = plugin_configuration.interaction_configuration.as_ref()
-      .map(|config| &config.fields);
-    let interaction_config = match interaction_config {
-      Some(config) => config,
-      None => {
-        error!("Plugin configuration for the interaction is required");
-        return Self::error_response("Plugin configuration for the interaction is required")
-      }
-    };
-
-    // From the plugin configuration for the interaction, get the descriptor key. This key is used
-    // to lookup the encoded Protobuf descriptors in the Pact level plugin configuration
-    let message_key = match interaction_config.get("descriptorKey").and_then(proto_value_to_string) {
-      Some(key) => key,
-      None => {
-        error!("Plugin configuration item with key 'descriptorKey' is required");
-        return Self::error_response("Plugin configuration item with key 'descriptorKey' is required");
-      }
-    };
-    debug!("compare_contents: message_key = {}", message_key);
-
-    // From the plugin configuration for the interaction, there should be either a message type name
-    // or a service name. Check for either.
-    let message = interaction_config.get("message").and_then(proto_value_to_string);
-    let service = interaction_config.get("service").and_then(proto_value_to_string);
-    if message.is_none() && service.is_none() {
-      error!("Plugin configuration item with key 'message' or 'service' is required");
-      return Self::error_response("Plugin configuration item with key 'message' or 'service' is required");
-    }
-
-    let pact_configuration = plugin_configuration.pact_configuration.unwrap_or_default();
-    debug!("Pact level configuration keys: {:?}", pact_configuration.fields.keys());
-
-    let config_for_interaction = pact_configuration.fields.iter()
-      .map(|(key, config)| (key.clone(), proto_value_to_json(config)))
-      .collect();
-    let descriptors = match get_descriptors_for_interaction(message_key.as_str(), &config_for_interaction) {
-      Ok(descriptors) => descriptors,
-      Err(err) => return Self::error_response(err.to_string())
-    };
-
-    let mut expected_body = request.expected.as_ref()
-      .and_then(|body| body.content.clone().map(Bytes::from))
-      .unwrap_or_default();
-    let mut actual_body = request.actual.as_ref()
-      .map(|body| body.content.clone().map(Bytes::from))
-      .flatten()
-      .unwrap_or_default();
-    let mut matching_rules = MatchingRuleCategory::empty("body");
-    for (key, rules) in &request.rules {
-      for rule in &rules.rule {
-        let values = rule.values.as_ref().map(proto_struct_to_json).unwrap_or_default();
-        let doc_path = match DocPath::new(key) {
-          Ok(path) => path,
-          Err(err) => return Self::error_response(err.to_string())
-        };
-        let matching_rule = match MatchingRule::create(&rule.r#type, &values) {
-          Ok(rule) => rule,
-          Err(err) => return Self::error_response(err.to_string())
-        };
-        matching_rules.add_rule(doc_path, matching_rule, RuleLogic::And);
-      }
-    }
-
-    let result = if let Some(message_name) = message {
-      debug!("Received compareContents request for message {}", message_name);
-      match_message(
-        message_name.as_str(),
-        &descriptors,
-        &mut expected_body,
-        &mut actual_body,
-        &matching_rules,
-        request.allow_unexpected_keys
-      )
-    } else if let Some(service_name) = service {
-      debug!("Received compareContents request for service {}", service_name);
-      let (service, method) = match service_name.split_once('/') {
-        Some(result) => result,
-        None => return Self::error_response(format!("Service name '{}' is not valid, it should be of the form <SERVICE>/<METHOD>", service_name))
-      };
-      let content_type = request.expected.as_ref().map(|body| body.content_type.clone())
-        .unwrap_or_default();
-      let expected_content_type = match ContentType::parse(content_type.as_str()) {
-        Ok(ct) => ct,
-        Err(err) => return Self::error_response(format!("Expected content type is not set or not valid - {}", err))
-      };
-      match_service(
-        service,
-        method,
-        &descriptors,
-        &mut expected_body,
-        &mut actual_body,
-        &matching_rules,
-        request.allow_unexpected_keys,
-        &expected_content_type
-      )
-    } else {
-      Err(anyhow!("Did not get a message or service to match"))
-    };
-
-    return match result {
-      Ok(result) => match result {
-        BodyMatchResult::Ok => Ok(tonic::Response::new(proto::CompareContentsResponse::default())),
-        BodyMatchResult::BodyTypeMismatch { message, expected_type, actual_type, .. } => {
-          error!("Got a BodyTypeMismatch - {}", message);
-          Ok(tonic::Response::new(proto::CompareContentsResponse {
-            type_mismatch: Some(proto::ContentTypeMismatch {
-              expected: expected_type,
-              actual: actual_type
-            }),
-            .. proto::CompareContentsResponse::default()
-          }))
-        }
-        BodyMatchResult::BodyMismatches(mismatches) => {
-          Ok(tonic::Response::new(proto::CompareContentsResponse {
-            results: mismatches.iter().map(|(k, v)| {
-              (k.clone(), proto::ContentMismatches {
-                mismatches: v.iter().map(mismatch_to_proto_mismatch).collect()
-              })
-            }).collect(),
-            .. proto::CompareContentsResponse::default()
-          }))
-        }
-      }
-      Err(err) => Self::error_response(format!("Failed to compare the Protobuf messages - {}", err))
+    match self.compare_contents_impl(&request) {
+      Ok(result) => Ok(Response::new(result)),
+      Err(err) => Self::error_response(err.to_string())
     }
   }
 
@@ -392,14 +485,14 @@ impl PactPlugin for ProtobufPactPlugin {
   // Request to generate the contents of the interaction.
   async fn generate_content(
     &self,
-    request: Request<proto::GenerateContentRequest>,
-  ) -> Result<Response<proto::GenerateContentResponse>, Status> {
-    debug!("Generate content request");
+    request: Request<GenerateContentRequest>,
+  ) -> Result<Response<GenerateContentResponse>, Status> {
     let message = request.get_ref();
-    // TODO: apply any generators here
-    Ok(tonic::Response::new(proto::GenerateContentResponse {
-      contents: message.contents.clone()
-    }))
+    debug!("Generate content request {:?}", message);
+    match self.generate_contents_impl(&message) {
+      Ok(result) => Ok(Response::new(result)),
+      Err(err) => Err(Status::aborted(err.to_string()))
+    }
   }
 
   async fn start_mock_server(
@@ -549,7 +642,7 @@ impl PactPlugin for ProtobufPactPlugin {
     let mut raw_request_body = interaction.request.contents.value().unwrap_or_default();
     let input_message_name = method_desc.input_type.clone().unwrap_or_default();
     let input_message = match find_message_type_by_name(last_name(input_message_name.as_str()), &file_desc) {
-      Ok(message) => message,
+      Ok(message) => message.0,
       Err(err) => {
         return Ok(Response::new(proto::VerificationPreparationResponse {
           response: Some(proto::verification_preparation_response::Response::Error(err.to_string())),
@@ -560,7 +653,7 @@ impl PactPlugin for ProtobufPactPlugin {
 
     // TODO: use any generators here
     let decoded_body = match decode_message(&mut raw_request_body, &input_message, &file_desc) {
-      Ok(message) => DynamicMessage::new(&message),
+      Ok(message) => DynamicMessage::new(&message, &file_desc),
       Err(err) => {
         return Ok(Response::new(proto::VerificationPreparationResponse {
           response: Some(proto::verification_preparation_response::Response::Error(err.to_string())),
@@ -725,6 +818,18 @@ impl PactPlugin for ProtobufPactPlugin {
           .. proto::VerifyInteractionResponse::default()
         }))
       }
+    }
+  }
+}
+
+fn get_interaction_config(config: &PluginConfiguration) -> anyhow::Result<BTreeMap<String, prost_types::Value>> {
+  let interaction_config = config.interaction_configuration.as_ref()
+    .map(|config| &config.fields);
+  match interaction_config {
+    Some(config) => Ok(config.clone()),
+    None => {
+      error!("Plugin configuration for the interaction is required");
+      Err(anyhow!("Plugin configuration for the interaction is required"))
     }
   }
 }

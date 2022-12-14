@@ -32,7 +32,7 @@ pub fn match_message(
   allow_unexpected_keys: bool
 ) -> anyhow::Result<BodyMatchResult> {
   debug!("Looking for message '{}'", message_name);
-  let message_descriptor = find_message_type_by_name(message_name, descriptors)?;
+  let (message_descriptor, _) = find_message_type_by_name(message_name, descriptors)?;
 
   let expected_message = decode_message(expected_request, &message_descriptor, descriptors)?;
   debug!("expected message = {:?}", expected_message);
@@ -754,7 +754,7 @@ mod tests {
     let bytes1 = Bytes::copy_from_slice(bytes.as_slice());
     let fds = FileDescriptorSet::decode(bytes1).unwrap();
 
-    let message_descriptor = find_message_type_by_name("InitPluginResponse", &fds).unwrap();
+    let (message_descriptor, _) = find_message_type_by_name("InitPluginResponse", &fds).unwrap();
 
     let path = DocPath::new("$").unwrap();
     let context = CoreMatchingContext::new(DiffConfig::AllowUnexpectedKeys, &matchingrules_list! {
@@ -899,15 +899,17 @@ mod tests {
     };
     let expected = vec![
       ProtobufField { 
-        field_num: 1, 
-        wire_type: WireType::LengthDelimited, 
+        field_num: 1,
+        field_name: "catalogue".to_string(),
+        wire_type: WireType::LengthDelimited,
         data: ProtobufFieldData::Message(vec![8, 0, 18, 4, 116, 101, 115, 116], descriptor.clone()) 
       }
     ];
     let actual = vec![
         ProtobufField { 
-          field_num: 1, 
-          wire_type: WireType::LengthDelimited, 
+          field_num: 1,
+          field_name: "catalogue".to_string(),
+          wire_type: WireType::LengthDelimited,
           data: ProtobufFieldData::Message(vec![18, 8, 112, 114, 111, 116, 111, 98, 117, 102, 26, 54, 10, 13, 99, 111, 110, 116, 101, 110, 116, 45, 116, 121, 112, 101, 115, 18, 37, 97, 112, 112, 108, 105, 99, 97, 116, 105, 111, 110, 47, 112, 114, 111, 116, 111, 98, 117, 102, 59, 97, 112, 112, 108, 105, 99, 97, 116, 105, 111, 110, 47, 103, 114, 112, 99], descriptor.clone())
         }
     ];

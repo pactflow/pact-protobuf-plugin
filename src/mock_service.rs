@@ -74,7 +74,7 @@ impl MockService {
               error!("Failed to encode response message - {}", err);
               Status::invalid_argument(err.to_string())
             })?;
-          let message = DynamicMessage::new(&response_message);
+          let message = DynamicMessage::new(&response_message, &self.file_descriptor_set);
           trace!("Sending message {message:?}");
           Ok(Response::new(message))
         } else {
