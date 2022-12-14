@@ -56,9 +56,9 @@ pub async fn verify_interaction(
 
   let (file_desc, service_desc, method_desc, _) = lookup_service_descriptors_for_interaction(interaction, pact)?;
   let input_message_name = method_desc.input_type.clone().unwrap_or_default();
-  let input_message = find_message_type_by_name(last_name(input_message_name.as_str()), &file_desc)?;
+  let input_message = find_message_type_by_name(last_name(input_message_name.as_str()), &file_desc)?.0;
   let output_message_name = method_desc.output_type.clone().unwrap_or_default();
-  let output_message = find_message_type_by_name(last_name(output_message_name.as_str()), &file_desc)?;
+  let output_message = find_message_type_by_name(last_name(output_message_name.as_str()), &file_desc)?.0;
 
   match build_grpc_request(request_body, metadata, &file_desc, &input_message) {
     Ok(request) => match make_grpc_request(request, config, metadata, &file_desc, &input_message, &output_message, interaction).await {
@@ -216,7 +216,7 @@ fn build_grpc_request(
 ) -> anyhow::Result<tonic::Request<DynamicMessage>> {
   let mut bytes = body.value().unwrap_or_default();
   let message_fields = decode_message(&mut bytes, input_desc, file_desc)?;
-  let mut request = tonic::Request::new(DynamicMessage::new(&message_fields));
+  let mut request = tonic::Request::new(DynamicMessage::new(&message_fields, &file_desc));
   let request_metadata = request.metadata_mut();
   for (key, md) in metadata {
     if key != "request-path" {

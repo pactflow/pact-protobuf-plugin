@@ -1,13 +1,11 @@
 use std::fs;
 use std::panic::catch_unwind;
 use std::path::Path;
-use anyhow::anyhow;
 
 use expectest::prelude::*;
 use pact_consumer::mock_server::StartMockServerAsync;
 use pact_consumer::prelude::PactBuilderAsync;
 use serde_json::json;
-use futures::FutureExt;
 
 async fn mock_server_block() {
   let mut pact_builder = PactBuilderAsync::new_v4("null-and-void", "protobuf-plugin");
@@ -81,6 +79,6 @@ fn mock_server_with_no_requests() {
 
     let error = result.unwrap_err();
     let error_message = panic_message::panic_message(&error);
-    expect!(error_message).to(be_equal_to("plugin mock server failed verification:\n    1) Test/GetTest: Did not receive any requests for path\n"));
+    expect!(error_message).to(be_equal_to("plugin mock server failed verification:\n    1) Test/GetTest: Did not receive any requests for path 'Test/GetTest'\n"));
   }
 }

@@ -1,15 +1,22 @@
 //! Decoder for encoded Protobuf messages using the descriptors
 
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::mem;
 use std::str::from_utf8;
 
 use anyhow::anyhow;
 use bytes::{Buf, Bytes, BytesMut};
+use chrono::{DateTime, Local};
 use itertools::Itertools;
+use pact_models::generators::{GenerateValue, Generator, VariantMatcher};
+use pact_models::generators::datetime_expressions::{execute_date_expression, execute_datetime_expression, execute_time_expression};
+use pact_models::json_utils::json_to_string;
+use pact_models::time_utils::{parse_pattern, to_chrono_pattern};
 use prost::encoding::{decode_key, decode_varint, encode_varint, WireType};
 use prost_types::{DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, FileDescriptorSet};
 use prost_types::field_descriptor_proto::Type;
+use serde_json::Value;
 use tracing::{debug, error, trace, warn};
 
 use crate::utils::{
@@ -27,6 +34,8 @@ use crate::utils::{
 pub struct ProtobufField {
   /// Field number
   pub field_num: u32,
+  /// Field name
+  pub field_name: String,
   /// Wire type for the field
   pub wire_type: WireType,
   /// Field data
@@ -38,6 +47,7 @@ impl ProtobufField {
   pub fn default_field_value(&self, descriptor: &FieldDescriptorProto) -> ProtobufField {
     ProtobufField {
       field_num: self.field_num,
+      field_name: self.field_name.clone(),
       wire_type: self.wire_type,
       data: self.data.default_field_value(descriptor)
     }
@@ -46,7 +56,7 @@ impl ProtobufField {
 
 impl Display for ProtobufField {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    write!(f, "{}:({:?}, {}) = {}", self.field_num, self.wire_type, self.data.type_name(), self.data)
+    write!(f, "{}:({}, {:?}, {}) = {}", self.field_num, self.field_name, self.wire_type, self.data.type_name(), self.data)
   }
 }
 
@@ -199,6 +209,187 @@ impl Display for ProtobufFieldData {
   }
 }
 
+impl GenerateValue<ProtobufFieldData> for Generator {
+  fn generate_value(&self,
+    value: &ProtobufFieldData,
+    context: &HashMap<&str, Value>,
+    matcher: &Box<dyn VariantMatcher + Send + Sync>
+  ) -> anyhow::Result<ProtobufFieldData> {
+    let result = match self {
+      Generator::RandomInt(min, max) => {
+        // let rand_int = rand::thread_rng().gen_range(*min..max.saturating_add(1));
+        match value {
+          // Value::String(_) => Ok(json!(format!("{}", rand_int))),
+          // Value::Number(_) => Ok(json!(rand_int)),
+          _ => Err(anyhow!("Could not generate a random int from {}", value))
+        }
+      },
+      // Generator::Uuid(format) => match value {
+      //   Value::String(_) => match format.unwrap_or_default() {
+      //     UuidFormat::Simple => Ok(json!(Uuid::new_v4().as_simple().to_string())),
+      //     UuidFormat::LowerCaseHyphenated => Ok(json!(Uuid::new_v4().as_hyphenated().to_string())),
+      //     UuidFormat::UpperCaseHyphenated => Ok(json!(Uuid::new_v4().as_hyphenated().to_string().to_uppercase())),
+      //     UuidFormat::Urn => Ok(json!(Uuid::new_v4().as_urn().to_string()))
+      //   },
+      //   _ => Err(anyhow!("Could not generate a UUID from {}", value))
+      // },
+      // Generator::RandomDecimal(digits) => match value {
+      //   Value::String(_) => Ok(json!(generate_decimal(*digits as usize))),
+      //   Value::Number(_) => match generate_decimal(*digits as usize).parse::<f64>() {
+      //     Ok(val) => Ok(json!(val)),
+      //     Err(err) => Err(anyhow!("Could not generate a random decimal from {} - {}", value, err))
+      //   },
+      //   _ => Err(anyhow!("Could not generate a random decimal from {}", value))
+      // },
+      // Generator::RandomHexadecimal(digits) => match value {
+      //   Value::String(_) => Ok(json!(generate_hexadecimal(*digits as usize))),
+      //   _ => Err(anyhow!("Could not generate a random hexadecimal from {}", value))
+      // },
+      // Generator::RandomString(size) => match value {
+      //   Value::String(_) => Ok(json!(generate_ascii_string(*size as usize))),
+      //   _ => Err(anyhow!("Could not generate a random string from {}", value))
+      // },
+      // Generator::Regex(ref regex) => {
+      //   let mut parser = regex_syntax::ParserBuilder::new().unicode(false).build();
+      //   match parser.parse(regex) {
+      //     Ok(hir) => {
+      //       let gen = rand_regex::Regex::with_hir(hir, 20).unwrap();
+      //       Ok(json!(rand::thread_rng().sample::<String, _>(gen)))
+      //     },
+      //     Err(err) => {
+      //       warn!("'{}' is not a valid regular expression - {}", regex, err);
+      //       Err(anyhow!("Could not generate a random string from {} - {}", regex, err))
+      //     }
+      //   }
+      // },
+      Generator::Date(ref format, exp) => {
+        let base = match context.get("baseDate") {
+          None => Local::now(),
+          Some(d) => json_to_string(d).parse::<DateTime<Local>>()?
+        };
+        let date = execute_date_expression(&base, exp.clone().unwrap_or_default().as_str())?;
+        let result = match format {
+          Some(pattern) => match parse_pattern(pattern) {
+            Ok(tokens) => {
+              #[allow(deprecated)]
+              Ok(date.date().format(&to_chrono_pattern(&tokens)).to_string())
+            },
+            Err(err) => {
+              warn!("Date format {} is not valid - {}", pattern, err);
+              Err(anyhow!("Could not generate a random date from {} - {}", pattern, err))
+            }
+          },
+          None => Ok(date.naive_local().date().to_string())
+        };
+        result.and_then(|v| {
+          match value {
+            ProtobufFieldData::String(_) => Ok(ProtobufFieldData::String(v)),
+            _ => Err(anyhow!("Can not generate a date value for a field type {:?}", value))
+          }
+        })
+      },
+      Generator::Time(ref format, exp) => {
+        let base = match context.get("baseTime") {
+          None => Local::now(),
+          Some(d) => json_to_string(d).parse::<DateTime<Local>>()?
+        };
+        let time = execute_time_expression(&base, exp.clone().unwrap_or_default().as_str())?;
+        let result = match format {
+          Some(pattern) => match parse_pattern(pattern) {
+            Ok(tokens) => {
+              #[allow(deprecated)]
+              Ok(time.time().format(&to_chrono_pattern(&tokens)).to_string())
+            },
+            Err(err) => {
+              warn!("Time format {} is not valid - {}", pattern, err);
+              Err(anyhow!("Could not generate a random time from {} - {}", pattern, err))
+            }
+          },
+          None => Ok(time.naive_local().time().to_string())
+        };
+        result.and_then(|v| {
+          match value {
+            ProtobufFieldData::String(_) => Ok(ProtobufFieldData::String(v)),
+            _ => Err(anyhow!("Can not generate a time value for a field type {:?}", value))
+          }
+        })
+      },
+      Generator::DateTime(ref format, exp) => {
+        let base = match context.get("baseDateTime") {
+          None => Local::now(),
+          Some(d) => json_to_string(d).parse::<DateTime<Local>>()?
+        };
+        let date_time = execute_datetime_expression(&base, exp.clone().unwrap_or_default().as_str())?;
+        let result = match format {
+          Some(pattern) => match parse_pattern(pattern) {
+            Ok(tokens) => {
+              #[allow(deprecated)]
+              Ok(date_time.format(&to_chrono_pattern(&tokens)).to_string())
+            },
+            Err(err) => {
+              warn!("Date format {} is not valid - {}", pattern, err);
+              Err(anyhow!("Could not generate a random date-time from {} - {}", pattern, err))
+            }
+          },
+          None => Ok(date_time.format("%Y-%m-%dT%H:%M:%S.%3f%z").to_string())
+        };
+        result.and_then(|v| {
+          match value {
+            ProtobufFieldData::String(_) => Ok(ProtobufFieldData::String(v)),
+            _ => Err(anyhow!("Can not generate a date-time value for a field type {:?}", value))
+          }
+        })
+      },
+      // Generator::RandomBoolean => Ok(json!(rand::thread_rng().gen::<bool>())),
+      // Generator::ProviderStateGenerator(ref exp, ref dt) =>
+      //   match generate_value_from_context(exp, context, dt) {
+      //     Ok(val) => val.as_json(),
+      //     Err(err) => Err(err)
+      //   },
+      // Generator::MockServerURL(example, regex) => {
+      //   debug!("context = {:?}", context);
+      //   if let Some(mock_server_details) = context.get("mockServer") {
+      //     match mock_server_details.as_object() {
+      //       Some(mock_server_details) => {
+      //         match get_field_as_string("href", mock_server_details) {
+      //           Some(url) => match Regex::new(regex) {
+      //             Ok(re) => Ok(Value::String(replace_with_regex(example, url, re))),
+      //             Err(err) => Err(anyhow!("MockServerURL: Failed to generate value: {}", err))
+      //           },
+      //           None => Err(anyhow!("MockServerURL: can not generate a value as there is no mock server URL in the test context"))
+      //         }
+      //       },
+      //       None => Err(anyhow!("MockServerURL: can not generate a value as the mock server details in the test context is not an Object"))
+      //     }
+      //   } else {
+      //     Err(anyhow!("MockServerURL: can not generate a value as there is no mock server details in the test context"))
+      //   }
+      // }
+      // Generator::ArrayContains(variants) => match value {
+      //   Value::Array(vec) => {
+      //     let mut result = vec.clone();
+      //     for (index, value) in vec.iter().enumerate() {
+      //       if let Some((variant, generators)) = matcher.find_matching_variant(value, variants) {
+      //         debug!("Generating values for variant {} and value {}", variant, value);
+      //         let mut handler = JsonHandler { value: value.clone() };
+      //         for (key, generator) in generators {
+      //           handler.apply_key(&key, &generator, context, matcher);
+      //         };
+      //         debug!("Generated value {}", handler.value);
+      //         result[index] = handler.value.clone();
+      //       }
+      //     }
+      //     Ok(Value::Array(result))
+      //   }
+      //   _ => Err(anyhow!("can only use ArrayContains with lists"))
+      // }
+      _ => Err(anyhow!("Generator type {} is not currently supported for {:?}", self.name(), value))
+    };
+    debug!("Generated value = {:?}", result);
+    result
+  }
+}
+
 /// Decodes the Protobuf message using the descriptors
 #[tracing::instrument(ret, skip_all)]
 pub fn decode_message<B>(
@@ -215,6 +406,7 @@ pub fn decode_message<B>(
 
     match find_field_descriptor(field_num as i32, descriptor) {
       Ok(field_descriptor) => {
+        let field_name = field_descriptor.name.clone().unwrap_or_default();
         let data = match wire_type {
           WireType::Varint => {
             let varint = decode_varint(buffer)?;
@@ -271,7 +463,7 @@ pub fn decode_message<B>(
                 let message_proto = descriptor.nested_type.iter()
                   .find(|message_descriptor| message_descriptor.name == type_name)
                   .cloned()
-                  .or_else(|| find_message_type_by_name(&type_name.unwrap_or_default(), descriptors).ok())
+                  .or_else(|| find_message_type_by_name(&type_name.unwrap_or_default(), descriptors).map(|(m, _)| m).ok())
                   .ok_or_else(|| anyhow!("Did not find the embedded message {:?} for the field {} in the Protobuf descriptor", field_descriptor.type_name, field_num))?;
                 vec![ (ProtobufFieldData::Message(data_buffer.to_vec(), message_proto), wire_type) ]
               }
@@ -308,6 +500,7 @@ pub fn decode_message<B>(
         for (data, wire_type) in data {
           fields.push(ProtobufField {
             field_num,
+            field_name: field_name.clone(),
             wire_type,
             data
           });
@@ -330,6 +523,7 @@ pub fn decode_message<B>(
         };
         fields.push(ProtobufField {
           field_num,
+          field_name: "unknown".to_string(),
           wire_type,
           data: ProtobufFieldData::Unknown(data)
         });
@@ -437,23 +631,26 @@ fn find_field_descriptor(field_num: i32, descriptor: &DescriptorProto) -> anyhow
 mod tests {
   use bytes::{BufMut, Bytes, BytesMut};
   use expectest::prelude::*;
+  use maplit::hashmap;
+  use pact_matching::generators::DefaultVariantMatcher;
+  use pact_models::generators::{GenerateValue, Generator, VariantMatcher};
   use pact_plugin_driver::proto::InitPluginRequest;
   use prost::encoding::WireType;
   use prost::Message;
   use prost_types::{DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto, FileDescriptorSet};
 
   use crate::{
-    bool_field_descriptor, 
-    message_field_descriptor, 
-    string_field_descriptor,
+    bool_field_descriptor,
+    bytes_field_descriptor,
     enum_field_descriptor,
-    u32_field_descriptor,
-    i32_field_descriptor,
-    u64_field_descriptor,
-    i64_field_descriptor,
     f32_field_descriptor,
     f64_field_descriptor,
-    bytes_field_descriptor
+    i32_field_descriptor,
+    i64_field_descriptor,
+    message_field_descriptor,
+    string_field_descriptor,
+    u32_field_descriptor,
+    u64_field_descriptor
   };
   use crate::message_decoder::{decode_message, ProtobufFieldData};
   use crate::protobuf::tests::DESCRIPTOR_WITH_ENUM_BYTES;
@@ -1149,5 +1346,206 @@ mod tests {
     expect!(field_result.field_num).to(be_equal_to(5));
     expect!(field_result.wire_type).to(be_equal_to(WireType::Varint));
     expect!(&field_result.data).to(be_equal_to(&ProtobufFieldData::Enum(1, enum_proto.clone())));
+  }
+
+  #[test_log::test]
+  fn generate_datetime() {
+    let generator = Generator::DateTime(Some("yyyyhh".to_string()), None);
+    let vm = DefaultVariantMatcher.boxed();
+
+    let value = ProtobufFieldData::Integer64(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::UInteger64(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Integer32(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::UInteger32(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::String("100".to_string());
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result.unwrap().to_string()).to_not(be_equal_to("100"));
+
+    let value = ProtobufFieldData::Boolean(true);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Float(100.0);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Double(100.0);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Bytes(vec![]);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Enum(1, EnumDescriptorProto {
+      name: None,
+      value: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![],
+    });
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Message(vec![], DescriptorProto {
+      name: None,
+      field: vec![],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![],
+    });
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+  }
+
+  #[test_log::test]
+  fn generate_date() {
+    let generator = Generator::Date(Some("yyyy".to_string()), None);
+    let vm = DefaultVariantMatcher.boxed();
+
+    let value = ProtobufFieldData::Integer64(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::UInteger64(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Integer32(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::UInteger32(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::String("100".to_string());
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result.unwrap().to_string()).to_not(be_equal_to("100"));
+
+    let value = ProtobufFieldData::Boolean(true);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Float(100.0);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Double(100.0);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Bytes(vec![]);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Enum(1, EnumDescriptorProto {
+      name: None,
+      value: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![],
+    });
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Message(vec![], DescriptorProto {
+      name: None,
+      field: vec![],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![],
+    });
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+  }
+
+  #[test_log::test]
+  fn generate_time() {
+    let generator = Generator::Time(Some("hh::mm".to_string()), None);
+    let vm = DefaultVariantMatcher.boxed();
+
+    let value = ProtobufFieldData::Integer64(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::UInteger64(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Integer32(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::UInteger32(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::String("100".to_string());
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result.unwrap().to_string()).to_not(be_equal_to("100"));
+
+    let value = ProtobufFieldData::Boolean(true);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Float(100.0);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Double(100.0);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Bytes(vec![]);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Enum(1, EnumDescriptorProto {
+      name: None,
+      value: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![],
+    });
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Message(vec![], DescriptorProto {
+      name: None,
+      field: vec![],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![],
+    });
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
   }
 }
