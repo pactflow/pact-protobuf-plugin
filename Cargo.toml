@@ -13,9 +13,9 @@ exclude = [
 ]
 
 [dependencies]
-tonic = "=0.8.2"
-prost = "=0.11.2"
-prost-types = "=0.11.2"
+tonic = "0.8.3"
+prost = "0.11.3"
+prost-types = "0.11.2"
 tokio = { version = "1.23.0", features = ["full"] }
 uuid = { version = "1.2.2", features = ["v4"] }
 maplit = "1.0.2"
@@ -33,14 +33,14 @@ serde_yaml = "0.9.9"
 tempfile = "3.2.0"
 itertools = "0.10.1"
 md5 = "0.7.0"
-base64 = "0.13.0"
+base64 = "0.20.0"
 bytes = "1.1.0"
 clap = { version = "3.2.23", features = ["cargo", "env"] }
-hyper = { version = "=0.14.23", features = [ "full" ] }
-http = "=0.2.8"
-tower = { version = "=0.4.13", features = [ "full" ] }
-tower-service = { version = "=0.3.2" }
-tower-http = { version = "=0.3.4", features = [ "full" ] }
+hyper = { version = "0.14.23", features = [ "full" ] }
+http = "0.2.8"
+tower = { version = "0.4.13", features = [ "full" ] }
+tower-service = { version = "0.3.2" }
+tower-http = { version = "0.3.5", features = [ "full" ] }
 http-body = "=0.4.5"
 tracing = "=0.1.37"
 tracing-core = "=0.1.30"
