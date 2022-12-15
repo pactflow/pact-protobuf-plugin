@@ -1,3 +1,18 @@
+# 0.2.2 - Fix for broken 0.2.1 release
+
+* e5d129f - bump version to 0.2.2 (Ronald Holshausen, Wed Dec 14 17:32:36 2022 +1100)
+* 0b2ab5a - update changelog for release 0.2.1 (Ronald Holshausen, Wed Dec 14 17:32:26 2022 +1100)
+* 80ec6c0 - feat: add partial support for generators with Protobufs (date/time only) (Ronald Holshausen, Wed Dec 14 17:20:38 2022 +1100)
+* 90e90d7 - fix: set the protoc command and error logs to better levels (Ronald Holshausen, Fri Dec 9 16:00:43 2022 +1100)
+* 011af5b - bump version to 0.2.1 (Ronald Holshausen, Fri Nov 25 14:03:28 2022 +1100)
+* ec91ea7 - chore: unlock http-body (Ronald Holshausen, Thu Dec 15 16:08:16 2022 +1100)
+* bb0259f - chore: upgrade tonic, prost, hyper, tower (Ronald Holshausen, Thu Dec 15 16:05:12 2022 +1100)
+* 1786205 - chore: update dependencies (Ronald Holshausen, Thu Dec 15 15:57:35 2022 +1100)
+* 50ecd70 - chore: lock tracing to previous version (Ronald Holshausen, Thu Dec 15 15:55:10 2022 +1100)
+* 2a85da3 - chore: lock tower to previous version (Ronald Holshausen, Thu Dec 15 15:51:47 2022 +1100)
+* 9324f18 - chore: lock prost, pact, hyper to previous version (Ronald Holshausen, Thu Dec 15 15:49:45 2022 +1100)
+* 02b292c - chore: lock tonic to previous version (Ronald Holshausen, Thu Dec 15 15:43:46 2022 +1100)
+
 # 0.2.1 - Support Date/Time generators
 
 * b6be68d - feat: add partial support for generators with Protobufs (date/time only) (Ronald Holshausen, Wed Dec 14 17:20:38 2022 +1100)
