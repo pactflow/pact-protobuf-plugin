@@ -38,10 +38,10 @@ bytes = "1.1.0"
 clap = { version = "3.2.23", features = ["cargo", "env"] }
 hyper = { version = "=0.14.23", features = [ "full" ] }
 http = "=0.2.8"
-tower = { version = "0.4", features = [ "full" ] }
-tower-service = { version = "0.3" }
-tower-http = { version = "0.3.4", features = [ "full" ] }
-http-body = "0.4"
+tower = { version = "=0.4.13", features = [ "full" ] }
+tower-service = { version = "=0.3.2" }
+tower-http = { version = "=0.3.4", features = [ "full" ] }
+http-body = "=0.4.5"
 tracing = "0.1.34"
 tracing-core = "0.1.26"
 tracing-subscriber = { version = "0.3.11", features = ["env-filter", "local-time", "tracing-log"] }
