@@ -206,6 +206,7 @@ impl Service<Request<hyper::Body>> for GrpcMockServer  {
   fn call(&mut self, req: Request<hyper::Body>) -> Self::Future {
     let routes = self.routes.clone();
     let server_key = self.server_key.clone();
+    let pact = self.pact.clone();
 
     Box::pin(async move {
       trace!("Got request {req:?}");
@@ -242,7 +243,10 @@ impl Service<Request<hyper::Body>> for GrpcMockServer  {
                 if let Ok((input_message, _)) = input_message {
                   if let Ok((output_message, _)) = output_message {
                     let codec = PactCodec::new(file, &input_message, &output_message, message);
-                    let mock_service = MockService::new(file, service_name, method_descriptor, &input_message, &output_message, message, server_key.as_str());
+                    let mock_service = MockService::new(file, service_name,
+                      method_descriptor, &input_message, &output_message, message, server_key.as_str(),
+                      pact
+                    );
                     let mut grpc = tonic::server::Grpc::new(codec);
                     Ok(grpc.unary(mock_service, req).await)
                   } else {

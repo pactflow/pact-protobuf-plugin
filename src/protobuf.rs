@@ -1725,7 +1725,7 @@ pub(crate) mod tests {
     expect!(matching_rules).to(be_equal_to(expected_rules));
   }
 
-  const DESCRIPTOR_BYTES: &str = "CrYHCgxjb21tb24ucHJvdG8SD2FyZWFfY2FsY3VsYXRvciL9AwoPTGlzdGVuZXJDb\
+  pub const DESCRIPTOR_BYTES: &str = "CrYHCgxjb21tb24ucHJvdG8SD2FyZWFfY2FsY3VsYXRvciL9AwoPTGlzdGVuZXJDb\
     250ZXh0EiMKC2xpc3RlbmVyX2lkGAEgASgDQgIwAVIKbGlzdGVuZXJJZBIaCgh1c2VybmFtZRgCIAEoCVIIdXNlcm5hbW\
     USMgoVbGlzdGVuZXJfZGF0ZV9jcmVhdGVkGAMgASgDUhNsaXN0ZW5lckRhdGVDcmVhdGVkEjYKF2ZpbHRlcl9leHBsaWN\
     pdF9jb250ZW50GAQgASgIUhVmaWx0ZXJFeHBsaWNpdENvbnRlbnQSGQoIemlwX2NvZGUYBSABKAlSB3ppcENvZGUSIQoMY\

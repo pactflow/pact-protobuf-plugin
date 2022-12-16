@@ -9,7 +9,7 @@ use anyhow::anyhow;
 use bytes::{Buf, Bytes, BytesMut};
 use chrono::{DateTime, Local};
 use itertools::Itertools;
-use pact_models::generators::{GenerateValue, Generator, VariantMatcher};
+use pact_models::generators::{generate_decimal, GenerateValue, Generator, VariantMatcher};
 use pact_models::generators::datetime_expressions::{execute_date_expression, execute_datetime_expression, execute_time_expression};
 use pact_models::json_utils::json_to_string;
 use pact_models::time_utils::{parse_pattern, to_chrono_pattern};
@@ -233,14 +233,19 @@ impl GenerateValue<ProtobufFieldData> for Generator {
       //   },
       //   _ => Err(anyhow!("Could not generate a UUID from {}", value))
       // },
-      // Generator::RandomDecimal(digits) => match value {
-      //   Value::String(_) => Ok(json!(generate_decimal(*digits as usize))),
-      //   Value::Number(_) => match generate_decimal(*digits as usize).parse::<f64>() {
-      //     Ok(val) => Ok(json!(val)),
-      //     Err(err) => Err(anyhow!("Could not generate a random decimal from {} - {}", value, err))
-      //   },
-      //   _ => Err(anyhow!("Could not generate a random decimal from {}", value))
-      // },
+      Generator::RandomDecimal(digits) => {
+        let decimal = generate_decimal(*digits as usize);
+        match value {
+          ProtobufFieldData::String(_) => Ok(ProtobufFieldData::String(decimal)),
+          ProtobufFieldData::Double(_) => Ok(ProtobufFieldData::Double(decimal.parse()?)),
+          ProtobufFieldData::Float(_) => Ok(ProtobufFieldData::Float(decimal.parse()?)),
+          ProtobufFieldData::Integer64(_) => Ok(ProtobufFieldData::Integer64(decimal.parse()?)),
+          ProtobufFieldData::Integer32(_) => Ok(ProtobufFieldData::Integer32(decimal.parse()?)),
+          ProtobufFieldData::UInteger64(_) => Ok(ProtobufFieldData::UInteger64(decimal.parse()?)),
+          ProtobufFieldData::UInteger32(_) => Ok(ProtobufFieldData::UInteger32(decimal.parse()?)),
+          _ => Err(anyhow!("Could not generate a random decimal from {}", value))
+        }
+      },
       // Generator::RandomHexadecimal(digits) => match value {
       //   Value::String(_) => Ok(json!(generate_hexadecimal(*digits as usize))),
       //   _ => Err(anyhow!("Could not generate a random hexadecimal from {}", value))

@@ -3,10 +3,16 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+
 use maplit::hashmap;
 use pact_matching::{CoreMatchingContext, DiffConfig};
-
+use pact_models::generators::{GenerateValue, GeneratorCategory, NoopVariantMatcher, VariantMatcher};
+use pact_models::pact::Pact;
+use pact_models::path_exp::DocPath;
+use pact_models::prelude::v4::V4Pact;
+use pact_models::v4::message_parts::MessageContents;
 use pact_models::v4::sync_message::SynchronousMessage;
+use pact_plugin_driver::plugin_models::PluginInteractionConfig;
 use prost_types::{DescriptorProto, FileDescriptorSet, MethodDescriptorProto};
 use tonic::{Request, Response, Status};
 use tower_service::Service;
@@ -25,7 +31,8 @@ pub(crate) struct MockService {
   method_descriptor: MethodDescriptorProto,
   input_message: DescriptorProto,
   output_message: DescriptorProto,
-  server_key: String
+  server_key: String,
+  pact: V4Pact
 }
 
 impl MockService {
@@ -40,9 +47,16 @@ impl MockService {
     let mut expected_message_bytes = self.message.request.contents.value().unwrap_or_default();
     let expected_message = decode_message(&mut expected_message_bytes, &message_descriptor, &self.file_descriptor_set)
       .map_err(|err| Status::invalid_argument(err.to_string()))?;
+    let plugin_config = self.pact.plugin_data().iter()
+      .map(|pd| {
+        (pd.name.clone(), PluginInteractionConfig {
+          pact_configuration: pd.configuration.clone(),
+          interaction_configuration: self.message.plugin_config.get(pd.name.as_str()).cloned().unwrap_or_default()
+        })
+      }).collect();
     let context = CoreMatchingContext::new(DiffConfig::NoUnexpectedKeys,
-                                           &self.message.request.matching_rules.rules_for_category("body").unwrap_or_default(),
-                                           &hashmap!{});
+      &self.message.request.matching_rules.rules_for_category("body").unwrap_or_default(),
+      &plugin_config);
     let mismatches = compare(&message_descriptor, &expected_message, &request.proto_fields(), &context,
                              &expected_message_bytes, &self.file_descriptor_set);
     trace!("Comparison result = {:?}", mismatches);
@@ -64,9 +78,8 @@ impl MockService {
 
         if result.all_matched() {
           debug!("Request matched OK, returning expected response");
-          // TODO: need to invoke any generators
-          let mut response_bytes = self.message.response.first()
-            .and_then(|d| d.contents.value())
+          let response = self.message.response.first().cloned().unwrap_or_default();
+          let mut response_bytes = response.contents.value()
             .unwrap_or_default();
           trace!("Response message has {} bytes", response_bytes.len());
           let response_message = decode_message(&mut response_bytes, &response_descriptor, &self.file_descriptor_set)
@@ -74,7 +87,11 @@ impl MockService {
               error!("Failed to encode response message - {}", err);
               Status::invalid_argument(err.to_string())
             })?;
-          let message = DynamicMessage::new(&response_message, &self.file_descriptor_set);
+          let mut message = DynamicMessage::new(&response_message, &self.file_descriptor_set);
+          self.apply_generators(&mut message, &response).map_err(|err| {
+            error!("Failed to generate response message - {}", err);
+            Status::invalid_argument(err.to_string())
+          })?;
           trace!("Sending message {message:?}");
           Ok(Response::new(message))
         } else {
@@ -98,7 +115,8 @@ impl MockService {
     input_message: &DescriptorProto,
     output_message: &DescriptorProto,
     message: &SynchronousMessage,
-    server_key: &str
+    server_key: &str,
+    pact: V4Pact
   ) -> Self {
     MockService {
       file_descriptor_set: file_descriptor_set.clone(),
@@ -107,8 +125,28 @@ impl MockService {
       input_message: input_message.clone(),
       output_message: output_message.clone(),
       message: message.clone(),
-      server_key: server_key.to_string()
+      server_key: server_key.to_string(),
+      pact
     }
+  }
+
+  fn apply_generators(&self, message: &mut DynamicMessage, contents: &MessageContents) -> anyhow::Result<()> {
+    let variant_matcher = NoopVariantMatcher {};
+    let vm_boxed = variant_matcher.boxed();
+    let context = hashmap!{}; // TODO: This needs to be passed in via the start mock server call
+
+    if let Some(generators) = contents.generators.categories.get(&GeneratorCategory::BODY) {
+      for (key, generator) in generators.iter() {
+        let path = DocPath::new(key)?;
+        let value = message.fetch_value(&path);
+        if let Some(value) = value {
+          let generated_value = generator.generate_value(&value.data, &context, &vm_boxed)?;
+          message.set_value(&path, generated_value)?;
+        }
+      }
+    }
+
+    Ok(())
   }
 }
 
@@ -129,5 +167,147 @@ impl Service<tonic::Request<DynamicMessage>> for MockService {
     Box::pin(async move {
       service.handle_message(request, message_descriptor, response_descriptor).await
     })
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use bytes::{Bytes, BytesMut};
+  use expectest::prelude::*;
+  use pact_models::v4::pact::V4Pact;
+  use prost::Message;
+  use prost_types::FileDescriptorSet;
+  use serde_json::json;
+  use crate::dynamic_message::DynamicMessage;
+  use crate::message_decoder::decode_message;
+
+  use crate::mock_service::MockService;
+  use crate::protobuf::tests::DESCRIPTOR_BYTES;
+
+  #[test_log::test(tokio::test)]
+  async fn handle_message_applies_any_generators() {
+    let bytes = base64::decode(DESCRIPTOR_BYTES).unwrap();
+    let bytes1 = Bytes::copy_from_slice(bytes.as_slice());
+    let file_descriptor_set = FileDescriptorSet::decode(bytes1).unwrap();
+    let fds = &file_descriptor_set;
+    let ac_desc = fds.file.iter()
+      .find(|ds| ds.name.clone().unwrap_or_default() == "area_calculator.proto")
+      .unwrap();
+    let service_desc = ac_desc.service.iter()
+      .find(|sd| sd.name.clone().unwrap_or_default() == "Calculator")
+      .unwrap();
+    let method = service_desc.method.iter()
+      .find(|md| md.name.clone().unwrap_or_default() == "calculateOne")
+      .unwrap();
+    let input_message = ac_desc.message_type.iter()
+      .find(|md| md.name.clone().unwrap_or_default() == "ShapeMessage")
+      .unwrap();
+    let output_message = ac_desc.message_type.iter()
+      .find(|md| md.name.clone().unwrap_or_default() == "AreaResponse")
+      .unwrap();
+
+    let pact_json = json!({
+      "interactions": [
+        {
+          "description": "calculate rectangle area request",
+          "key": "c7fbe3ee",
+          "pluginConfiguration": {
+            "protobuf": {
+              "descriptorKey": "d4147b5793ad1996e476382bd79499a5",
+              "service": "Calculator/calculateOne"
+            }
+          },
+          "request": {
+            "contents": {
+              "content": "EgoNAABAQBUAAIBA",
+              "contentType": "application/protobuf; message=ShapeMessage",
+              "contentTypeHint": "BINARY",
+              "encoded": "base64"
+            },
+            "matchingRules": {
+              "body": {
+                "$.rectangle.length": {
+                  "combine": "AND",
+                  "matchers": [
+                    {
+                      "match": "number"
+                    }
+                  ]
+                },
+                "$.rectangle.width": {
+                  "combine": "AND",
+                  "matchers": [
+                    {
+                      "match": "number"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "response": [
+            {
+              "contents": {
+                "content": "CgQAAEBBEgoyMDAwLTAxLTAx",
+                "contentType": "application/protobuf; message=AreaResponse",
+                "contentTypeHint": "BINARY",
+                "encoded": "base64"
+              },
+              "generators": {
+                "body": {
+                  "$.value": {
+                    "digits": "10",
+                    "type": "RandomDecimal"
+                  }
+                }
+              },
+              "matchingRules": {
+                "body": {
+                  "$.value.*": {
+                    "combine": "AND",
+                    "matchers": [
+                      {
+                        "match": "number"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "transport": "grpc",
+          "type": "Synchronous/Messages"
+        }
+      ],
+      "metadata": {
+        "pactSpecification": {
+          "version": "4.0"
+        }
+      }
+    });
+    let pact = V4Pact::pact_from_json(&pact_json, "<>").unwrap();
+    let message = pact.interactions.first().unwrap();
+
+    let bytes = base64::decode("EgoNAABAQBUAAIBA").unwrap();
+    let mut bytes2 = BytesMut::from(bytes.as_slice());
+    let fields = decode_message(&mut bytes2, input_message, fds).unwrap();
+    let request = DynamicMessage::new(fields.as_slice(), &file_descriptor_set);
+
+    let mock_service = MockService {
+      file_descriptor_set: file_descriptor_set.clone(),
+      service_name: "Calculator".to_string(),
+      message: message.as_v4_sync_message().unwrap(),
+      method_descriptor: method.clone(),
+      input_message: input_message.clone(),
+      output_message: output_message.clone(),
+      server_key: "1234".to_string(),
+      pact
+    };
+    let response = mock_service.handle_message(request,
+      input_message.clone(), output_message.clone()).await.unwrap();
+    let response_message = response.into_inner();
+    let response_fields = response_message.proto_fields();
+    let area = &response_fields[0];
+    expect!(area.data.to_string()).to_not(be_equal_to("12"));
   }
 }

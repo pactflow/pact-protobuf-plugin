@@ -261,7 +261,7 @@ pub(crate) struct DynamicMessageDecoder {
 }
 
 impl DynamicMessageDecoder {
-  fn new(codec: &PactCodec) -> Self {
+  pub(crate) fn new(codec: &PactCodec) -> Self {
     DynamicMessageDecoder {
       descriptor: codec.input_message.clone(),
       file_descriptor_set: codec.file_descriptor_set.clone()
