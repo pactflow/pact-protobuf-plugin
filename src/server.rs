@@ -522,7 +522,16 @@ impl PactPlugin for ProtobufPactPlugin {
       Some(config) => config.clone()
     };
 
-    let grpc_mock_server = GrpcMockServer::new(pact, &plugin_config);
+    let test_context: HashMap<String, Value> = match request.test_context.as_ref()
+      .map(|tc| proto_struct_to_json(tc))
+      .unwrap_or_default() {
+      Value::Object(map) => map.iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect(),
+      _ => hashmap!{}
+    };
+
+    let grpc_mock_server = GrpcMockServer::new(pact, &plugin_config, test_context);
     let server_key = grpc_mock_server.server_key.clone();
     match grpc_mock_server.start_server(request.host_interface.as_str(), request.port, request.tls).await {
       Ok(address) => {
@@ -1162,6 +1171,7 @@ mod tests {
       port: 0,
       tls: false,
       pact: "I'm not JSON!".to_string(),
+      .. proto::StartMockServerRequest::default()
     };
     let result = plugin.start_mock_server(Request::new(request)).await;
     let response = result.unwrap();
@@ -1180,6 +1190,7 @@ mod tests {
       port: 0,
       tls: false,
       pact: "{}".to_string(),
+      .. proto::StartMockServerRequest::default()
     };
     let result = plugin.start_mock_server(Request::new(request)).await;
     let response = result.unwrap();

@@ -23,7 +23,7 @@ use pact_models::prelude::v4::V4Pact;
 use pact_models::v4::sync_message::SynchronousMessage;
 use prost::Message;
 use prost_types::{FileDescriptorSet, MethodDescriptorProto};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::runtime::Handle;
 use tokio::sync::oneshot::{channel, Sender};
@@ -54,19 +54,22 @@ pub struct GrpcMockServer {
   descriptors: HashMap<String, FileDescriptorSet>,
   routes: HashMap<String, (FileDescriptorSet, MethodDescriptorProto, SynchronousMessage)>,
   /// Server key for this mock server
-  pub server_key: String
+  pub server_key: String,
+  /// test context pass in from the test framework
+  pub test_context: HashMap<String, Value>,
 }
 
 impl GrpcMockServer
 {
   /// Create a new mock server
-  pub fn new(pact: V4Pact, plugin_config: &PluginData) -> Self {
+  pub fn new(pact: V4Pact, plugin_config: &PluginData, test_context: HashMap<String, Value>) -> Self {
     GrpcMockServer {
       pact,
       plugin_config: plugin_config.clone(),
       descriptors: Default::default(),
       routes: Default::default(),
-      server_key: Uuid::new_v4().to_string()
+      server_key: Uuid::new_v4().to_string(),
+      test_context
     }
   }
 
@@ -146,6 +149,8 @@ impl GrpcMockServer
     let listener = TcpListener::bind(addr).await?;
     let address = listener.local_addr()?;
 
+    self.update_mock_server_address(&address);
+
     let handle = Handle::current();
     // because Rust
     let key = self.server_key.clone();
@@ -190,6 +195,13 @@ impl GrpcMockServer
       trace!("Mock server setup OK");
       Ok(address)
     }
+  }
+
+  fn update_mock_server_address(&mut self, address: &SocketAddr) {
+    self.test_context.insert("mockServer".to_string(), json!({
+      "href": format!("http://{}:{}", address.ip(), address.port()),
+      "port": address.port()
+    }));
   }
 }
 
