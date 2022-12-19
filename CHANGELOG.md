@@ -1,3 +1,14 @@
+# 0.2.3 - Support Generators
+
+* 7f0e9d7 - feat: Implemented RandomBoolean, ProviderStateGenerator and MockServerURL generators (Ronald Holshausen, Mon Dec 19 14:53:05 2022 +1100)
+* 2b2978e - feat: Implemented RandomHexadecimal, RandomString and Regex generators (Ronald Holshausen, Mon Dec 19 14:17:49 2022 +1100)
+* 2804ad5 - feat: Implemented RandomInt, RandomDecimal and Uuid generators (Ronald Holshausen, Mon Dec 19 13:58:20 2022 +1100)
+* 9502770 - refactor: move generator code to its own module (Ronald Holshausen, Mon Dec 19 13:11:36 2022 +1100)
+* f796ad3 - chore: fix clippy warnings (Ronald Holshausen, Mon Dec 19 11:04:09 2022 +1100)
+* fc159a7 - feat: support adding a test context to the mock server to support generators (Ronald Holshausen, Fri Dec 16 17:24:15 2022 +1100)
+* ac210b1 - feat: Support using generators with mock server responses (Ronald Holshausen, Fri Dec 16 15:36:33 2022 +1100)
+* 5024b82 - bump version to 0.2.3 (Ronald Holshausen, Thu Dec 15 16:28:05 2022 +1100)
+
 # 0.2.2 - Fix for broken 0.2.1 release
 
 * e5d129f - bump version to 0.2.2 (Ronald Holshausen, Wed Dec 14 17:32:36 2022 +1100)
