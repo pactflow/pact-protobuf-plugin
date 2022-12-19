@@ -2,7 +2,13 @@ use std::collections::HashMap;
 
 use anyhow::anyhow;
 use chrono::{DateTime, Local};
-use pact_models::generators::{generate_decimal, GenerateValue, Generator, VariantMatcher};
+use pact_models::generators::{
+  generate_decimal,
+  GenerateValue,
+  Generator,
+  UuidFormat,
+  VariantMatcher
+};
 use pact_models::generators::datetime_expressions::{
   execute_date_expression,
   execute_datetime_expression,
@@ -10,8 +16,10 @@ use pact_models::generators::datetime_expressions::{
 };
 use pact_models::json_utils::json_to_string;
 use pact_models::time_utils::{parse_pattern, to_chrono_pattern};
+use rand::Rng;
 use serde_json::Value;
 use tracing::{debug, warn};
+use uuid::Uuid;
 
 use crate::message_decoder::ProtobufFieldData;
 
@@ -23,22 +31,27 @@ impl GenerateValue<ProtobufFieldData> for Generator {
   ) -> anyhow::Result<ProtobufFieldData> {
     let result = match self {
       Generator::RandomInt(min, max) => {
-        // let rand_int = rand::thread_rng().gen_range(*min..max.saturating_add(1));
+        let rand_int = rand::thread_rng().gen_range(*min..max.saturating_add(1));
         match value {
-          // Value::String(_) => Ok(json!(format!("{}", rand_int))),
-          // Value::Number(_) => Ok(json!(rand_int)),
+          ProtobufFieldData::String(_) => Ok(ProtobufFieldData::String(rand_int.to_string())),
+          ProtobufFieldData::Double(_) => Ok(ProtobufFieldData::Double(rand_int as f64)),
+          ProtobufFieldData::Float(_) => Ok(ProtobufFieldData::Float(rand_int as f32)),
+          ProtobufFieldData::Integer64(_) => Ok(ProtobufFieldData::Integer64(rand_int as i64)),
+          ProtobufFieldData::Integer32(_) => Ok(ProtobufFieldData::Integer32(rand_int)),
+          ProtobufFieldData::UInteger64(_) => Ok(ProtobufFieldData::UInteger64(rand_int as u64)),
+          ProtobufFieldData::UInteger32(_) => Ok(ProtobufFieldData::UInteger32(rand_int as u32)),
           _ => Err(anyhow!("Could not generate a random int from {}", value))
         }
       },
-      // Generator::Uuid(format) => match value {
-      //   Value::String(_) => match format.unwrap_or_default() {
-      //     UuidFormat::Simple => Ok(json!(Uuid::new_v4().as_simple().to_string())),
-      //     UuidFormat::LowerCaseHyphenated => Ok(json!(Uuid::new_v4().as_hyphenated().to_string())),
-      //     UuidFormat::UpperCaseHyphenated => Ok(json!(Uuid::new_v4().as_hyphenated().to_string().to_uppercase())),
-      //     UuidFormat::Urn => Ok(json!(Uuid::new_v4().as_urn().to_string()))
-      //   },
-      //   _ => Err(anyhow!("Could not generate a UUID from {}", value))
-      // },
+      Generator::Uuid(format) => match value {
+        ProtobufFieldData::String(_) => match format.unwrap_or_default() {
+          UuidFormat::Simple => Ok(ProtobufFieldData::String(Uuid::new_v4().as_simple().to_string())),
+          UuidFormat::LowerCaseHyphenated => Ok(ProtobufFieldData::String(Uuid::new_v4().as_hyphenated().to_string())),
+          UuidFormat::UpperCaseHyphenated => Ok(ProtobufFieldData::String(Uuid::new_v4().as_hyphenated().to_string().to_uppercase())),
+          UuidFormat::Urn => Ok(ProtobufFieldData::String(Uuid::new_v4().as_urn().to_string()))
+        },
+        _ => Err(anyhow!("Could not generate a UUID from {}", value))
+      },
       Generator::RandomDecimal(digits) => {
         let decimal = generate_decimal(*digits as usize);
         match value {
@@ -206,8 +219,9 @@ mod tests {
   use expectest::prelude::*;
   use maplit::hashmap;
   use pact_matching::generators::DefaultVariantMatcher;
-  use pact_models::generators::{GenerateValue, Generator, VariantMatcher};
+  use pact_models::generators::{GenerateValue, Generator, UuidFormat, VariantMatcher};
   use prost_types::{DescriptorProto, EnumDescriptorProto};
+  use regex::Regex;
 
   use crate::message_decoder::ProtobufFieldData;
 
@@ -410,5 +424,226 @@ mod tests {
     });
     let result = generator.generate_value(&value, &hashmap!{}, &vm);
     expect!(result).to(be_err());
+  }
+
+  #[test_log::test]
+  fn generate_decimal() {
+    let generator = Generator::RandomDecimal(10);
+    let vm = DefaultVariantMatcher.boxed();
+
+    let value = ProtobufFieldData::Integer64(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::UInteger64(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Integer32(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::UInteger32(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::String("100".to_string());
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result.unwrap().to_string()).to_not(be_equal_to("100"));
+
+    let value = ProtobufFieldData::Boolean(true);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Float(100.0);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result.unwrap().as_f32().unwrap()).to_not(be_equal_to(100.0));
+
+    let value = ProtobufFieldData::Double(100.0);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result.unwrap().as_f64().unwrap()).to_not(be_equal_to(100.0));
+
+    let value = ProtobufFieldData::Bytes(vec![]);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Enum(1, EnumDescriptorProto {
+      name: None,
+      value: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![],
+    });
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Message(vec![], DescriptorProto {
+      name: None,
+      field: vec![],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![],
+    });
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+  }
+
+  #[test_log::test]
+  fn generate_int() {
+    let generator = Generator::RandomInt(1, 50);
+    let vm = DefaultVariantMatcher.boxed();
+
+    let value = ProtobufFieldData::Integer64(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result.unwrap().as_i64().unwrap()).to_not(be_equal_to(100));
+
+    let value = ProtobufFieldData::UInteger64(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result.unwrap().as_u64().unwrap()).to_not(be_equal_to(100));
+
+    let value = ProtobufFieldData::Integer32(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result.unwrap().as_i32().unwrap()).to_not(be_equal_to(100));
+
+    let value = ProtobufFieldData::UInteger32(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result.unwrap().as_u32().unwrap()).to_not(be_equal_to(100));
+
+    let value = ProtobufFieldData::String("100".to_string());
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result.unwrap().to_string()).to_not(be_equal_to("100"));
+
+    let value = ProtobufFieldData::Boolean(true);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Float(100.0);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result.unwrap().as_f32().unwrap()).to_not(be_equal_to(100.0));
+
+    let value = ProtobufFieldData::Double(100.0);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result.unwrap().as_f64().unwrap()).to_not(be_equal_to(100.0));
+
+    let value = ProtobufFieldData::Bytes(vec![]);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Enum(1, EnumDescriptorProto {
+      name: None,
+      value: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![],
+    });
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Message(vec![], DescriptorProto {
+      name: None,
+      field: vec![],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![],
+    });
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+  }
+
+  #[test_log::test]
+  fn generate_uuid() {
+    let generator = Generator::Uuid(None);
+    let vm = DefaultVariantMatcher.boxed();
+
+    let value = ProtobufFieldData::Integer64(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::UInteger64(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Integer32(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::UInteger32(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::String("100".to_string());
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    let s = result.unwrap().to_string();
+    expect!(s).to_not(be_equal_to("100"));
+
+    let value = ProtobufFieldData::Boolean(true);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Float(100.0);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Double(100.0);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Bytes(vec![]);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Enum(1, EnumDescriptorProto {
+      name: None,
+      value: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![],
+    });
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Message(vec![], DescriptorProto {
+      name: None,
+      field: vec![],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![],
+    });
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::String("100".to_string());
+    let generator = Generator::Uuid(Some(UuidFormat::Urn));
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    let s = result.unwrap().to_string();
+    let re = Regex::new("urn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").unwrap();
+    expect!(re.is_match(&s)).to(be_true());
+
+    let generator = Generator::Uuid(Some(UuidFormat::LowerCaseHyphenated));
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    let s = result.unwrap().to_string();
+    let re = Regex::new("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").unwrap();
+    expect!(re.is_match(&s)).to(be_true());
+
+    let generator = Generator::Uuid(Some(UuidFormat::UpperCaseHyphenated));
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    let s = result.unwrap().to_string();
+    let re = Regex::new("[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}").unwrap();
+    expect!(re.is_match(&s)).to(be_true());
   }
 }

@@ -168,6 +168,48 @@ impl ProtobufFieldData {
       }
     }
   }
+
+  pub fn as_u64(&self) -> Option<u64> {
+    match self {
+      ProtobufFieldData::UInteger64(n) => Some(*n),
+      _ => None
+    }
+  }
+
+  pub fn as_u32(&self) -> Option<u32> {
+    match self {
+      ProtobufFieldData::UInteger32(n) => Some(*n),
+      _ => None
+    }
+  }
+
+  pub fn as_i64(&self) -> Option<i64> {
+    match self {
+      ProtobufFieldData::Integer64(n) => Some(*n),
+      _ => None
+    }
+  }
+
+  pub fn as_i32(&self) -> Option<i32> {
+    match self {
+      ProtobufFieldData::Integer32(n) => Some(*n),
+      _ => None
+    }
+  }
+
+  pub fn as_f64(&self) -> Option<f64> {
+    match self {
+      ProtobufFieldData::Double(n) => Some(*n),
+      _ => None
+    }
+  }
+
+  pub fn as_f32(&self) -> Option<f32> {
+    match self {
+      ProtobufFieldData::Float(n) => Some(*n),
+      _ => None
+    }
+  }
 }
 
 impl Display for ProtobufFieldData {
