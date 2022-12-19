@@ -210,6 +210,13 @@ impl ProtobufFieldData {
       _ => None
     }
   }
+
+  pub fn as_str(&self) -> Option<&str> {
+    match self {
+      ProtobufFieldData::String(s) => Some(s.as_str()),
+      _ => None
+    }
+  }
 }
 
 impl Display for ProtobufFieldData {

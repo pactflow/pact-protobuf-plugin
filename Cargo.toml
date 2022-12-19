@@ -52,6 +52,9 @@ ansi_term = "0.12.1"
 tracing-bunyan-formatter = "=0.3.2"
 chrono = { version = "0.4.19", features = ["std", "clock"], default_features = false }
 rand = "0.8.5"
+regex-syntax = "0.6.28"
+regex = "1.7.0"
+rand_regex = "0.15.1"
 
 [dependencies.reqwest]
 version = "0.11.13"
@@ -68,7 +71,6 @@ trim-margin = "0.1.0"
 pact_consumer = "0.10.0"
 home = "0.5.4"
 panic-message = "0.3.0"
-regex = "1.7.0"
 
 [build-dependencies]
 built = { version = "0.5.1", features = [ "git2" ] }
