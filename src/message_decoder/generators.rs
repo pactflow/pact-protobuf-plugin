@@ -2,23 +2,16 @@ use std::collections::HashMap;
 
 use anyhow::anyhow;
 use chrono::{DateTime, Local};
-use pact_models::generators::{
-  generate_ascii_string,
-  generate_decimal,
-  generate_hexadecimal,
-  GenerateValue,
-  Generator,
-  UuidFormat,
-  VariantMatcher
-};
+use pact_models::generators::{generate_ascii_string, generate_decimal, generate_hexadecimal, generate_value_from_context, GenerateValue, Generator, UuidFormat, VariantMatcher};
 use pact_models::generators::datetime_expressions::{
   execute_date_expression,
   execute_datetime_expression,
   execute_time_expression
 };
-use pact_models::json_utils::json_to_string;
+use pact_models::json_utils::{get_field_as_string, json_to_string};
 use pact_models::time_utils::{parse_pattern, to_chrono_pattern};
 use rand::prelude::*;
+use regex::{Captures, Regex};
 use serde_json::Value;
 use tracing::{debug, warn};
 use uuid::Uuid;
@@ -169,31 +162,55 @@ impl GenerateValue<ProtobufFieldData> for Generator {
           }
         })
       },
-      // Generator::RandomBoolean => Ok(json!(rand::thread_rng().gen::<bool>())),
-      // Generator::ProviderStateGenerator(ref exp, ref dt) =>
-      //   match generate_value_from_context(exp, context, dt) {
-      //     Ok(val) => val.as_json(),
-      //     Err(err) => Err(err)
-      //   },
-      // Generator::MockServerURL(example, regex) => {
-      //   debug!("context = {:?}", context);
-      //   if let Some(mock_server_details) = context.get("mockServer") {
-      //     match mock_server_details.as_object() {
-      //       Some(mock_server_details) => {
-      //         match get_field_as_string("href", mock_server_details) {
-      //           Some(url) => match Regex::new(regex) {
-      //             Ok(re) => Ok(Value::String(replace_with_regex(example, url, re))),
-      //             Err(err) => Err(anyhow!("MockServerURL: Failed to generate value: {}", err))
-      //           },
-      //           None => Err(anyhow!("MockServerURL: can not generate a value as there is no mock server URL in the test context"))
-      //         }
-      //       },
-      //       None => Err(anyhow!("MockServerURL: can not generate a value as the mock server details in the test context is not an Object"))
-      //     }
-      //   } else {
-      //     Err(anyhow!("MockServerURL: can not generate a value as there is no mock server details in the test context"))
-      //   }
-      // }
+      Generator::RandomBoolean => {
+        let b = thread_rng().gen::<bool>();
+        match value {
+          ProtobufFieldData::String(_) => Ok(ProtobufFieldData::String(b.to_string())),
+          ProtobufFieldData::Boolean(_) => Ok(ProtobufFieldData::Boolean(b)),
+          ProtobufFieldData::UInteger32(_) => Ok(ProtobufFieldData::UInteger32(u32::from(b))),
+          ProtobufFieldData::Integer32(_) => Ok(ProtobufFieldData::Integer32(i32::from(b))),
+          ProtobufFieldData::UInteger64(_) => Ok(ProtobufFieldData::UInteger64(u64::from(b))),
+          ProtobufFieldData::Integer64(_) => Ok(ProtobufFieldData::Integer64(i64::from(b))),
+          ProtobufFieldData::Float(_) => Ok(ProtobufFieldData::Float(if b { 1.0 } else { 0.0 })),
+          ProtobufFieldData::Double(_) => Ok(ProtobufFieldData::Double(if b { 1.0 } else { 0.0 })),
+          _ => Err(anyhow!("Can not generate a boolean value for a field type {:?}", value))
+        }
+      },
+      Generator::ProviderStateGenerator(ref exp, ref dt) =>
+        match generate_value_from_context(exp, context, dt) {
+          Ok(val) => match value {
+            ProtobufFieldData::String(_) => Ok(ProtobufFieldData::String(val.to_string())),
+            ProtobufFieldData::Boolean(_) => Ok(ProtobufFieldData::Boolean(bool::try_from(val)?)),
+            ProtobufFieldData::UInteger32(_) => Ok(ProtobufFieldData::UInteger32(u64::try_from(val)? as u32)),
+            ProtobufFieldData::Integer32(_) => Ok(ProtobufFieldData::Integer32(i64::try_from(val)? as i32)),
+            ProtobufFieldData::UInteger64(_) => Ok(ProtobufFieldData::UInteger64(u64::try_from(val)?)),
+            ProtobufFieldData::Integer64(_) => Ok(ProtobufFieldData::Integer64(i64::try_from(val)?)),
+            ProtobufFieldData::Float(_) => Ok(ProtobufFieldData::Float(f64::try_from(val)? as f32)),
+            ProtobufFieldData::Double(_) => Ok(ProtobufFieldData::Double(f64::try_from(val)?)),
+            _ => Err(anyhow!("Can not generate a value from the provider state for a field type {:?}", value))
+          },
+          Err(err) => Err(err)
+        },
+      Generator::MockServerURL(example, regex) => {
+        debug!("context = {:?}", context);
+        if let Some(mock_server_details) = context.get("mockServer") {
+          match mock_server_details.as_object() {
+            Some(mock_server_details) => {
+              match get_field_as_string("href", mock_server_details) {
+                Some(url) => match Regex::new(regex) {
+                  Ok(re) => Ok(ProtobufFieldData::String(replace_with_regex(example, url, re))),
+                  Err(err) => Err(anyhow!("MockServerURL: Failed to generate value: {}", err))
+                },
+                None => Err(anyhow!("MockServerURL: can not generate a value as there is no mock server URL in the test context"))
+              }
+            },
+            None => Err(anyhow!("MockServerURL: can not generate a value as the mock server details in the test context is not an Object"))
+          }
+        } else {
+          Err(anyhow!("MockServerURL: can not generate a value as there is no mock server details in the test context"))
+        }
+      }
+      // TODO: need to implement ArrayContains with Protobuf repeated fields
       // Generator::ArrayContains(variants) => match value {
       //   Value::Array(vec) => {
       //     let mut result = vec.clone();
@@ -219,6 +236,13 @@ impl GenerateValue<ProtobufFieldData> for Generator {
   }
 }
 
+fn replace_with_regex(example: &String, url: String, re: Regex) -> String {
+  re.replace(example, |caps: &Captures| {
+    let m = caps.get(1).unwrap();
+    format!("{}{}", url, m.as_str())
+  }).to_string()
+}
+
 #[cfg(test)]
 mod tests {
   use expectest::prelude::*;
@@ -227,6 +251,7 @@ mod tests {
   use pact_models::generators::{GenerateValue, Generator, UuidFormat, VariantMatcher};
   use prost_types::{DescriptorProto, EnumDescriptorProto};
   use regex::Regex;
+  use serde_json::Value;
 
   use crate::message_decoder::ProtobufFieldData;
 
@@ -855,6 +880,151 @@ mod tests {
       reserved_name: vec![],
     });
     let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+  }
+
+  #[test_log::test]
+  fn generate_bool() {
+    let generator = Generator::RandomBoolean;
+    let vm = DefaultVariantMatcher.boxed();
+
+    let value = ProtobufFieldData::Integer64(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result.unwrap().as_i64().unwrap()).to_not(be_equal_to(100));
+
+    let value = ProtobufFieldData::UInteger64(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result.unwrap().as_u64().unwrap()).to_not(be_equal_to(100));
+
+    let value = ProtobufFieldData::Integer32(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result.unwrap().as_i32().unwrap()).to_not(be_equal_to(100));
+
+    let value = ProtobufFieldData::UInteger32(100);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result.unwrap().as_u32().unwrap()).to_not(be_equal_to(100));
+
+    let value = ProtobufFieldData::String("100".to_string());
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    let s = result.unwrap().to_string();
+    expect!(s).to_not(be_equal_to("100"));
+
+    let value = ProtobufFieldData::Boolean(true);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm).unwrap();
+    let s = result.to_string();
+    let re = Regex::new("true|false").unwrap();
+    expect!(re.is_match(&s)).to(be_true());
+
+    let value = ProtobufFieldData::Float(100.0);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result.unwrap().as_f32().unwrap()).to_not(be_equal_to(100.0));
+
+    let value = ProtobufFieldData::Double(100.0);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result.unwrap().as_f64().unwrap()).to_not(be_equal_to(100.0));
+
+    let value = ProtobufFieldData::Bytes(vec![]);
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Enum(1, EnumDescriptorProto {
+      name: None,
+      value: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![],
+    });
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Message(vec![], DescriptorProto {
+      name: None,
+      field: vec![],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![],
+    });
+    let result = generator.generate_value(&value, &hashmap!{}, &vm);
+    expect!(result).to(be_err());
+  }
+
+  #[test_log::test]
+  fn generate_provider_state() {
+    let generator = Generator::ProviderStateGenerator("a".to_string(), None);
+    let vm = DefaultVariantMatcher.boxed();
+    let provider_state = hashmap!{
+      "a" => Value::String("50".to_string())
+    };
+
+    let value = ProtobufFieldData::Integer64(100);
+    let result = generator.generate_value(&value, &provider_state, &vm);
+    expect!(result.unwrap().as_i64().unwrap()).to_not(be_equal_to(100));
+
+    let value = ProtobufFieldData::UInteger64(100);
+    let result = generator.generate_value(&value, &provider_state, &vm);
+    expect!(result.unwrap().as_u64().unwrap()).to_not(be_equal_to(100));
+
+    let value = ProtobufFieldData::Integer32(100);
+    let result = generator.generate_value(&value, &provider_state, &vm);
+    expect!(result.unwrap().as_i32().unwrap()).to_not(be_equal_to(100));
+
+    let value = ProtobufFieldData::UInteger32(100);
+    let result = generator.generate_value(&value, &provider_state, &vm);
+    expect!(result.unwrap().as_u32().unwrap()).to_not(be_equal_to(100));
+
+    let value = ProtobufFieldData::String("100".to_string());
+    let result = generator.generate_value(&value, &provider_state, &vm);
+    let s = result.unwrap().to_string();
+    expect!(s).to_not(be_equal_to("100"));
+
+    let value = ProtobufFieldData::Boolean(true);
+    let provider_state2 = hashmap!{
+      "a" => Value::Bool(false)
+    };
+    let result = generator.generate_value(&value, &provider_state2, &vm).unwrap();
+    let s = result.to_string();
+    expect!(s).to(be_equal_to("false"));
+
+    let value = ProtobufFieldData::Float(100.0);
+    let result = generator.generate_value(&value, &provider_state, &vm);
+    expect!(result.unwrap().as_f32().unwrap()).to_not(be_equal_to(100.0));
+
+    let value = ProtobufFieldData::Double(100.0);
+    let result = generator.generate_value(&value, &provider_state, &vm);
+    expect!(result.unwrap().as_f64().unwrap()).to_not(be_equal_to(100.0));
+
+    let value = ProtobufFieldData::Bytes(vec![]);
+    let result = generator.generate_value(&value, &provider_state, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Enum(1, EnumDescriptorProto {
+      name: None,
+      value: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![],
+    });
+    let result = generator.generate_value(&value, &provider_state, &vm);
+    expect!(result).to(be_err());
+
+    let value = ProtobufFieldData::Message(vec![], DescriptorProto {
+      name: None,
+      field: vec![],
+      extension: vec![],
+      nested_type: vec![],
+      enum_type: vec![],
+      extension_range: vec![],
+      oneof_decl: vec![],
+      options: None,
+      reserved_range: vec![],
+      reserved_name: vec![],
+    });
+    let result = generator.generate_value(&value, &provider_state, &vm);
     expect!(result).to(be_err());
   }
 }
