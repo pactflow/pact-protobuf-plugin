@@ -83,7 +83,7 @@ impl ProtobufPactPlugin {
   pub fn host_to_bind_to(&self) -> Option<String> {
     self.manifest.plugin_config
       .get("hostToBindTo")
-      .map(|host| json_to_string(host))
+      .map(json_to_string)
   }
 
   /// Returns any additional include paths from the configuration in the manifest to add to the
@@ -93,7 +93,7 @@ impl ProtobufPactPlugin {
       .get("additionalIncludes")
       .map(|includes| {
         match includes {
-          Value::Array(list) => list.iter().map(|v| json_to_string(v)).collect(),
+          Value::Array(list) => list.iter().map(json_to_string).collect(),
           _ => vec![json_to_string(includes)]
         }
       })
@@ -167,8 +167,7 @@ impl ProtobufPactPlugin {
       .and_then(|body| body.content.clone().map(Bytes::from))
       .unwrap_or_default();
     let mut actual_body = request.actual.as_ref()
-      .map(|body| body.content.clone().map(Bytes::from))
-      .flatten()
+      .and_then(|body| body.content.clone().map(Bytes::from))
       .unwrap_or_default();
     let mut matching_rules = MatchingRuleCategory::empty("body");
     for (key, rules) in &request.rules {
@@ -229,8 +228,8 @@ impl ProtobufPactPlugin {
           error!("Got a BodyTypeMismatch - {}", message);
           Ok(CompareContentsResponse {
             type_mismatch: Some(proto::ContentTypeMismatch {
-              expected: expected_type.clone(),
-              actual: actual_type.clone()
+              expected: expected_type,
+              actual: actual_type
             }),
             ..proto::CompareContentsResponse::default()
           })
@@ -414,7 +413,7 @@ impl PactPlugin for ProtobufPactPlugin {
   ) -> Result<Response<CompareContentsResponse>, Status> {
     trace!("Got compare_contents request {:?}", request.get_ref());
     let request = request.get_ref();
-    match self.compare_contents_impl(&request) {
+    match self.compare_contents_impl(request) {
       Ok(result) => Ok(Response::new(result)),
       Err(err) => Self::error_response(err.to_string())
     }
@@ -489,7 +488,7 @@ impl PactPlugin for ProtobufPactPlugin {
   ) -> Result<Response<GenerateContentResponse>, Status> {
     let message = request.get_ref();
     debug!("Generate content request {:?}", message);
-    match self.generate_contents_impl(&message) {
+    match self.generate_contents_impl(message) {
       Ok(result) => Ok(Response::new(result)),
       Err(err) => Err(Status::aborted(err.to_string()))
     }
@@ -523,7 +522,7 @@ impl PactPlugin for ProtobufPactPlugin {
     };
 
     let test_context: HashMap<String, Value> = match request.test_context.as_ref()
-      .map(|tc| proto_struct_to_json(tc))
+      .map(proto_struct_to_json)
       .unwrap_or_default() {
       Value::Object(map) => map.iter()
         .map(|(k, v)| (k.clone(), v.clone()))

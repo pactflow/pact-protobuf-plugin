@@ -9,7 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     built::write_built_file()?;
   } else {
     let dst = path::Path::new(&env::var("OUT_DIR").unwrap()).join("built.rs");
-    fs::File::create(&dst)?;
+    fs::File::create(dst)?;
   }
   Ok(())
 }

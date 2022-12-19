@@ -57,7 +57,7 @@ impl MockService {
     let context = CoreMatchingContext::new(DiffConfig::NoUnexpectedKeys,
       &self.message.request.matching_rules.rules_for_category("body").unwrap_or_default(),
       &plugin_config);
-    let mismatches = compare(&message_descriptor, &expected_message, &request.proto_fields(), &context,
+    let mismatches = compare(&message_descriptor, &expected_message, request.proto_fields(), &context,
                              &expected_message_bytes, &self.file_descriptor_set);
     trace!("Comparison result = {:?}", mismatches);
     match mismatches {

@@ -179,7 +179,7 @@ async fn download_protoc(
   }
 }
 
-async fn system_protoc(additional_includes: &Vec<String>) -> anyhow::Result<Protoc> {
+async fn system_protoc(additional_includes: &[String]) -> anyhow::Result<Protoc> {
   trace!("system_protoc: looking for protoc in system path");
   let program = if OS == "windows" { "where" } else { "which" };
   match Command::new(program).arg("protoc").output().await {
@@ -187,7 +187,7 @@ async fn system_protoc(additional_includes: &Vec<String>) -> anyhow::Result<Prot
       if out.status.success() {
         let path = from_utf8(out.stdout.as_ref())?;
         debug!("Found protoc binary: {}", path);
-        let protoc = Protoc::new(path.trim().to_string(), false, additional_includes.clone());
+        let protoc = Protoc::new(path.trim().to_string(), false, additional_includes.to_owned());
         protoc.invoke().await?;
         Ok(protoc)
       } else {
@@ -200,7 +200,7 @@ async fn system_protoc(additional_includes: &Vec<String>) -> anyhow::Result<Prot
   }
 }
 
-async fn local_protoc(os_info: &Info, additional_includes: &Vec<String>) -> anyhow::Result<Protoc> {
+async fn local_protoc(os_info: &Info, additional_includes: &[String]) -> anyhow::Result<Protoc> {
   let path = PathBuf::from(".")
       .join("protoc")
       .join("bin");
@@ -213,7 +213,7 @@ async fn local_protoc(os_info: &Info, additional_includes: &Vec<String>) -> anyh
   trace!("Looking for local protoc at '{}'", path_str);
   if local_path.exists() {
     debug!("Found unpacked protoc binary");
-    let protoc = Protoc::new(path_str.to_string(), true, additional_includes.clone());
+    let protoc = Protoc::new(path_str.to_string(), true, additional_includes.to_owned());
     protoc.invoke().await?;
     Ok(protoc)
   } else {
@@ -225,7 +225,7 @@ async fn local_protoc(os_info: &Info, additional_includes: &Vec<String>) -> anyh
 async fn unpack_protoc(
   config: &HashMap<String, Value>,
   os_info: &Info,
-  additional_includes: &Vec<String>
+  additional_includes: &[String]
 ) -> anyhow::Result<Protoc> {
   let protoc_version = config.get("protocVersion")
     .map(json_to_string)
@@ -264,7 +264,7 @@ fn unzip_proto_archive(archive_path: &Path) -> anyhow::Result<()> {
       trace!("File {} extracted to \"{}\" ({} bytes)", i, outpath.display(), file.size());
       if let Some(p) = outpath.parent() {
         if !p.exists() {
-          fs::create_dir_all(&p)?;
+          fs::create_dir_all(p)?;
         }
       }
       let mut outfile = fs::File::create(&outpath)?;

@@ -480,7 +480,7 @@ pub fn decode_message<B>(
                 error!("Was expecting {:?} but received an unknown length-delimited type", t);
                 let mut buf = BytesMut::with_capacity((data_length + 8) as usize);
                 encode_varint(data_length, &mut buf);
-                buf.extend_from_slice(&*data_buffer);
+                buf.extend_from_slice(&data_buffer);
                 vec![ (ProtobufFieldData::Unknown(buf.freeze().to_vec()), wire_type) ]
               }
             }
@@ -520,7 +520,7 @@ pub fn decode_message<B>(
             let data_length = decode_varint(buffer)?;
             let mut buf = BytesMut::with_capacity((data_length + 8) as usize);
             encode_varint(data_length, &mut buf);
-            buf.extend_from_slice(&*buffer.copy_to_bytes(data_length as usize));
+            buf.extend_from_slice(&buffer.copy_to_bytes(data_length as usize));
             buf.freeze().to_vec()
           }
           WireType::ThirtyTwoBit => buffer.get_u32().to_le_bytes().to_vec(),

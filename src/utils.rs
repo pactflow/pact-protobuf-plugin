@@ -57,7 +57,7 @@ pub fn find_message_type_in_file_descriptor(message_name: &str, descriptor: &Fil
     .find(|message| message.name.clone().unwrap_or_default() == message_name)
     .cloned()
     .ok_or_else(|| anyhow!("Did not find a message type '{}' in the file descriptor '{}'",
-      message_name, descriptor.name.as_ref().map(|n| n.as_str()).unwrap_or("unknown")))
+      message_name, descriptor.name.as_deref().unwrap_or("unknown")))
 }
 
 /// Search for a message by type name in the file descriptor, and if not found, search in all the
@@ -71,7 +71,7 @@ pub fn find_message_type_in_file_descriptors(
     .or_else(|_| {
       all_descriptors.values()
         .find_map(|fd| find_message_type_in_file_descriptor(message_type, fd).ok())
-        .ok_or(anyhow!("Did not find a message type '{}' in any of the file descriptors", message_type))
+        .ok_or_else(|| anyhow!("Did not find a message type '{}' in any of the file descriptors", message_type))
     })
 }
 
@@ -154,7 +154,7 @@ pub fn enum_name(enum_value: i32, descriptor: &EnumDescriptorProto) -> String {
 /// Find the integer value of the given enum type and name in the message descriptor.
 #[tracing::instrument(ret, skip_all, fields(%enum_name, %enum_value))]
 pub fn find_enum_value_by_name_in_message(
-  enum_types: &Vec<EnumDescriptorProto>,
+  enum_types: &[EnumDescriptorProto],
   enum_name: &str,
   enum_value: &str
 ) -> Option<(i32, EnumDescriptorProto)> {
@@ -187,7 +187,7 @@ pub fn find_enum_value_by_name_in_message(
 /// Find the enum type by name in the message descriptor.
 #[tracing::instrument(ret, skip_all, fields(%enum_name))]
 pub fn find_enum_by_name_in_message(
-  enum_types: &Vec<EnumDescriptorProto>,
+  enum_types: &[EnumDescriptorProto],
   enum_name: &str
 ) -> Option<EnumDescriptorProto> {
   trace!(">> find_enum_value_by_name_in_message({})",enum_name);
@@ -319,7 +319,10 @@ pub(crate) fn parse_pact_from_request_json(pact_json: &str, source: &str) -> any
 }
 
 /// Lookup up the interaction in the Pact file, given the ID
-pub(crate) fn lookup_interaction_by_id<'a>(interaction_key: &str, pact: &'a V4Pact) -> anyhow::Result<&'a Box<dyn V4Interaction + Send + Sync>> {
+pub(crate) fn lookup_interaction_by_id<'a>(
+  interaction_key: &str,
+  pact: &'a V4Pact
+) -> anyhow::Result<&'a Box<dyn V4Interaction + Send + Sync>> {
   match pact.interactions.iter()
     .find(|i| i.key().unwrap_or_default() == interaction_key) {
     Some(interaction) => Ok(interaction),
@@ -425,12 +428,9 @@ pub(crate) fn find_service_descriptor<'a>(
 /// If a field type should be packed. These are repeated fields of primitive numeric types
 /// (types which use the varint, 32-bit, or 64-bit wire types)
 pub fn should_be_packed_type(field_type: Type) -> bool {
-  match field_type {
-    Type::Double | Type::Float | Type::Int64 | Type::Uint64 | Type::Int32 | Type::Fixed64 |
-    Type::Fixed32 | Type::Uint32 | Type::Sfixed32 | Type::Sfixed64 | Type::Sint32 |
-    Type::Sint64 => true,
-    _ => false
-  }
+  matches!(field_type, Type::Double | Type::Float | Type::Int64 | Type::Uint64 | Type::Int32 | Type::Fixed64 |
+     Type::Fixed32 | Type::Uint32 | Type::Sfixed32 | Type::Sfixed64 | Type::Sint32 |
+     Type::Sint64)
 }
 
 #[cfg(test)]

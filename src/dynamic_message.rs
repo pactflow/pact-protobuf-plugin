@@ -219,7 +219,7 @@ impl DynamicMessage {
   }
 }
 
-fn find_field<'a>(fields: &'a mut Vec<ProtobufField>, field_name: &str) -> Option<&'a mut ProtobufField> {
+fn find_field<'a>(fields: &'a mut [ProtobufField], field_name: &str) -> Option<&'a mut ProtobufField> {
   fields.iter_mut()
     .find(|field| field.field_name == field_name)
 }

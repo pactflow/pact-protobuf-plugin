@@ -179,13 +179,13 @@ fn construct_protobuf_interaction_for_service(
     config.clone()
   } else {
     let config = config.get("request").and_then(|request_config| {
-      request_config.kind.as_ref().and_then(|kind| {
+      request_config.kind.as_ref().map(|kind| {
         match kind {
-          Kind::StructValue(s) => Some(Ok(proto_struct_to_btreemap(s))),
-          Kind::StringValue(_) => Some(Ok(btreemap!{ "value".to_string() => request_config.clone() })),
+          Kind::StructValue(s) => Ok(proto_struct_to_btreemap(s)),
+          Kind::StringValue(_) => Ok(btreemap!{ "value".to_string() => request_config.clone() }),
           _ => {
             warn!("Request contents is of an un-processable type: {:?}", kind);
-            Some(Err(anyhow!("Request contents is of an un-processable type: {:?}, it should be either a Struct or a StringValue", kind)))
+            Err(anyhow!("Request contents is of an un-processable type: {:?}, it should be either a Struct or a StringValue", kind))
           }
         }
       })
@@ -210,14 +210,13 @@ fn construct_protobuf_interaction_for_service(
       response_config.kind.as_ref().map(|kind| {
         match kind {
           Kind::StructValue(s) => vec![ proto_struct_to_btreemap(s) ],
-          Kind::ListValue(l) => l.values.iter().map(|v| {
+          Kind::ListValue(l) => l.values.iter().filter_map(|v| {
             v.kind.as_ref().and_then(|k| match k {
               Kind::StructValue(s) => Some(proto_struct_to_btreemap(s)),
               Kind::StringValue(_) => Some(btreemap!{ "value".to_string() => v.clone() }),
               _ => None
             })
           })
-            .flatten()
             .collect(),
           Kind::StringValue(_) => vec![ btreemap!{ "value".to_string() => response_config.clone() } ],
           _ => vec![]
@@ -879,11 +878,11 @@ fn construct_value_from_string(
   field_name: &str,
   matching_rules: &mut MatchingRuleCategory,
   generators: &mut HashMap<String, Generator>,
-  s: &String,
+  s: &str,
   all_descriptors: &HashMap<String, &FileDescriptorProto>
 ) -> anyhow::Result<MessageFieldValue> {
-  if is_matcher_def(s.as_str()) {
-    let mrd = parse_matcher_def(s.as_str())?;
+  if is_matcher_def(s) {
+    let mrd = parse_matcher_def(s)?;
     if !mrd.rules.is_empty() {
       for rule in &mrd.rules {
         match rule {
@@ -898,7 +897,7 @@ fn construct_value_from_string(
     value_for_type(field_name, mrd.value.as_str(), descriptor, &message_builder.descriptor,
       all_descriptors)
   } else {
-    value_for_type(field_name, s.as_str(), descriptor, &message_builder.descriptor,
+    value_for_type(field_name, s, descriptor, &message_builder.descriptor,
       all_descriptors)
   }
 }

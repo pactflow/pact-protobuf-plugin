@@ -140,8 +140,8 @@ impl GrpcMockServer
     {
       let mut guard = MOCK_SERVER_STATE.lock().unwrap();
       // Initialise all the routes with an initial state of not received
-      let initial_state = self.routes.iter()
-        .map(|(k, _v)| (k.clone(), (0, vec![])))
+      let initial_state = self.routes.keys()
+        .map(|k| (k.clone(), (0, vec![])))
         .collect();
       guard.insert(self.server_key.clone(), (snd, initial_state));
     }

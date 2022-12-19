@@ -179,7 +179,7 @@ fn compare_message(
         expected_value.default_field_value(field_descriptor)
       });
 
-      let comparison = compare_field(&field_path, *expected_value, field_descriptor, &actual_value, matching_context, descriptors);
+      let comparison = compare_field(&field_path, expected_value, field_descriptor, &actual_value, matching_context, descriptors);
       if !comparison.is_empty() {
         results.insert(field_path.to_string(), comparison);
       }
@@ -358,7 +358,7 @@ fn compare_field(
                     mismatch: message
                   }
                 ],
-                BodyMatchResult::BodyMismatches(mismatches) => mismatches.values().cloned().flatten().collect()
+                BodyMatchResult::BodyMismatches(mismatches) => mismatches.values().flatten().cloned().collect()
               }
               Err(err) => vec![
                 BodyMismatch {
