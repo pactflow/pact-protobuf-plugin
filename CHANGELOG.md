@@ -1,3 +1,11 @@
+# 0.2.4 - support passing in protoc config from the consumer test
+
+* 834a8e3 - Update README.md (Ronald Holshausen, Wed Dec 21 15:22:36 2022 +1100)
+* 6c82795 - chore: Update readme with specifying configuration values in the tests (Ronald Holshausen, Wed Dec 21 15:20:49 2022 +1100)
+* 79ba606 - feat: support passing in protoc config from the consumer test (Ronald Holshausen, Wed Dec 21 14:40:56 2022 +1100)
+* 18f7fff - Create issue-comment-created.yml (Ronald Holshausen, Wed Dec 21 10:32:55 2022 +1100)
+* 95a48f7 - bump version to 0.2.4 (Ronald Holshausen, Mon Dec 19 15:12:14 2022 +1100)
+
 # 0.2.3 - Support Generators
 
 * 7f0e9d7 - feat: Implemented RandomBoolean, ProviderStateGenerator and MockServerURL generators (Ronald Holshausen, Mon Dec 19 14:53:05 2022 +1100)
