@@ -133,7 +133,7 @@ using `-I`.
 
 ### Specifying configuration values in the tests
 
-**Version 0.2.4+ **
+*Version 0.2.4+*
 
 Configuration values can also be passed in from the test. They need to be passed in via the [test configuration data](#the-protobuf-test-configuration)
 under the `pact:protobuf-config` key. For example, to add additional proto file include directories in the test:
