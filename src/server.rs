@@ -1,10 +1,11 @@
 //! Module provides the main gRPC server for the plugin process
 
 use std::collections::{BTreeMap, HashMap};
+use std::collections::hash_map::Entry;
 use std::fs::File;
 use std::io::BufReader;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use bytes::{Bytes, BytesMut};
 use maplit::hashmap;
 use pact_matching::{BodyMatchResult, Mismatch};
@@ -27,7 +28,8 @@ use pact_plugin_driver::utils::{
   to_proto_value
 };
 use pact_verifier::verification_result::MismatchResult;
-use prost_types::{DescriptorProto, FileDescriptorProto, FileDescriptorSet};
+use prost_types::FileDescriptorSet;
+use prost_types::value::Kind;
 use serde_json::Value;
 use tonic::{Request, Response, Status};
 use tonic::metadata::KeyAndValueRef;
@@ -88,8 +90,8 @@ impl ProtobufPactPlugin {
 
   /// Returns any additional include paths from the configuration in the manifest to add to the
   /// Protocol Buffers compiler call.
-  pub fn additional_includes(&self) -> Vec<String> {
-    self.manifest.plugin_config
+  pub fn additional_includes(&self, config: &HashMap<String, Value>) -> Vec<String> {
+    config
       .get("additionalIncludes")
       .map(|includes| {
         match includes {
@@ -300,15 +302,14 @@ impl ProtobufPactPlugin {
       match content_type.attributes.get("message") {
         Some(message_type) => {
           debug!("Generating contents for message {}", message_type);
-          let (message_descriptor, file_descriptor) = find_message_type_by_name(message_type, &descriptors)?;
+          let (message_descriptor, _file_descriptor) = find_message_type_by_name(message_type, &descriptors)?;
           let mut body = contents.content.clone().map(Bytes::from).unwrap_or_default();
           if body.is_empty() {
             Ok(GenerateContentResponse::default())
           } else {
             let message = decode_message(&mut body, &message_descriptor, &descriptors)?;
             debug!("message to generate = {:?}", message);
-            let generated_message = generate_protobuf_contents(&message, &content_type, &request.generators,
-              &message_descriptor, &file_descriptor, &descriptors)?;
+            let generated_message = generate_protobuf_contents(&message, &content_type, &request.generators, &descriptors)?;
             Ok(GenerateContentResponse {
               contents: Some(generated_message),
             })
@@ -320,6 +321,35 @@ impl ProtobufPactPlugin {
       Ok(GenerateContentResponse::default())
     }
   }
+
+  fn setup_plugin_config(&self, fields: &BTreeMap<String, prost_types::Value>) -> anyhow::Result<HashMap<String, Value>> {
+    match fields.get("pact:protobuf-config") {
+      Some(config) => if let Some(kind) = &config.kind {
+        let mut plugin_config = self.manifest.plugin_config.clone();
+        match kind {
+          Kind::NullValue(_) => Ok(plugin_config),
+          Kind::StructValue(s) => {
+            for (k, v) in &s.fields {
+              let val = proto_value_to_json(v);
+              match plugin_config.entry(k.clone()) {
+                Entry::Occupied(mut e) => {
+                  e.insert(merge_value(&val, e.get())?);
+                },
+                Entry::Vacant(e) => {
+                  e.insert(val);
+                }
+              }
+            }
+            Ok(plugin_config)
+          }
+          _ => bail!("pact:protobuf-config must be ab object, got {:?}", kind)
+        }
+      } else {
+        Ok(self.manifest.plugin_config.clone())
+      }
+      None => Ok(self.manifest.plugin_config.clone())
+    }
+  }
 }
 
 #[instrument]
@@ -327,8 +357,6 @@ fn generate_protobuf_contents(
   fields: &Vec<ProtobufField>,
   content_type: &ContentType,
   generators: &HashMap<String, proto::Generator>,
-  message_descriptor: &DescriptorProto,
-  file_descriptor: &FileDescriptorProto,
   all_descriptors: &FileDescriptorSet
 ) -> anyhow::Result<Body> {
   let mut message = DynamicMessage::new(fields, all_descriptors);
@@ -425,7 +453,7 @@ impl PactPlugin for ProtobufPactPlugin {
     request: Request<proto::ConfigureInteractionRequest>,
   ) -> Result<Response<proto::ConfigureInteractionResponse>, Status> {
     let message = request.get_ref();
-    debug!("Configure interaction request for content type '{}'", message.content_type);
+    debug!("Configure interaction request for content type '{}': {:?}", message.content_type, message);
 
     // Check for the "pact:proto" key
     let fields = message.contents_config.as_ref().map(|config| config.fields.clone()).unwrap_or_default();
@@ -433,7 +461,7 @@ impl PactPlugin for ProtobufPactPlugin {
       Some(pf) => pf,
       None => {
         error!("Config item with key 'pact:proto' and path to the proto file is required");
-        return Ok(tonic::Response::new(proto::ConfigureInteractionResponse {
+        return Ok(Response::new(proto::ConfigureInteractionResponse {
           error: "Config item with key 'pact:proto' and path to the proto file is required".to_string(),
           .. proto::ConfigureInteractionResponse::default()
         }))
@@ -444,14 +472,21 @@ impl PactPlugin for ProtobufPactPlugin {
     if !fields.contains_key("pact:message-type") && !fields.contains_key("pact:proto-service") {
       let message = "Config item with key 'pact:message-type' and the protobuf message name or 'pact:proto-service' and the service name is required".to_string();
       error!("{}", message);
-      return Ok(tonic::Response::new(proto::ConfigureInteractionResponse {
+      return Ok(Response::new(proto::ConfigureInteractionResponse {
         error: message,
         .. proto::ConfigureInteractionResponse::default()
       }))
     }
 
+    let plugin_config = match self.setup_plugin_config(&fields) {
+      Ok(config) => config,
+      Err(err) => return Ok(Response::new(proto::ConfigureInteractionResponse {
+        error: err.to_string(),
+        ..proto::ConfigureInteractionResponse::default()
+      }))
+    };
     // Make sure we can execute the protobuf compiler
-    let protoc = match setup_protoc(&self.manifest.plugin_config, &self.additional_includes()).await {
+    let protoc = match setup_protoc(&plugin_config, &self.additional_includes(&plugin_config)).await {
       Ok(protoc) => protoc,
       Err(err) => {
         error!("Failed to invoke protoc: {}", err);
@@ -830,6 +865,45 @@ impl PactPlugin for ProtobufPactPlugin {
   }
 }
 
+fn merge_value(initial: &Value, updated: &Value) -> anyhow::Result<Value> {
+  match initial {
+    Value::Array(a) => match updated {
+      Value::Array(a2) => {
+        let mut v = a.clone();
+        v.extend_from_slice(a2.as_slice());
+        Ok(Value::Array(v))
+      }
+      _ => {
+        let mut v = a.clone();
+        v.push(updated.clone());
+        Ok(Value::Array(v))
+      }
+    }
+    Value::Object(o) => match updated {
+      Value::Null => Ok(initial.clone()),
+      Value::Object(o2) => {
+        let mut map = o.clone();
+        for (k, v) in o2 {
+          match map.get(k) {
+            None => {
+              map.insert(k.clone(), v.clone());
+            },
+            Some(val) => {
+              map.insert(k.clone(), merge_value(val, v)?);
+            },
+          }
+        }
+        Ok(Value::Object(map))
+      }
+      _ => bail!("Can not merge config values: {:?} and {:?}", initial, updated)
+    }
+    _ => match updated {
+      Value::Null => Ok(initial.clone()),
+      _ => Ok(updated.clone())
+    }
+  }
+}
+
 fn get_interaction_config(config: &PluginConfiguration) -> anyhow::Result<BTreeMap<String, prost_types::Value>> {
   let interaction_config = config.interaction_configuration.as_ref()
     .map(|config| &config.fields);
@@ -924,10 +998,10 @@ mod tests {
   use pact_plugin_driver::proto::catalogue_entry::EntryType;
   use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
   use pact_plugin_driver::proto::start_mock_server_response;
-  use serde_json::json;
+  use serde_json::{json, Map, Value};
   use tonic::Request;
 
-  use crate::server::ProtobufPactPlugin;
+  use crate::server::{merge_value, ProtobufPactPlugin};
 
   #[tokio::test]
   async fn init_plugin_test() {
@@ -1024,31 +1098,27 @@ mod tests {
   #[test]
   fn ProtobufPactPlugin__additional_includes__default() {
     let plugin = ProtobufPactPlugin { manifest: Default::default() };
-    expect!(plugin.additional_includes().iter()).to(be_empty());
+    expect!(plugin.additional_includes(&hashmap!{}).iter()).to(be_empty());
   }
 
   #[test]
   fn ProtobufPactPlugin__additional_includes__with_string_value() {
-    let manifest = PactPluginManifest {
-      plugin_config: hashmap! {
-        "additionalIncludes".to_string() => json!("/some/path")
-      },
-      .. PactPluginManifest::default()
-    };
+    let manifest = PactPluginManifest::default();
     let plugin = ProtobufPactPlugin { manifest };
-    expect!(plugin.additional_includes()).to(be_equal_to(vec!["/some/path".to_string()]));
+    let config = hashmap! {
+      "additionalIncludes".to_string() => json!("/some/path")
+    };
+    expect!(plugin.additional_includes(&config)).to(be_equal_to(vec!["/some/path".to_string()]));
   }
 
   #[test]
   fn ProtobufPactPlugin__additional_includes__with_list_value() {
-    let manifest = PactPluginManifest {
-      plugin_config: hashmap! {
-        "additionalIncludes".to_string() => json!(["/path1", "/path2"])
-      },
-      .. PactPluginManifest::default()
-    };
+    let manifest = PactPluginManifest::default();
     let plugin = ProtobufPactPlugin { manifest };
-    expect!(plugin.additional_includes()).to(be_equal_to(vec![
+    let config = hashmap! {
+      "additionalIncludes".to_string() => json!(["/path1", "/path2"])
+    };
+    expect!(plugin.additional_includes(&config)).to(be_equal_to(vec![
       "/path1".to_string(),
       "/path2".to_string()
     ]));
@@ -1056,14 +1126,12 @@ mod tests {
 
   #[test]
   fn ProtobufPactPlugin__additional_includes__with_non_string_values() {
-    let manifest = PactPluginManifest {
-      plugin_config: hashmap! {
-        "additionalIncludes".to_string() => json!(["/path1", 200])
-      },
-      .. PactPluginManifest::default()
-    };
+    let manifest = PactPluginManifest::default();
     let plugin = ProtobufPactPlugin { manifest };
-    expect!(plugin.additional_includes()).to(be_equal_to(vec![
+    let config = hashmap! {
+      "additionalIncludes".to_string() => json!(["/path1", 200])
+    };
+    expect!(plugin.additional_includes(&config)).to(be_equal_to(vec![
       "/path1".to_string(),
       "200".to_string()
     ]));
@@ -1226,5 +1294,68 @@ mod tests {
     expect!(get_mock_server_results_response.ok).to(be_false());
     let error_response = get_mock_server_results_response.results.get(0).unwrap();
     expect!(&error_response.error).to(be_equal_to("Did not find any mock server results for a server with ID 1234abcd"));
+  }
+
+  #[test_log::test]
+  fn merge_value_test() {
+    expect!(merge_value(&Value::Null, &Value::Null).unwrap()).to(be_equal_to(Value::Null));
+    expect!(merge_value(&Value::Null, &Value::String("s".to_string())).unwrap()).to(be_equal_to(Value::String("s".to_string())));
+    expect!(merge_value(&Value::Null, &Value::Bool(true)).unwrap()).to(be_equal_to(Value::Bool(true)));
+    expect!(merge_value(&Value::Null, &json!(1)).unwrap()).to(be_equal_to(json!(1)));
+    expect!(merge_value(&Value::Null, &Value::Array(vec![])).unwrap()).to(be_equal_to(Value::Array(vec![])));
+    expect!(merge_value(&Value::Null, &Value::Object(Map::default())).unwrap()).to(be_equal_to(Value::Object(Map::default())));
+
+    let s = Value::String("x".to_string());
+    expect!(merge_value(&s, &Value::Null).unwrap()).to(be_equal_to(s.clone()));
+    expect!(merge_value(&s, &Value::String("s".to_string())).unwrap()).to(be_equal_to(Value::String("s".to_string())));
+    expect!(merge_value(&s, &Value::Bool(true)).unwrap()).to(be_equal_to(Value::Bool(true)));
+    expect!(merge_value(&s, &json!(1)).unwrap()).to(be_equal_to(json!(1)));
+    expect!(merge_value(&s, &Value::Array(vec![])).unwrap()).to(be_equal_to(Value::Array(vec![])));
+    expect!(merge_value(&s, &Value::Object(Map::default())).unwrap()).to(be_equal_to(Value::Object(Map::default())));
+
+    let b = Value::Bool(false);
+    expect!(merge_value(&b, &Value::Null).unwrap()).to(be_equal_to(b.clone()));
+    expect!(merge_value(&b, &Value::String("s".to_string())).unwrap()).to(be_equal_to(Value::String("s".to_string())));
+    expect!(merge_value(&b, &Value::Bool(true)).unwrap()).to(be_equal_to(Value::Bool(true)));
+    expect!(merge_value(&b, &json!(1)).unwrap()).to(be_equal_to(json!(1)));
+    expect!(merge_value(&b, &Value::Array(vec![])).unwrap()).to(be_equal_to(Value::Array(vec![])));
+    expect!(merge_value(&b, &Value::Object(Map::default())).unwrap()).to(be_equal_to(Value::Object(Map::default())));
+
+    let n = json!(100.02);
+    expect!(merge_value(&n, &Value::Null).unwrap()).to(be_equal_to(n.clone()));
+    expect!(merge_value(&n, &Value::String("s".to_string())).unwrap()).to(be_equal_to(Value::String("s".to_string())));
+    expect!(merge_value(&n, &Value::Bool(true)).unwrap()).to(be_equal_to(Value::Bool(true)));
+    expect!(merge_value(&n, &json!(1)).unwrap()).to(be_equal_to(json!(1)));
+    expect!(merge_value(&n, &Value::Array(vec![])).unwrap()).to(be_equal_to(Value::Array(vec![])));
+    expect!(merge_value(&n, &Value::Object(Map::default())).unwrap()).to(be_equal_to(Value::Object(Map::default())));
+
+    let a = Value::Array(vec![]);
+    expect!(merge_value(&a, &Value::Null).unwrap()).to(be_equal_to(Value::Array(vec![Value::Null])));
+    expect!(merge_value(&a, &Value::String("s".to_string())).unwrap()).to(be_equal_to(Value::Array(vec![Value::String("s".to_string())])));
+    expect!(merge_value(&a, &Value::Bool(true)).unwrap()).to(be_equal_to(Value::Array(vec![Value::Bool(true)])));
+    expect!(merge_value(&a, &json!(1)).unwrap()).to(be_equal_to(Value::Array(vec![json!(1)])));
+    expect!(merge_value(&a, &Value::Object(Map::default())).unwrap()).to(be_equal_to(Value::Array(vec![Value::Object(Map::default())])));
+    expect!(merge_value(&a, &Value::Array(vec![])).unwrap()).to(be_equal_to(Value::Array(vec![])));
+    expect!(merge_value(&a, &Value::Array(vec![Value::Null])).unwrap()).to(be_equal_to(Value::Array(vec![Value::Null])));
+    expect!(merge_value(&Value::Array(vec![Value::Null]), &Value::Array(vec![])).unwrap()).to(be_equal_to(Value::Array(vec![Value::Null])));
+    expect!(merge_value(&Value::Array(vec![Value::Null]), &Value::Array(vec![Value::Bool(true)])).unwrap()).to(be_equal_to(Value::Array(vec![Value::Null, Value::Bool(true)])));
+    expect!(merge_value(&Value::Array(vec![Value::Array(vec![Value::Null])]), &Value::Array(vec![Value::Array(vec![Value::Bool(true)])])).unwrap())
+      .to(be_equal_to(Value::Array(vec![Value::Array(vec![Value::Null]), Value::Array(vec![Value::Bool(true)])])));
+
+    let m = Value::Object(Map::default());
+    expect!(merge_value(&m, &Value::Null).unwrap()).to(be_equal_to(m.clone()));
+    expect!(merge_value(&m, &Value::String("s".to_string()))).to(be_err());
+    expect!(merge_value(&m, &Value::Bool(true))).to(be_err());
+    expect!(merge_value(&m, &json!(1))).to(be_err());
+    expect!(merge_value(&m, &Value::Array(vec![]))).to(be_err());
+    expect!(merge_value(&m, &Value::Object(Map::default())).unwrap()).to(be_equal_to(m.clone()));
+    expect!(merge_value(&m, &json!({"test": "ok"})).unwrap()).to(be_equal_to(json!({"test": "ok"})));
+    expect!(merge_value(&json!({"test": "ok"}), &Value::Object(Map::default())).unwrap()).to(be_equal_to(json!({"test": "ok"})));
+    expect!(merge_value(&json!({"test": "ok"}), &json!({"other": "value"})).unwrap())
+      .to(be_equal_to(json!({"test": "ok", "other": "value"})));
+    expect!(merge_value(&json!({"test": "ok"}), &json!({"test": "not ok", "other": "value"})).unwrap())
+      .to(be_equal_to(json!({"test": "not ok", "other": "value"})));
+    expect!(merge_value(&json!({"additional": ["ok"]}), &json!({"additional": ["not ok"], "other": "value"})).unwrap())
+      .to(be_equal_to(json!({"additional": ["ok", "not ok"], "other": "value"})));
   }
 }
