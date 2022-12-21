@@ -1341,9 +1341,9 @@ dependencies = [
 
 [[package]]
 name = "is-terminal"
-version = "0.4.1"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "927609f78c2913a6f6ac3c27a4fe87f43e2a35367c0c4b0f8265e8f49a104330"
+checksum = "28dfb6c8100ccc63462345b67d1bbc3679177c75ee4bf59bf29c8b1d110b8189"
 dependencies = [
  "hermit-abi 0.2.6",
  "io-lifetimes",
@@ -1699,11 +1699,11 @@ dependencies = [
 
 [[package]]
 name = "num_cpus"
-version = "1.14.0"
+version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6058e64324c71e02bc2b150e4f3bc8286db6c83092132ffa3f6b1eab0f9def5"
+checksum = "0fac9e2da13b5eb447a6ce3d392f23a29d8694bff781bf03a16cd9ac8697593b"
 dependencies = [
- "hermit-abi 0.1.19",
+ "hermit-abi 0.2.6",
  "libc",
 ]
 
@@ -1817,7 +1817,7 @@ dependencies = [
 
 [[package]]
 name = "pact-protobuf-plugin"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "ansi_term",
  "anyhow",
@@ -1876,9 +1876,9 @@ dependencies = [
 
 [[package]]
 name = "pact_consumer"
-version = "0.10.2"
+version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f266240a686b793f882b9f628534239a40dc4a54e42edeb284875ae6bf858ad"
+checksum = "b1b1579b8ac502c83ad4fea28f04f88c4c495be59c401432eb4449b50873feea"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1902,13 +1902,13 @@ dependencies = [
 
 [[package]]
 name = "pact_matching"
-version = "1.0.1"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9267dc23d9fc7c20cf6d2c8010994f90b06fde3b13875f32567bfdd464b6391f"
+checksum = "b8fb93e413d6cd8ead3e4755457a561fa5e39e3ea1f3a9ebd26ca92d60115c65"
 dependencies = [
  "ansi_term",
  "anyhow",
- "base64 0.13.1",
+ "base64 0.20.0",
  "bytes",
  "chrono",
  "difference",
@@ -1940,9 +1940,9 @@ dependencies = [
 
 [[package]]
 name = "pact_mock_server"
-version = "0.9.6"
+version = "0.9.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89954113dbf12181fd554e026d0d704ba680d44944301f4a83df316e5a3495b9"
+checksum = "dc379a2ca8da3d0f50c052e7cb308bf595887d09994f8fb2eb65334f6bd2f842"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2008,14 +2008,14 @@ dependencies = [
 
 [[package]]
 name = "pact_verifier"
-version = "0.13.18"
+version = "0.13.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b94936bb804ec39752ba3188f08b78d0ab6b224d1051f22eff1b608cbb053bc8"
+checksum = "2b570deed608208b3180cf8e7832bfa7063d879c5a4cb67fdfeed899421855e2"
 dependencies = [
  "ansi_term",
  "anyhow",
  "async-trait",
- "base64 0.13.1",
+ "base64 0.20.0",
  "bytes",
  "difference",
  "futures",
@@ -2274,9 +2274,9 @@ dependencies = [
 
 [[package]]
 name = "prost"
-version = "0.11.3"
+version = "0.11.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0b18e655c21ff5ac2084a5ad0611e827b3f92badf79f4910b5a5c58f4d87ff0"
+checksum = "c01db6702aa05baa3f57dec92b8eeeeb4cb19e894e73996b32a4093289e54592"
 dependencies = [
  "bytes",
  "prost-derive",
@@ -2284,9 +2284,9 @@ dependencies = [
 
 [[package]]
 name = "prost-build"
-version = "0.11.4"
+version = "0.11.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "276470f7f281b0ed53d2ae42dd52b4a8d08853a3c70e7fe95882acbb98a6ae94"
+checksum = "cb5320c680de74ba083512704acb90fe00f28f79207286a848e730c45dd73ed6"
 dependencies = [
  "bytes",
  "heck",
@@ -2306,9 +2306,9 @@ dependencies = [
 
 [[package]]
 name = "prost-derive"
-version = "0.11.2"
+version = "0.11.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "164ae68b6587001ca506d3bf7f1000bfa248d0e1217b618108fba4ec1d0cc306"
+checksum = "c8842bad1a5419bca14eac663ba798f6bc19c413c2fdceb5f3ba3b0932d96720"
 dependencies = [
  "anyhow",
  "itertools",
@@ -2319,9 +2319,9 @@ dependencies = [
 
 [[package]]
 name = "prost-types"
-version = "0.11.2"
+version = "0.11.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "747761bc3dc48f9a34553bf65605cf6cb6288ba219f3450b4275dbd81539551a"
+checksum = "017f79637768cde62820bc2d4fe0e45daaa027755c323ad077767c6c5f173091"
 dependencies = [
  "bytes",
  "prost",
