@@ -114,22 +114,38 @@ environment variable that is passed into the plugin process (this should be set 
 The Protobuf plugin supports the following configuration options, which can be set in the plugin manifest file under
 `pluginConfig`:
 
-### `protocVersion` [string]
+#### `protocVersion` [string]
 
 The Protobuf compiler version to download if required.
 
-### `downloadUrl` [string]
+#### `downloadUrl` [string]
 
 The URL to download the Protobuf compiler from. By default, this will be the Protocol Buffers GitHub release page.
 
-### `hostToBindTo` [string]
+#### `hostToBindTo` [string]
 
 Host to bind to. Default is the IP4 loopback adapter `127.0.0.1`, to use the IP6 loopback set it to `::1`. 
 
-### `additionalIncludes` [string or list\<string\>]
+#### `additionalIncludes` [string or list\<string\>]
 
 Additional includes to add to the Protocol buffers compiler. Each value will be added verbatim to the command line 
 using `-I`.
+
+### Specifying configuration values in the tests
+
+**Version 0.2.4+ **
+
+Configuration values can also be passed in from the test. They need to be passed in via the [test configuration data](#the-protobuf-test-configuration)
+under the `pact:protobuf-config` key. For example, to add additional proto file include directories in the test:
+
+```java
+  "pact:proto", filePath("../proto/test_enum.proto"),
+  "pact:content-type", "application/grpc",
+  "pact:proto-service", "Test/GetFeature",
+  "pact:protobuf-config", Map.of(
+    "additionalIncludes", List.of(filePath("../proto2"))
+  )
+```
 
 ## Supported features
 
