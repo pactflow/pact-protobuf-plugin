@@ -16,7 +16,7 @@ exclude = [
 tonic = "0.8.3"
 prost = "0.11.3"
 prost-types = "0.11.2"
-tokio = { version = "1.23.0", features = ["full"] }
+tokio = { version = "1.23.1", features = ["full"] }
 uuid = { version = "1.2.2", features = ["v4"] }
 maplit = "1.0.2"
 pact_matching = "1.0.1"
