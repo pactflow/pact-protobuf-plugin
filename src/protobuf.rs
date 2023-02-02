@@ -23,7 +23,7 @@ use pact_plugin_driver::proto::{
 use pact_plugin_driver::proto::body::ContentTypeHint;
 use pact_plugin_driver::proto::interaction_response::MarkupType;
 use pact_plugin_driver::utils::{proto_value_to_json, proto_value_to_string, to_proto_struct};
-use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorProto, ServiceDescriptorProto};
+use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorProto, ServiceDescriptorProto, Struct};
 use prost_types::field_descriptor_proto::Type;
 use prost_types::value::Kind;
 use serde_json::{json, Value};
@@ -195,13 +195,9 @@ fn construct_protobuf_interaction_for_service(
       Some(result) => result?
     }
   };
-  let request_part = if request_part_config.is_empty() {
-    None
-  } else {
-    let interaction = construct_protobuf_interaction_for_message(&request_descriptor,
-      &request_part_config, input_message_name, "", file_descriptor, all_descriptors)?;
-    Some(InteractionResponse { part_name: "request".into(), .. interaction } )
-  };
+  let interaction = construct_protobuf_interaction_for_message(&request_descriptor,
+    &request_part_config, input_message_name, "", file_descriptor, all_descriptors)?;
+  let request_part = Some(InteractionResponse { part_name: "request".into(), .. interaction } );
 
   let response_part_config = if service_part == "response" {
     vec![ config.clone() ]
@@ -341,11 +337,17 @@ fn construct_protobuf_interaction_for_message(
     })
   }).collect();
 
+  let content_type = format!("application/protobuf;message={}", message_name);
   Ok(InteractionResponse {
     contents: Some(Body {
-      content_type: format!("application/protobuf;message={}", message_name),
+      content_type: content_type.clone(),
       content: Some(message_builder.encode_message()?.to_vec()),
       content_type_hint: ContentTypeHint::Binary as i32,
+    }),
+    message_metadata: Some(Struct {
+      fields: btreemap!{
+        "contentType".to_string() => prost_types::Value{ kind: Some(prost_types::value::Kind::StringValue(content_type)) }
+      }
     }),
     rules,
     generators,
