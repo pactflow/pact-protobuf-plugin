@@ -37,6 +37,7 @@ use pact_protobuf_plugin::built_info;
 use pact_protobuf_plugin::server::ProtobufPactPlugin;
 
 // We are not using provider states, so we define a executor that does nothing
+#[derive(Debug)]
 struct NoopProviderStateExecutor { }
 
 #[async_trait]
