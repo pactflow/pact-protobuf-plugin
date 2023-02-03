@@ -172,6 +172,8 @@ impl Service<tonic::Request<DynamicMessage>> for MockService {
 
 #[cfg(test)]
 mod tests {
+  use base64::Engine;
+  use base64::engine::general_purpose::STANDARD as BASE64;
   use bytes::{Bytes, BytesMut};
   use expectest::prelude::*;
   use pact_models::v4::pact::V4Pact;
@@ -186,7 +188,7 @@ mod tests {
 
   #[test_log::test(tokio::test)]
   async fn handle_message_applies_any_generators() {
-    let bytes = base64::decode(DESCRIPTOR_BYTES).unwrap();
+    let bytes = BASE64.decode(DESCRIPTOR_BYTES).unwrap();
     let bytes1 = Bytes::copy_from_slice(bytes.as_slice());
     let file_descriptor_set = FileDescriptorSet::decode(bytes1).unwrap();
     let fds = &file_descriptor_set;
@@ -288,7 +290,7 @@ mod tests {
     let pact = V4Pact::pact_from_json(&pact_json, "<>").unwrap();
     let message = pact.interactions.first().unwrap();
 
-    let bytes = base64::decode("EgoNAABAQBUAAIBA").unwrap();
+    let bytes = BASE64.decode("EgoNAABAQBUAAIBA").unwrap();
     let mut bytes2 = BytesMut::from(bytes.as_slice());
     let fields = decode_message(&mut bytes2, input_message, fds).unwrap();
     let request = DynamicMessage::new(fields.as_slice(), &file_descriptor_set);

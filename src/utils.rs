@@ -4,6 +4,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 
 use anyhow::anyhow;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use bytes::{Bytes, BytesMut};
 use field_descriptor_proto::Type;
 use maplit::hashmap;
@@ -392,7 +394,7 @@ pub(crate) fn get_descriptors_for_interaction(
   }
 
   // The descriptor bytes will be base 64 encoded.
-  let descriptor_bytes = match base64::decode(descriptor_bytes_encoded) {
+  let descriptor_bytes = match BASE64.decode(descriptor_bytes_encoded) {
     Ok(bytes) => Bytes::from(bytes),
     Err(err) => {
       return Err(anyhow!("Failed to decode the Protobuf descriptor - {}", err));
@@ -444,8 +446,8 @@ pub(crate) mod tests {
     EnumDescriptorProto,
     EnumValueDescriptorProto,
     FieldDescriptorProto,
-    FileDescriptorSet,
     FileDescriptorProto,
+    FileDescriptorSet,
     MessageOptions
   };
   use prost_types::field_descriptor_proto::{Label, Type};

@@ -9,6 +9,8 @@ use std::task::{Context, Poll};
 use std::thread;
 
 use anyhow::anyhow;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use bytes::Bytes;
 use http::Method;
 use hyper::{http, Request, Response};
@@ -80,7 +82,7 @@ impl GrpcMockServer
     for (key, value) in &self.plugin_config.configuration {
       if let Value::Object(map) = value {
         if let Some(descriptor) = map.get("protoDescriptors") {
-          let bytes = base64::decode(json_to_string(descriptor))?;
+          let bytes = BASE64.decode(json_to_string(descriptor))?;
           let buffer = Bytes::from(bytes);
           let fds = FileDescriptorSet::decode(buffer)?;
           self.descriptors.insert(key.clone(), fds);

@@ -1828,7 +1828,7 @@ dependencies = [
  "ansi_term",
  "anyhow",
  "async-trait",
- "base64 0.20.0",
+ "base64 0.21.0",
  "built",
  "bytes",
  "chrono",

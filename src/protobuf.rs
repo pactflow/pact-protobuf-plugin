@@ -4,6 +4,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::anyhow;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use itertools::{Either, Itertools};
 use maplit::{btreemap, hashmap};
 use pact_models::generators::Generator;
@@ -34,7 +36,16 @@ use tracing_core::LevelFilter;
 
 use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValueType, RType};
 use crate::protoc::Protoc;
-use crate::utils::{find_enum_value_by_name, find_enum_value_by_name_in_message, find_message_type_in_file_descriptors, find_nested_type, is_map_field, is_repeated_field, last_name, proto_struct_to_btreemap};
+use crate::utils::{
+  find_enum_value_by_name,
+  find_enum_value_by_name_in_message,
+  find_message_type_in_file_descriptors,
+  find_nested_type,
+  is_map_field,
+  is_repeated_field,
+  last_name,
+  proto_struct_to_btreemap
+};
 
 /// Process the provided protobuf file and configure the interaction
 pub(crate) async fn process_proto(
@@ -66,7 +77,7 @@ pub(crate) async fn process_proto(
     }
   }
 
-  let descriptor_encoded = base64::encode(&descriptor_bytes);
+  let descriptor_encoded = BASE64.encode(&descriptor_bytes);
   let descriptor_hash = format!("{:x}", md5::compute(&descriptor_bytes));
   let mut interactions = vec![];
 
@@ -954,6 +965,8 @@ fn value_for_type(
 #[cfg(test)]
 pub(crate) mod tests {
   use std::collections::HashMap;
+  use base64::Engine;
+  use base64::engine::general_purpose::STANDARD as BASE64;
   use bytes::Bytes;
   use expectest::prelude::*;
   use lazy_static::lazy_static;
@@ -982,7 +995,7 @@ pub(crate) mod tests {
   use crate::message_builder::{MessageBuilder, MessageFieldValueType, RType};
   use crate::protobuf::{
     build_embedded_message_field_value,
-    build_field_value, 
+    build_field_value,
     build_single_embedded_field_value,
     construct_message_field,
     construct_protobuf_interaction_for_message,
@@ -1767,7 +1780,7 @@ pub(crate) mod tests {
 
   #[test_log::test]
   fn build_embedded_message_field_value_with_field_from_different_proto_file() {
-    let bytes = base64::decode(DESCRIPTOR_BYTES).unwrap();
+    let bytes = BASE64.decode(DESCRIPTOR_BYTES).unwrap();
     let bytes1 = Bytes::copy_from_slice(bytes.as_slice());
     let fds: FileDescriptorSet = FileDescriptorSet::decode(bytes1).unwrap();
 
@@ -1798,7 +1811,7 @@ pub(crate) mod tests {
 
   #[test_log::test]
   fn build_single_embedded_field_value_with_field_from_different_proto_file() {
-    let bytes = base64::decode(DESCRIPTOR_BYTES).unwrap();
+    let bytes = BASE64.decode(DESCRIPTOR_BYTES).unwrap();
     let bytes1 = Bytes::copy_from_slice(bytes.as_slice());
     let fds: FileDescriptorSet = FileDescriptorSet::decode(bytes1).unwrap();
 

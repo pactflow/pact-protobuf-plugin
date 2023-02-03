@@ -709,6 +709,8 @@ impl MessageFieldValue {
 
 #[cfg(test)]
 mod tests {
+  use base64::Engine;
+  use base64::engine::general_purpose::STANDARD as BASE64;
   use bytes::{Bytes, BytesMut};
   use expectest::prelude::*;
   use itertools::Itertools;
@@ -1080,7 +1082,7 @@ mod tests {
     });
 
     let result = message.encode_message().unwrap();
-    expect!(result.to_vec()).to(be_equal_to(base64::decode("ChJwbHVnaW4tZHJpdmVyLXJ1c3QSBTAuMC4w").unwrap()));
+    expect!(result.to_vec()).to(be_equal_to(BASE64.decode("ChJwbHVnaW4tZHJpdmVyLXJ1c3QSBTAuMC4w").unwrap()));
 
     expect!(message.generate_markup("")).to(be_ok().value(
       "|```protobuf
@@ -1221,7 +1223,7 @@ mod tests {
   }
 
   fn get_file_descriptor(file_name: &str, descriptor: &str) -> Option<FileDescriptorProto> {
-    let bytes = base64::decode(descriptor).unwrap();
+    let bytes = BASE64.decode(descriptor).unwrap();
     let bytes1 = Bytes::from(bytes);
     let fds = FileDescriptorSet::decode(bytes1).unwrap();
     fds.file.iter().find(|fd| fd.name.clone().unwrap_or_default() == file_name).cloned()

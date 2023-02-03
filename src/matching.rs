@@ -651,6 +651,8 @@ fn find_field_descriptor(field: &ProtobufField, descriptor: &DescriptorProto) ->
 
 #[cfg(test)]
 mod tests {
+  use base64::Engine;
+  use base64::engine::general_purpose::STANDARD as BASE64;
   use expectest::prelude::*;
   use prost::Message;
   use prost::encoding::WireType;
@@ -750,7 +752,7 @@ mod tests {
 
   #[test_log::test]
   fn compare_message_where_the_actual_field_is_missing_due_it_being_the_default_enum_value() {
-    let bytes = base64::decode(DESCRIPTORS).unwrap();
+    let bytes = BASE64.decode(DESCRIPTORS).unwrap();
     let bytes1 = Bytes::copy_from_slice(bytes.as_slice());
     let fds = FileDescriptorSet::decode(bytes1).unwrap();
 
