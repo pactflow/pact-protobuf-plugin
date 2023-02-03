@@ -1,3 +1,9 @@
+# 0.2.5 - Bugfix Release
+
+* 0f44247 - fix: Handle interactions with empty messages (Ronald Holshausen, Fri Feb 3 10:37:06 2023 +1100)
+* 8734416 - chore: Update dependencies (Ronald Holshausen, Fri Feb 3 10:35:28 2023 +1100)
+* 22eb0cf - bump version to 0.2.5 (Ronald Holshausen, Wed Dec 21 15:35:28 2022 +1100)
+
 # 0.2.4 - support passing in protoc config from the consumer test
 
 * 834a8e3 - Update README.md (Ronald Holshausen, Wed Dec 21 15:22:36 2022 +1100)
