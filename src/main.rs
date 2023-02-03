@@ -10,7 +10,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use clap::{App, Arg, ErrorKind};
+use clap::{Arg, ArgAction, Command, command};
+use clap::error::ErrorKind;
 use hyper::header;
 use lazy_static::lazy_static;
 use pact_plugin_driver::proto::pact_plugin_server::PactPluginServer;
@@ -66,8 +67,8 @@ lazy_static! {
 /// Maximum time to wait when there is no activity to shut the plugin down (10 minutes)
 const MAX_TIME: u64 = 600;
 
-fn integer_value(v: &str) -> Result<(), String> {
-  v.parse::<u64>().map(|_| ()).map_err(|e| format!("'{}' is not a valid integer value: {}", v, e) )
+fn integer_value(v: &str) -> Result<u64, String> {
+  v.parse::<u64>().map_err(|e| format!("'{}' is not a valid integer value: {}", v, e) )
 }
 
 /// Main method of the plugin process. This will start a gRPC server using the plugin proto file
@@ -101,31 +102,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
       eprintln!("WARN: Failed to initialise global tracing subscriber - {err}");
     };
 
-    let args: Vec<String> = env::args().collect();
-    let program = args[0].clone();
-    let app = App::new(program)
-      .version(clap::crate_version!())
-      .about("Pact Protobuf plugin")
-      .version_short('v')
-      .arg(Arg::with_name("timeout")
-        .short('t')
-        .long("timeout")
-        .takes_value(true)
-        .use_delimiter(false)
-        .help("Timeout to use for inactivity to shutdown the plugin process. Default is 600 seconds (10 minutes)")
-        .validator(integer_value)
-      )
-      .arg(Arg::with_name("host")
-        .short('h')
-        .long("host")
-        .takes_value(true)
-        .use_delimiter(false)
-        .help("Host to bind to. Defaults to [::1], which is the IP6 loopback address")
-      );
-
-    let matches = match app.get_matches_safe() {
+    let app = cli();
+    let matches = match app.try_get_matches() {
       Ok(matches) => matches,
-      Err(err) => return match err.kind {
+      Err(err) => return match err.kind() {
         ErrorKind::DisplayHelp => {
           println!("{}", err);
           Ok(())
@@ -144,7 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Bind to a OS provided port and create a TCP listener
     let host = plugin.host_to_bind_to()
-      .or_else(|| matches.value_of("host").map(|host| host.to_string()))
+      .or_else(|| matches.get_one::<String>("host").cloned())
       .unwrap_or_else(|| "[::1]".to_string());
     let addr: SocketAddr = format!("{}:0", host).parse()
       .with_context(|| format!("Failed to parse the host '{}'", host))?;
@@ -174,8 +154,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (snd, rcr) = channel::<()>();
     update_access_time();
 
-    let timeout = matches.value_of("timeout")
-      .map(|port| port.parse::<u64>().unwrap())
+    let timeout = matches.get_one::<u64>("timeout")
+      .map(|port| *port)
       .unwrap_or(MAX_TIME);
     tokio::spawn(async move {
       let mut interval = time::interval(Duration::from_secs(10));
@@ -208,7 +188,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn cli() -> Command {
+  command!()
+    .disable_version_flag(true)
+    .disable_help_flag(true)
+    .arg(Arg::new("help")
+      .long("help")
+      .action(ArgAction::Help)
+      .help("Print help and exit"))
+    .arg(Arg::new("version")
+      .short('v')
+      .long("version")
+      .action(ArgAction::Version)
+      .help("Print version information and exit"))
+    .arg(Arg::new("timeout")
+      .short('t')
+      .long("timeout")
+      .action(ArgAction::Set)
+      .help("Timeout in seconds to use for inactivity to shutdown the plugin process. Default is 600 seconds (10 minutes)")
+      .value_parser(integer_value)
+    )
+    .arg(Arg::new("host")
+      .short('h')
+      .long("host")
+      .action(ArgAction::Set)
+      .help("Host to bind to. Defaults to [::1], which is the IP6 loopback address")
+    )
+}
+
 pub fn update_access_time() {
   let mut guard = SHUTDOWN_TIMER.lock().unwrap();
   *guard = Some(Instant::now());
+}
+
+#[cfg(test)]
+mod tests {
+  use crate::cli;
+
+  #[test]
+  fn verify_cli() {
+    cli().debug_assert();
+  }
 }
