@@ -13,6 +13,7 @@ use pact_models::json_utils::json_to_string;
 use pact_models::pact::load_pact_from_json;
 use pact_models::prelude::v4::V4Pact;
 use pact_models::v4::interaction::V4Interaction;
+use pact_plugin_driver::utils::proto_struct_to_map;
 use prost::Message;
 use prost_types::{
   DescriptorProto,
@@ -26,6 +27,7 @@ use prost_types::{
   Value
 };
 use prost_types::field_descriptor_proto::Label;
+use prost_types::value::Kind;
 use serde_json::json;
 use tracing::{debug, error, trace, warn};
 
@@ -433,6 +435,36 @@ pub fn should_be_packed_type(field_type: Type) -> bool {
   matches!(field_type, Type::Double | Type::Float | Type::Int64 | Type::Uint64 | Type::Int32 | Type::Fixed64 |
      Type::Fixed32 | Type::Uint32 | Type::Sfixed32 | Type::Sfixed64 | Type::Sint32 |
      Type::Sint64)
+}
+
+/// Tries to convert a Protobuf Value to a Map. Returns an error if the incoming value is not a
+/// value Protobuf type (Struct or NullValue)
+pub fn proto_value_to_map(val: &Value) -> anyhow::Result<HashMap<String, serde_json::Value>> {
+  match &val.kind {
+    Some(kind) => match kind {
+      Kind::NullValue(_) => Ok(HashMap::default()),
+      Kind::StructValue(s) => Ok(proto_struct_to_map(s)),
+      _ => Err(anyhow!("Must be a Protobuf Struct or NullValue, got {}", type_of(kind)))
+    }
+    None => Ok(HashMap::default())
+  }
+}
+
+fn type_of(kind: &Kind) -> String {
+  match kind {
+    Kind::NullValue(_) => "Null",
+    Kind::NumberValue(_) => "Number",
+    Kind::StringValue(_) => "String",
+    Kind::BoolValue(_) => "Bool",
+    Kind::StructValue(_) => "Struct",
+    Kind::ListValue(_) => "List"
+  }.to_string()
+}
+
+pub(crate) fn prost_string<S: Into<String>>(s: S) -> Value {
+  Value {
+    kind: Some(Kind::StringValue(s.into()))
+  }
 }
 
 #[cfg(test)]

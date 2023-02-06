@@ -12,6 +12,7 @@ pub mod tcp;
 mod dynamic_message;
 mod mock_service;
 mod verification;
+mod metadata;
 
 pub mod built_info {
   include!(concat!(env!("OUT_DIR"), "/built.rs"));

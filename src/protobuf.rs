@@ -35,17 +35,9 @@ use tracing::{debug, instrument, trace, warn};
 use tracing_core::LevelFilter;
 
 use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValueType, RType};
+use crate::metadata::{MessageMetadata, process_metadata};
 use crate::protoc::Protoc;
-use crate::utils::{
-  find_enum_value_by_name,
-  find_enum_value_by_name_in_message,
-  find_message_type_in_file_descriptors,
-  find_nested_type,
-  is_map_field,
-  is_repeated_field,
-  last_name,
-  proto_struct_to_btreemap
-};
+use crate::utils::{find_enum_value_by_name, find_enum_value_by_name_in_message, find_message_type_in_file_descriptors, find_nested_type, is_map_field, is_repeated_field, last_name, prost_string, proto_struct_to_btreemap};
 
 /// Process the provided protobuf file and configure the interaction
 pub(crate) async fn process_proto(
@@ -186,8 +178,65 @@ fn construct_protobuf_interaction_for_service(
   let request_descriptor = find_message_descriptor(input_message_name, all_descriptors)?;
   let response_descriptor = find_message_descriptor(output_message_name, all_descriptors)?;
 
-  let request_part_config = if service_part == "request" {
-    config.clone()
+  let request_part_config = request_part(config, service_part)?;
+  let request_metadata = process_metadata(config.get("requestMetadata"))?;
+  let interaction = construct_protobuf_interaction_for_message(&request_descriptor,
+    &request_part_config, input_message_name, "", file_descriptor, all_descriptors,
+    request_metadata.as_ref()
+  )?;
+  let request_part = Some(InteractionResponse {
+    part_name: "request".into(),
+    .. interaction
+  });
+
+  let response_part_config = response_part(config, service_part)?;
+  let mut response_part = vec![];
+  for config in response_part_config {
+    let response_metadata = process_metadata(config.get("responseMetadata"))?;
+    let interaction = construct_protobuf_interaction_for_message(
+      &response_descriptor, &config, output_message_name, "",
+      file_descriptor, all_descriptors, response_metadata.as_ref()
+    )?;
+    response_part.push(InteractionResponse { part_name: "response".into(), .. interaction });
+  }
+
+  Ok((request_part, response_part))
+}
+
+fn response_part(
+  config: &BTreeMap<String, prost_types::Value>,
+  service_part: &str
+) -> anyhow::Result<Vec<BTreeMap<String, prost_types::Value>>> {
+  if service_part == "response" {
+    Ok(vec![config.clone()])
+  } else {
+    Ok(config.get("response").and_then(|response_config| {
+      response_config.kind.as_ref().map(|kind| {
+        match kind {
+          Kind::StructValue(s) => vec![proto_struct_to_btreemap(s)],
+          Kind::ListValue(l) => l.values.iter().filter_map(|v| {
+            v.kind.as_ref().and_then(|k| match k {
+              Kind::StructValue(s) => Some(proto_struct_to_btreemap(s)),
+              Kind::StringValue(_) => Some(btreemap! { "value".to_string() => v.clone() }),
+              _ => None
+            })
+          })
+            .collect(),
+          Kind::StringValue(_) => vec![btreemap! { "value".to_string() => response_config.clone() }],
+          _ => vec![]
+        }
+      })
+    })
+      .unwrap_or_default())
+  }
+}
+
+fn request_part(
+  config: &BTreeMap<String, prost_types::Value>,
+  service_part: &str
+) -> anyhow::Result<BTreeMap<String, prost_types::Value>> {
+  if service_part == "request" {
+    Ok(config.clone())
   } else {
     let config = config.get("request").and_then(|request_config| {
       request_config.kind.as_ref().map(|kind| {
@@ -202,45 +251,10 @@ fn construct_protobuf_interaction_for_service(
       })
     });
     match config {
-      None => btreemap!{},
-      Some(result) => result?
+      None => Ok(btreemap!{}),
+      Some(result) => result
     }
-  };
-  let interaction = construct_protobuf_interaction_for_message(&request_descriptor,
-    &request_part_config, input_message_name, "", file_descriptor, all_descriptors)?;
-  let request_part = Some(InteractionResponse { part_name: "request".into(), .. interaction } );
-
-  let response_part_config = if service_part == "response" {
-    vec![ config.clone() ]
-  } else {
-    config.get("response").and_then(|response_config| {
-      response_config.kind.as_ref().map(|kind| {
-        match kind {
-          Kind::StructValue(s) => vec![ proto_struct_to_btreemap(s) ],
-          Kind::ListValue(l) => l.values.iter().filter_map(|v| {
-            v.kind.as_ref().and_then(|k| match k {
-              Kind::StructValue(s) => Some(proto_struct_to_btreemap(s)),
-              Kind::StringValue(_) => Some(btreemap!{ "value".to_string() => v.clone() }),
-              _ => None
-            })
-          })
-            .collect(),
-          Kind::StringValue(_) => vec![ btreemap!{ "value".to_string() => response_config.clone() } ],
-          _ => vec![]
-        }
-      })
-    })
-      .unwrap_or_default()
-  };
-  let mut response_part = vec![];
-  for config in response_part_config {
-    let interaction = construct_protobuf_interaction_for_message(
-      &response_descriptor, &config, output_message_name, "",
-      file_descriptor, all_descriptors)?;
-    response_part.push(InteractionResponse { part_name: "response".into(), .. interaction });
   }
-
-  Ok((request_part, response_part))
 }
 
 fn find_message_descriptor(message_name: &str, all_descriptors: &HashMap<String, &FileDescriptorProto>) -> anyhow::Result<DescriptorProto> {
@@ -266,7 +280,7 @@ fn configure_protobuf_message(
   let message_descriptor = descriptor.message_type
     .iter().find(|p| p.name.clone().unwrap_or_default() == message_name)
     .ok_or_else(|| anyhow!("Did not find a descriptor for message '{}'", message_name))?;
-  construct_protobuf_interaction_for_message(message_descriptor, config, message_name, "", descriptor, all_descriptors)
+  construct_protobuf_interaction_for_message(message_descriptor, config, message_name, "", descriptor, all_descriptors, None)
     .map(|interaction| {
       InteractionResponse {
         plugin_configuration: Some(PluginConfiguration {
@@ -289,10 +303,11 @@ fn construct_protobuf_interaction_for_message(
   message_name: &str,
   message_part: &str,
   file_descriptor: &FileDescriptorProto,
-  all_descriptors: &HashMap<String, &FileDescriptorProto>
+  all_descriptors: &HashMap<String, &FileDescriptorProto>,
+  metadata: Option<&MessageMetadata>
 ) -> anyhow::Result<InteractionResponse> {
-  trace!(">> construct_protobuf_interaction_for_message({}, {}, {:?}, {:?})", message_name,
-    message_part, file_descriptor.name, config.keys());
+  trace!(">> construct_protobuf_interaction_for_message({}, {}, {:?}, {:?}, {:?})", message_name,
+    message_part, file_descriptor.name, config.keys(), metadata);
 
   let mut message_builder = MessageBuilder::new(message_descriptor, message_name, file_descriptor);
   let mut matching_rules = MatchingRuleCategory::empty("body");
@@ -318,7 +333,56 @@ fn construct_protobuf_interaction_for_message(
   trace!("matching rules: {:?}", matching_rules);
   trace!("generators: {:?}", generators);
 
-  let rules = matching_rules.rules.iter().map(|(path, rule_list)| {
+  let rules = extract_rules(&matching_rules);
+  let generators = extract_generators(&generators);
+
+  let content_type = format!("application/protobuf;message={}", message_name);
+  let mut metadata_fields = btreemap! {
+    "contentType".to_string() => prost_string(&content_type)
+  };
+  if let Some(metadata) = metadata {
+    for (k, v) in &metadata.values {
+      metadata_fields.insert(k.clone(), prost_string(v));
+    }
+  }
+
+  Ok(InteractionResponse {
+    contents: Some(Body {
+      content_type: content_type.clone(),
+      content: Some(message_builder.encode_message()?.to_vec()),
+      content_type_hint: ContentTypeHint::Binary as i32,
+    }),
+    message_metadata: Some(Struct {
+      fields: metadata_fields
+    }),
+    rules,
+    generators,
+    interaction_markup: message_builder.generate_markup("")?,
+    interaction_markup_type: MarkupType::CommonMark as i32,
+    part_name: message_part.to_string(),
+    metadata_rules: metadata.map(|md| extract_rules(&md.matching_rules)).unwrap_or_default(),
+    metadata_generators: metadata.map(|md| extract_generators(&md.generators)).unwrap_or_default(),
+    .. InteractionResponse::default()
+  })
+}
+
+fn extract_generators(generators: &HashMap<String, Generator>) -> HashMap<String, pact_plugin_driver::proto::Generator> {
+  generators.iter().map(|(path, generator)| {
+    let gen_values = generator.values();
+    let values = if gen_values.is_empty() {
+      None
+    } else {
+      Some(to_proto_struct(&gen_values.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()))
+    };
+    (path.to_string(), pact_plugin_driver::proto::Generator {
+      r#type: generator.name(),
+      values
+    })
+  }).collect()
+}
+
+fn extract_rules(matching_rules: &MatchingRuleCategory) -> HashMap<String, MatchingRules> {
+  matching_rules.rules.iter().map(|(path, rule_list)| {
     (path.to_string(), MatchingRules {
       rule: rule_list.rules.iter().map(|rule| {
         let rule_values = rule.values();
@@ -333,40 +397,7 @@ fn construct_protobuf_interaction_for_message(
         }
       }).collect()
     })
-  }).collect();
-
-  let generators = generators.iter().map(|(path, generator)| {
-    let gen_values = generator.values();
-    let values = if gen_values.is_empty() {
-      None
-    } else {
-      Some(to_proto_struct(&gen_values.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()))
-    };
-    (path.to_string(), pact_plugin_driver::proto::Generator {
-      r#type: generator.name(),
-      values
-    })
-  }).collect();
-
-  let content_type = format!("application/protobuf;message={}", message_name);
-  Ok(InteractionResponse {
-    contents: Some(Body {
-      content_type: content_type.clone(),
-      content: Some(message_builder.encode_message()?.to_vec()),
-      content_type_hint: ContentTypeHint::Binary as i32,
-    }),
-    message_metadata: Some(Struct {
-      fields: btreemap!{
-        "contentType".to_string() => prost_types::Value{ kind: Some(prost_types::value::Kind::StringValue(content_type)) }
-      }
-    }),
-    rules,
-    generators,
-    interaction_markup: message_builder.generate_markup("")?,
-    interaction_markup_type: MarkupType::CommonMark as i32,
-    part_name: message_part.to_string(),
-    .. InteractionResponse::default()
-  })
+  }).collect()
 }
 
 /// Construct a single field for a message from the provided config
@@ -656,7 +687,7 @@ fn build_struct_field(
         fields.insert(key.clone(), proto_value);
       }
 
-      let s = prost_types::Struct { fields };
+      let s = Struct { fields };
       let message_field_value = MessageFieldValue {
         name: field_name.to_string(),
         raw_value: None,
@@ -1141,7 +1172,8 @@ pub(crate) mod tests {
       "hash".to_string() => prost_types::Value { kind: Some(prost_types::value::Kind::StringValue("matching(integer, 1234)".to_string())) }
     };
 
-    let result = construct_protobuf_interaction_for_message(&message_descriptor, &config, "test_message", "", &file_descriptor, &hashmap!{}).unwrap();
+    let result = construct_protobuf_interaction_for_message(&message_descriptor, &config,
+      "test_message", "", &file_descriptor, &hashmap!{}, None).unwrap();
 
     let body = result.contents.as_ref().unwrap();
     expect!(body.content_type.as_str()).to(be_equal_to("application/protobuf;message=test_message"));
