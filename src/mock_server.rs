@@ -40,12 +40,13 @@ use tracing::{debug, error, Instrument, instrument, trace, trace_span};
 use uuid::Uuid;
 
 use crate::dynamic_message::PactCodec;
+use crate::metadata::MetadataMatchResult;
 use crate::mock_service::MockService;
 use crate::tcp::TcpIncoming;
 use crate::utils::{find_message_type_by_name, last_name};
 
 lazy_static! {
-  pub static ref MOCK_SERVER_STATE: Mutex<HashMap<String, (Sender<()>, HashMap<String, (usize, Vec<BodyMatchResult>)>)>> = Mutex::new(hashmap!{});
+  pub static ref MOCK_SERVER_STATE: Mutex<HashMap<String, (Sender<()>, HashMap<String, (usize, Vec<(BodyMatchResult, MetadataMatchResult)>)>)>> = Mutex::new(hashmap!{});
 }
 
 /// Main mock server that will use the provided Pact to provide behaviour
@@ -216,7 +217,7 @@ impl Service<Request<hyper::Body>> for GrpcMockServer  {
     Poll::Ready(Ok(()))
   }
 
-  #[instrument(skip(self))]
+  #[instrument(skip(self), level = "trace")]
   fn call(&mut self, req: Request<hyper::Body>) -> Self::Future {
     let routes = self.routes.clone();
     let server_key = self.server_key.clone();

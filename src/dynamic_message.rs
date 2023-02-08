@@ -257,7 +257,7 @@ impl Encoder for DynamicMessageEncoder {
 #[derive(Debug, Clone)]
 pub(crate) struct DynamicMessageDecoder {
   descriptor: DescriptorProto,
-  file_descriptor_set: FileDescriptorSet,
+  file_descriptor_set: FileDescriptorSet
 }
 
 impl DynamicMessageDecoder {

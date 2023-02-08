@@ -163,6 +163,7 @@ fn construct_protobuf_interaction_for_service(
   } else {
     (method_name, "")
   };
+  trace!(method_name, service_part, "looking up method descriptor");
   let method_descriptor = descriptor.method.iter()
     .find(|m| m.name.clone().unwrap_or_default() == method_name)
     .ok_or_else(|| anyhow!("Did not find a method descriptor for method '{}' in service '{}'", method_name, service_name))?;
@@ -179,6 +180,7 @@ fn construct_protobuf_interaction_for_service(
   let response_descriptor = find_message_descriptor(output_message_name, all_descriptors)?;
 
   let request_part_config = request_part(config, service_part)?;
+  trace!(config = ?request_part_config, service_part, "Processing request part config");
   let request_metadata = process_metadata(config.get("requestMetadata"))?;
   let interaction = construct_protobuf_interaction_for_message(&request_descriptor,
     &request_part_config, input_message_name, "", file_descriptor, all_descriptors,
@@ -190,6 +192,7 @@ fn construct_protobuf_interaction_for_service(
   });
 
   let response_part_config = response_part(config, service_part)?;
+  trace!(config = ?response_part_config, service_part, "Processing response part config");
   let mut response_part = vec![];
   for config in response_part_config {
     let response_metadata = process_metadata(config.get("responseMetadata"))?;

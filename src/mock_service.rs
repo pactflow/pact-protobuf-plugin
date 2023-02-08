@@ -15,12 +15,14 @@ use pact_models::v4::sync_message::SynchronousMessage;
 use pact_plugin_driver::plugin_models::PluginInteractionConfig;
 use prost_types::{DescriptorProto, FileDescriptorSet, MethodDescriptorProto};
 use tonic::{Request, Response, Status};
+use tonic::metadata::{Entry, MetadataMap};
 use tower_service::Service;
-use tracing::{debug, error, instrument, trace};
+use tracing::{debug, error, instrument, trace, warn};
 
 use crate::dynamic_message::DynamicMessage;
 use crate::matching::compare;
 use crate::message_decoder::decode_message;
+use crate::metadata::compare_metadata;
 use crate::mock_server::MOCK_SERVER_STATE;
 
 #[derive(Debug, Clone)]
@@ -41,7 +43,8 @@ impl MockService {
     &self,
     request: DynamicMessage,
     message_descriptor: DescriptorProto,
-    response_descriptor: DescriptorProto
+    response_descriptor: DescriptorProto,
+    request_metadata: &MetadataMap
   ) -> Result<Response<DynamicMessage>, Status> {
     // 1. Compare the incoming message to the request message from the interaction
     let mut expected_message_bytes = self.message.request.contents.value().unwrap_or_default();
@@ -54,14 +57,23 @@ impl MockService {
           interaction_configuration: self.message.plugin_config.get(pd.name.as_str()).cloned().unwrap_or_default()
         })
       }).collect();
+
     let context = CoreMatchingContext::new(DiffConfig::NoUnexpectedKeys,
       &self.message.request.matching_rules.rules_for_category("body").unwrap_or_default(),
       &plugin_config);
     let mismatches = compare(&message_descriptor, &expected_message, request.proto_fields(), &context,
                              &expected_message_bytes, &self.file_descriptor_set);
+
+    // 2. Compare any metadata from the incoming message
+    let md_context = CoreMatchingContext::new(DiffConfig::NoUnexpectedKeys,
+      &self.message.request.matching_rules.rules_for_category("metadata").unwrap_or_default(),
+      &plugin_config);
+    let md_mismatches = compare_metadata(&self.message.request.metadata, request_metadata,
+      &md_context);
+
     trace!("Comparison result = {:?}", mismatches);
-    match mismatches {
-      Ok(result) => {
+    match (mismatches, md_mismatches) {
+      (Ok(result), Ok(md_result)) => {
         {
           // record the result in the static store
           let mut guard = MOCK_SERVER_STATE.lock().unwrap();
@@ -70,16 +82,16 @@ impl MockService {
             let mut route_results = results.entry(key).or_insert((0, vec![]));
             trace!(store_length = route_results.1.len(), "Adding result to mock server '{}' static store", self.server_key);
             route_results.0 += 1;
-            route_results.1.push(result.clone());
+            route_results.1.push((result.clone(), md_result.clone()));
           } else {
             error!("INTERNAL ERROR: Did not find an entry for '{}' in mock server static store", self.server_key);
           }
         }
 
-        if result.all_matched() {
+        if result.all_matched() && md_result.all_matched() {
           debug!("Request matched OK, returning expected response");
-          let response = self.message.response.first().cloned().unwrap_or_default();
-          let mut response_bytes = response.contents.value()
+          let response_contents = self.message.response.first().cloned().unwrap_or_default();
+          let mut response_bytes = response_contents.contents.value()
             .unwrap_or_default();
           trace!("Response message has {} bytes", response_bytes.len());
           let response_message = decode_message(&mut response_bytes, &response_descriptor, &self.file_descriptor_set)
@@ -88,20 +100,58 @@ impl MockService {
               Status::invalid_argument(err.to_string())
             })?;
           let mut message = DynamicMessage::new(&response_message, &self.file_descriptor_set);
-          self.apply_generators(&mut message, &response).map_err(|err| {
+          self.apply_generators(&mut message, &response_contents).map_err(|err| {
             error!("Failed to generate response message - {}", err);
             Status::invalid_argument(err.to_string())
           })?;
           trace!("Sending message {message:?}");
-          Ok(Response::new(message))
+          let mut response = Response::new(message);
+          if !response_contents.metadata.is_empty() {
+            Self::set_response_metadata(response_contents, &mut response);
+          }
+          Ok(response)
         } else {
           error!("Failed to match the request message - {result:?}");
           Err(Status::failed_precondition(format!("Failed to match the request message - {result:?}")))
         }
       }
-      Err(err) => {
+      (Err(err), _) => {
         error!("Failed to match the request message - {err}");
         Err(Status::failed_precondition(err.to_string()))
+      }
+      (_, Err(err)) => {
+        error!("Failed to match the request message metadata - {err}");
+        Err(Status::failed_precondition(err.to_string()))
+      }
+    }
+  }
+
+  fn set_response_metadata(response_contents: MessageContents, response: &mut Response<DynamicMessage>) {
+    let md = response.metadata_mut();
+    for (key, value) in response_contents.metadata {
+      // exclude the content type, because that is a special value used by the Pact framework
+      if key != "content-type" {
+        match value.to_string().parse() {
+          Ok(parsed_val) => {
+            match md.entry(key.as_str()) {
+              Ok(entry) => match entry {
+                Entry::Occupied(mut o) => {
+                  warn!("Replacing existing gRPC metadata key '{}'", key);
+                  o.insert(parsed_val);
+                },
+                Entry::Vacant(v) => {
+                  v.insert(parsed_val);
+                }
+              }
+              Err(err) => {
+                error!("'{}' is not a valid gRPC metadata key, ignoring it - {}", key, err);
+              }
+            }
+          }
+          Err(err) => {
+            error!("'{}' is not a valid gRPC metadata value, ignoring it - {}", value, err);
+          }
+        }
       }
     }
   }
@@ -150,8 +200,8 @@ impl MockService {
   }
 }
 
-impl Service<tonic::Request<DynamicMessage>> for MockService {
-  type Response = tonic::Response<DynamicMessage>;
+impl Service<Request<DynamicMessage>> for MockService {
+  type Response = Response<DynamicMessage>;
   type Error = Status;
   type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
@@ -160,12 +210,12 @@ impl Service<tonic::Request<DynamicMessage>> for MockService {
   }
 
   fn call(&mut self, req: Request<DynamicMessage>) -> Self::Future {
-    let request = req.into_inner();
+    let (request_metadata, _, request) = req.into_parts();
     let message_descriptor = self.input_message.clone();
     let response_descriptor = self.output_message.clone();
     let service = self.clone();
     Box::pin(async move {
-      service.handle_message(request, message_descriptor, response_descriptor).await
+      service.handle_message(request, message_descriptor, response_descriptor, &request_metadata).await
     })
   }
 }
@@ -180,6 +230,7 @@ mod tests {
   use prost::Message;
   use prost_types::FileDescriptorSet;
   use serde_json::json;
+  use tonic::metadata::MetadataMap;
   use crate::dynamic_message::DynamicMessage;
   use crate::message_decoder::decode_message;
 
@@ -306,7 +357,9 @@ mod tests {
       pact
     };
     let response = mock_service.handle_message(request,
-      input_message.clone(), output_message.clone()).await.unwrap();
+      input_message.clone(), output_message.clone(),
+      &MetadataMap::default()
+    ).await.unwrap();
     let response_message = response.into_inner();
     let response_fields = response_message.proto_fields();
     let area = &response_fields[0];

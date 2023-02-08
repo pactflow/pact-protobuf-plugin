@@ -213,10 +213,10 @@ fn build_grpc_request(
   metadata: &HashMap<String, proto::MetadataValue>,
   file_desc: &FileDescriptorSet,
   input_desc: &DescriptorProto
-) -> anyhow::Result<tonic::Request<DynamicMessage>> {
+) -> anyhow::Result<Request<DynamicMessage>> {
   let mut bytes = body.value().unwrap_or_default();
   let message_fields = decode_message(&mut bytes, input_desc, file_desc)?;
-  let mut request = tonic::Request::new(DynamicMessage::new(&message_fields, file_desc));
+  let mut request = Request::new(DynamicMessage::new(&message_fields, file_desc));
   let request_metadata = request.metadata_mut();
   for (key, md) in metadata {
     if key != "request-path" {

@@ -38,6 +38,7 @@ use tracing::{debug, error, info, instrument, trace};
 use crate::dynamic_message::DynamicMessage;
 use crate::matching::{match_message, match_service};
 use crate::message_decoder::{decode_message, ProtobufField};
+use crate::metadata::MetadataMatchResult;
 use crate::mock_server::{GrpcMockServer, MOCK_SERVER_STATE};
 use crate::protobuf::process_proto;
 use crate::protoc::setup_protoc;
@@ -102,12 +103,18 @@ impl ProtobufPactPlugin {
       .unwrap_or_default()
   }
 
-  fn get_mock_server_results(results: &HashMap<String, (usize, Vec<BodyMatchResult>)>) -> (bool, Vec<MockServerResult>) {
+  fn get_mock_server_results(
+    results: &HashMap<String, (usize, Vec<(BodyMatchResult, MetadataMatchResult)>)>
+  ) -> (bool, Vec<MockServerResult>) {
     // All OK if there are no mismatches and all routes got at least one request
     let ok = results.iter().all(|(_, (req, r))| {
-      *req > 0 && r.iter().all(|r| *r == BodyMatchResult::Ok)
+      *req > 0 && r.iter().all(|(body_result, metadata_result)| {
+        *body_result == BodyMatchResult::Ok && metadata_result.all_matched()
+      })
     });
-    let results = results.iter().flat_map(|(path, (req, r))| {
+
+    let results = results.iter()
+      .flat_map(|(path, (req, r))| {
       let mut route_results = vec![];
 
       if *req == 0 {
@@ -117,28 +124,57 @@ impl ProtobufPactPlugin {
           ..MockServerResult::default()
         });
       } else {
-        route_results.push(proto::MockServerResult {
+        route_results.push(MockServerResult {
           path: path.clone(),
-          mismatches: r.iter().flat_map(|result| {
-            let mismatches = result.mismatches();
-            mismatches.iter().map(|m| {
+          mismatches: r.iter().flat_map(|(body_result, metadata_result)| {
+            let mut proto_result = vec![];
+
+            let mismatches = body_result.mismatches();
+            for m in mismatches {
               match m {
                 Mismatch::BodyMismatch { path, mismatch, expected, actual } => {
-                  proto::ContentMismatch {
+                  proto_result.push(proto::ContentMismatch {
                     expected: expected.as_ref().map(|d| d.to_vec()),
                     actual: actual.as_ref().map(|d| d.to_vec()),
                     mismatch: mismatch.clone(),
                     path: path.clone(),
+                    mismatch_type: "body".to_string(),
                     ..proto::ContentMismatch::default()
-                  }
+                  });
                 }
-                _ => proto::ContentMismatch {
-                  mismatch: m.description(),
-                  ..proto::ContentMismatch::default()
+                _ => {
+                  proto_result.push(proto::ContentMismatch {
+                    mismatch: m.description(),
+                    mismatch_type: "body".to_string(),
+                    ..proto::ContentMismatch::default()
+                  });
                 }
               }
-            })
-            .collect::<Vec<proto::ContentMismatch>>()
+            }
+
+            for m in &metadata_result.mismatches {
+              match m {
+                Mismatch::MetadataMismatch { key, mismatch, expected, actual } => {
+                  proto_result.push(proto::ContentMismatch {
+                    expected: Some(expected.as_bytes().to_vec()),
+                    actual: Some(actual.as_bytes().to_vec()),
+                    mismatch: mismatch.clone(),
+                    path: key.clone(),
+                    mismatch_type: "metadata".to_string(),
+                    ..proto::ContentMismatch::default()
+                  });
+                }
+                _ => {
+                  proto_result.push(proto::ContentMismatch {
+                    mismatch: m.description(),
+                    mismatch_type: "metadata".to_string(),
+                    ..proto::ContentMismatch::default()
+                  });
+                }
+              }
+            }
+
+            proto_result
           }).collect(),
           ..MockServerResult::default()
         });
@@ -352,14 +388,14 @@ impl ProtobufPactPlugin {
   }
 }
 
-#[instrument]
+#[instrument(level = "trace")]
 fn generate_protobuf_contents(
   fields: &Vec<ProtobufField>,
   content_type: &ContentType,
   generators: &HashMap<String, proto::Generator>,
   all_descriptors: &FileDescriptorSet
 ) -> anyhow::Result<Body> {
-  let mut message = DynamicMessage::new(fields, all_descriptors);
+  let mut message = DynamicMessage::new(fields, all_descriptors, );
   let variant_matcher = NoopVariantMatcher {};
   let vm_boxed = variant_matcher.boxed();
   let context = hashmap!{};
@@ -500,7 +536,7 @@ impl PactPlugin for ProtobufPactPlugin {
     // Process the proto file and configure the interaction
     match process_proto(proto_file, &protoc, &fields).await {
       Ok((interactions, plugin_config)) => {
-        Ok(tonic::Response::new(proto::ConfigureInteractionResponse {
+        Ok(Response::new(proto::ConfigureInteractionResponse {
           interaction: interactions,
           plugin_configuration: Some(plugin_config),
           .. proto::ConfigureInteractionResponse::default()
@@ -696,7 +732,7 @@ impl PactPlugin for ProtobufPactPlugin {
 
     // TODO: use any generators here
     let decoded_body = match decode_message(&mut raw_request_body, &input_message, &file_desc) {
-      Ok(message) => DynamicMessage::new(&message, &file_desc),
+      Ok(message) => DynamicMessage::new(&message, &file_desc, ),
       Err(err) => {
         return Ok(Response::new(proto::VerificationPreparationResponse {
           response: Some(proto::verification_preparation_response::Response::Error(err.to_string())),
@@ -1000,6 +1036,7 @@ mod tests {
   use pact_plugin_driver::proto::start_mock_server_response;
   use serde_json::{json, Map, Value};
   use tonic::Request;
+  use crate::metadata::MetadataMatchResult;
 
   use crate::server::{merge_value, ProtobufPactPlugin};
 
@@ -1149,8 +1186,8 @@ mod tests {
   fn get_mock_server_results_test_with_no_mismatches() {
     let mock_results = hashmap!{
       "Req/Path1".to_string() => (1, vec![]),
-      "Req/Path2".to_string() => (1, vec![ BodyMatchResult::Ok ]),
-      "Req/Path3".to_string() => (1, vec![ BodyMatchResult::Ok, BodyMatchResult::Ok ])
+      "Req/Path2".to_string() => (1, vec![ (BodyMatchResult::Ok, MetadataMatchResult::ok()) ]),
+      "Req/Path3".to_string() => (1, vec![ (BodyMatchResult::Ok, MetadataMatchResult::ok()), (BodyMatchResult::Ok, MetadataMatchResult::ok()) ])
     };
     let (ok, results) = ProtobufPactPlugin::get_mock_server_results(&mock_results);
     expect!(ok).to(be_true());
@@ -1173,15 +1210,15 @@ mod tests {
       ]
     };
     let mock_results = hashmap!{
-      "Req/Path1".to_string() => (1, vec![ BodyMatchResult::BodyTypeMismatch {
+      "Req/Path1".to_string() => (1, vec![ (BodyMatchResult::BodyTypeMismatch {
         expected_type: "blob".to_string(),
         actual_type: "blob".to_string(),
         message: "it was a blob".to_string(),
         expected: None,
         actual: None
-      } ]),
-      "Req/Path2".to_string() => (1, vec![ BodyMatchResult::BodyMismatches(mismatches) ]),
-      "Req/Path3".to_string() => (1, vec![ BodyMatchResult::BodyMismatches(mismatches2) ])
+      }, MetadataMatchResult::ok()) ]),
+      "Req/Path2".to_string() => (1, vec![ (BodyMatchResult::BodyMismatches(mismatches), MetadataMatchResult::ok()) ]),
+      "Req/Path3".to_string() => (1, vec![ (BodyMatchResult::BodyMismatches(mismatches2), MetadataMatchResult::ok()) ])
     };
     let (ok, results) = ProtobufPactPlugin::get_mock_server_results(&mock_results);
     expect!(ok).to(be_false());
@@ -1200,28 +1237,37 @@ mod tests {
         }
       ]
     };
+    let md_mismatch = vec![
+      Mismatch::MetadataMismatch {
+        key: "x-test".to_string(),
+        expected: "A".to_string(),
+        actual: "B".to_string(),
+        mismatch: "Should never be B".to_string(),
+      }
+    ];
     let mock_results = hashmap!{
-      "Req/Path1".to_string() => (1, vec![ BodyMatchResult::BodyTypeMismatch {
+      "Req/Path1".to_string() => (1, vec![ (BodyMatchResult::BodyTypeMismatch {
         expected_type: "blob".to_string(),
         actual_type: "blob".to_string(),
         message: "it was a blob".to_string(),
         expected: None,
         actual: None
-      } ]),
-      "Req/Path2".to_string() => (1, vec![ BodyMatchResult::Ok ]),
-      "Req/Path3".to_string() => (1, vec![ BodyMatchResult::BodyMismatches(mismatches) ])
+      }, MetadataMatchResult::ok()) ]),
+      "Req/Path2".to_string() => (1, vec![ (BodyMatchResult::Ok, MetadataMatchResult::ok()) ]),
+      "Req/Path3".to_string() => (1, vec![ (BodyMatchResult::BodyMismatches(mismatches), MetadataMatchResult::ok()) ]),
+      "Req/Path4".to_string() => (1, vec![ (BodyMatchResult::Ok, MetadataMatchResult::mismatches(md_mismatch)) ])
     };
     let (ok, results) = ProtobufPactPlugin::get_mock_server_results(&mock_results);
     expect!(ok).to(be_false());
-    expect!(results.len()).to(be_equal_to(3));
+    expect!(results.len()).to(be_equal_to(4));
   }
 
   #[test_log::test]
   fn get_mock_server_results_test_with_a_path_with_no_requests() {
     let mock_results = hashmap!{
       "Req/Path1".to_string() => (0, vec![]),
-      "Req/Path2".to_string() => (1, vec![ BodyMatchResult::Ok ]),
-      "Req/Path3".to_string() => (1, vec![ BodyMatchResult::Ok, BodyMatchResult::Ok ])
+      "Req/Path2".to_string() => (1, vec![ (BodyMatchResult::Ok, MetadataMatchResult::ok()) ]),
+      "Req/Path3".to_string() => (1, vec![ (BodyMatchResult::Ok, MetadataMatchResult::ok()), (BodyMatchResult::Ok, MetadataMatchResult::ok()) ])
     };
     let (ok, results) = ProtobufPactPlugin::get_mock_server_results(&mock_results);
     expect!(ok).to(be_false());
