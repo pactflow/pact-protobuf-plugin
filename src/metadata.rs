@@ -12,6 +12,7 @@ use pact_models::json_utils::json_to_string;
 use pact_models::matchingrules::{MatchingRule, MatchingRuleCategory, RuleLogic};
 use pact_models::matchingrules::expressions::{is_matcher_def, parse_matcher_def};
 use pact_models::path_exp::DocPath;
+use pact_plugin_driver::utils::proto_value_to_string;
 use prost_types::Value;
 use tonic::metadata::{Ascii, MetadataMap, MetadataValue};
 use tracing::instrument;
@@ -39,7 +40,7 @@ pub fn process_metadata(metadata_config: Option<&Value>) -> anyhow::Result<Optio
       let mut values = hashmap!{};
 
       for (key, value) in &metadata_map {
-        let str_value = json_to_string(value);
+        let str_value = proto_value_to_string(value).unwrap_or_default();
         if is_matcher_def(str_value.as_str()) {
           let mrd = parse_matcher_def(str_value.as_str())?;
           if !mrd.rules.is_empty() {

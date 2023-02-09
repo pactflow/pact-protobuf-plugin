@@ -7,6 +7,7 @@ use std::task::{Context, Poll};
 use maplit::hashmap;
 use pact_matching::{CoreMatchingContext, DiffConfig};
 use pact_models::generators::{GenerateValue, GeneratorCategory, NoopVariantMatcher, VariantMatcher};
+use pact_models::json_utils::json_to_string;
 use pact_models::pact::Pact;
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::v4::V4Pact;
@@ -128,10 +129,11 @@ impl MockService {
 
   fn set_response_metadata(response_contents: MessageContents, response: &mut Response<DynamicMessage>) {
     let md = response.metadata_mut();
-    for (key, value) in response_contents.metadata {
-      // exclude the content type, because that is a special value used by the Pact framework
-      if key != "content-type" {
-        match value.to_string().parse() {
+    for (key, value) in &response_contents.metadata {
+      let key = key.to_lowercase();
+      // exclude the content type, because that is a special value added by the Pact framework
+      if key != "content-type" && key != "contenttype" {
+        match json_to_string(value).parse() {
           Ok(parsed_val) => {
             match md.entry(key.as_str()) {
               Ok(entry) => match entry {

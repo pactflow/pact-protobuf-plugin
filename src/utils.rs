@@ -13,7 +13,6 @@ use pact_models::json_utils::json_to_string;
 use pact_models::pact::load_pact_from_json;
 use pact_models::prelude::v4::V4Pact;
 use pact_models::v4::interaction::V4Interaction;
-use pact_plugin_driver::utils::proto_struct_to_map;
 use prost::Message;
 use prost_types::{
   DescriptorProto,
@@ -36,11 +35,6 @@ use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
 /// Return the last name in a dot separated string
 pub fn last_name(entry_type_name: &str) -> &str {
   entry_type_name.split('.').last().unwrap_or(entry_type_name)
-}
-
-/// Convert a Protobuf Struct to a BTree Map
-pub fn proto_struct_to_btreemap(val: &prost_types::Struct) -> BTreeMap<String, Value> {
-  val.fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
 }
 
 /// Search for a message by type name in all the descriptors
@@ -439,14 +433,14 @@ pub fn should_be_packed_type(field_type: Type) -> bool {
 
 /// Tries to convert a Protobuf Value to a Map. Returns an error if the incoming value is not a
 /// value Protobuf type (Struct or NullValue)
-pub fn proto_value_to_map(val: &Value) -> anyhow::Result<HashMap<String, serde_json::Value>> {
+pub fn proto_value_to_map(val: &Value) -> anyhow::Result<BTreeMap<String, Value>> {
   match &val.kind {
     Some(kind) => match kind {
-      Kind::NullValue(_) => Ok(HashMap::default()),
-      Kind::StructValue(s) => Ok(proto_struct_to_map(s)),
+      Kind::NullValue(_) => Ok(BTreeMap::default()),
+      Kind::StructValue(s) => Ok(s.fields.clone()),
       _ => Err(anyhow!("Must be a Protobuf Struct or NullValue, got {}", type_of(kind)))
     }
-    None => Ok(HashMap::default())
+    None => Ok(BTreeMap::default())
   }
 }
 

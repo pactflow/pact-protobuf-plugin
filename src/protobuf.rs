@@ -37,7 +37,16 @@ use tracing_core::LevelFilter;
 use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValueType, RType};
 use crate::metadata::{MessageMetadata, process_metadata};
 use crate::protoc::Protoc;
-use crate::utils::{find_enum_value_by_name, find_enum_value_by_name_in_message, find_message_type_in_file_descriptors, find_nested_type, is_map_field, is_repeated_field, last_name, prost_string, proto_struct_to_btreemap};
+use crate::utils::{
+  find_enum_value_by_name,
+  find_enum_value_by_name_in_message,
+  find_message_type_in_file_descriptors,
+  find_nested_type,
+  is_map_field,
+  is_repeated_field,
+  last_name,
+  prost_string
+};
 
 /// Process the provided protobuf file and configure the interaction
 pub(crate) async fn process_proto(
@@ -194,8 +203,8 @@ fn construct_protobuf_interaction_for_service(
   let response_part_config = response_part(config, service_part)?;
   trace!(config = ?response_part_config, service_part, "Processing response part config");
   let mut response_part = vec![];
-  for config in response_part_config {
-    let response_metadata = process_metadata(config.get("responseMetadata"))?;
+  for (config, md_config) in response_part_config {
+    let response_metadata = process_metadata(md_config)?;
     let interaction = construct_protobuf_interaction_for_message(
       &response_descriptor, &config, output_message_name, "",
       file_descriptor, all_descriptors, response_metadata.as_ref()
@@ -206,26 +215,29 @@ fn construct_protobuf_interaction_for_service(
   Ok((request_part, response_part))
 }
 
-fn response_part(
-  config: &BTreeMap<String, prost_types::Value>,
+fn response_part<'a>(
+  config: &'a BTreeMap<String, prost_types::Value>,
   service_part: &str
-) -> anyhow::Result<Vec<BTreeMap<String, prost_types::Value>>> {
+) -> anyhow::Result<Vec<(BTreeMap<String, prost_types::Value>, Option<&'a prost_types::Value>)>> {
   if service_part == "response" {
-    Ok(vec![config.clone()])
+    Ok(vec![(config.clone(), None)])
   } else {
     Ok(config.get("response").and_then(|response_config| {
       response_config.kind.as_ref().map(|kind| {
         match kind {
-          Kind::StructValue(s) => vec![proto_struct_to_btreemap(s)],
+          Kind::StructValue(s) => {
+            let metadata = config.get("responseMetadata");
+            vec![(s.fields.clone(), metadata)]
+          },
           Kind::ListValue(l) => l.values.iter().filter_map(|v| {
             v.kind.as_ref().and_then(|k| match k {
-              Kind::StructValue(s) => Some(proto_struct_to_btreemap(s)),
-              Kind::StringValue(_) => Some(btreemap! { "value".to_string() => v.clone() }),
+              Kind::StructValue(s) => Some((s.fields.clone(), None)),
+              Kind::StringValue(_) => Some((btreemap! { "value".to_string() => v.clone() }, None)),
               _ => None
             })
           })
             .collect(),
-          Kind::StringValue(_) => vec![btreemap! { "value".to_string() => response_config.clone() }],
+          Kind::StringValue(_) => vec![(btreemap! { "value".to_string() => response_config.clone() }, None)],
           _ => vec![]
         }
       })
@@ -244,7 +256,7 @@ fn request_part(
     let config = config.get("request").and_then(|request_config| {
       request_config.kind.as_ref().map(|kind| {
         match kind {
-          Kind::StructValue(s) => Ok(proto_struct_to_btreemap(s)),
+          Kind::StructValue(s) => Ok(s.fields.clone()),
           Kind::StringValue(_) => Ok(btreemap!{ "value".to_string() => request_config.clone() }),
           _ => {
             warn!("Request contents is of an un-processable type: {:?}", kind);
@@ -999,6 +1011,7 @@ fn value_for_type(
 #[cfg(test)]
 pub(crate) mod tests {
   use std::collections::HashMap;
+
   use base64::Engine;
   use base64::engine::general_purpose::STANDARD as BASE64;
   use bytes::Bytes;
@@ -1020,22 +1033,16 @@ pub(crate) mod tests {
     MethodDescriptorProto,
     MethodOptions,
     OneofDescriptorProto,
-    ServiceDescriptorProto
+    ServiceDescriptorProto,
+    Struct
   };
   use prost_types::field_descriptor_proto::{Label, Type};
+  use prost_types::value::Kind::{ListValue, NullValue, NumberValue, StringValue, StructValue};
   use serde_json::{json, Value};
   use trim_margin::MarginTrimmable;
 
   use crate::message_builder::{MessageBuilder, MessageFieldValueType, RType};
-  use crate::protobuf::{
-    build_embedded_message_field_value,
-    build_field_value,
-    build_single_embedded_field_value,
-    construct_message_field,
-    construct_protobuf_interaction_for_message,
-    construct_protobuf_interaction_for_service,
-    value_for_type
-  };
+  use crate::protobuf::{build_embedded_message_field_value, build_field_value, build_single_embedded_field_value, construct_message_field, construct_protobuf_interaction_for_message, construct_protobuf_interaction_for_service, request_part, response_part, value_for_type};
 
   #[test]
   fn value_for_type_test() {
@@ -2071,5 +2078,167 @@ pub(crate) mod tests {
       &mut matching_rules, &mut generators, &file_descriptors
     );
     expect!(result).to(be_ok());
+  }
+
+  #[test]
+  fn configuring_request_part_returns_the_config_as_is_if_the_service_part_is_for_the_request() {
+    let config = btreemap!{
+      "A".to_string() => prost_types::Value { kind: Some(NullValue(0)) }
+    };
+    let result = request_part(&config, "request").unwrap();
+    expect!(result).to(be_equal_to(config));
+  }
+
+  #[test]
+  fn configuring_request_part_returns_empty_map_if_there_is_no_request_element() {
+    let config = btreemap!{};
+    let result = request_part(&config, "").unwrap();
+    expect!(result).to(be_equal_to(config));
+  }
+
+  #[test]
+  fn configuring_request_part_returns_an_error_if_request_config_is_not_the_correct_form() {
+    let config = btreemap!{
+      "request".to_string() => prost_types::Value { kind: Some(NumberValue(0.0)) }
+    };
+    let result = request_part(&config, "");
+    expect!(result).to(be_err());
+  }
+
+  #[test]
+  fn configuring_request_part_returns_any_struct_from_the_request_attribute() {
+    let request_config = btreemap!{
+      "A".to_string() => prost_types::Value { kind: Some(StringValue("B".to_string())) }
+    };
+    let config = btreemap!{
+      "request".to_string() => prost_types::Value { kind: Some(StructValue(Struct {
+          fields: request_config.clone()
+        }))
+      }
+    };
+    let result = request_part(&config, "").unwrap();
+    expect!(result).to(be_equal_to(request_config));
+  }
+
+  #[test]
+  fn configuring_request_part_returns_a_struct_with_a_value_attribute_if_the_request_attribute_is_a_string() {
+    let request_config = btreemap!{
+      "value".to_string() => prost_types::Value { kind: Some(StringValue("B".to_string())) }
+    };
+    let config = btreemap!{
+      "request".to_string() => prost_types::Value { kind: Some(StringValue("B".to_string())) }
+    };
+    let result = request_part(&config, "").unwrap();
+    expect!(result).to(be_equal_to(request_config));
+  }
+
+  #[test]
+  fn configuring_response_part_returns_the_config_as_is_if_the_service_part_is_for_the_response() {
+    let config = btreemap!{
+      "A".to_string() => prost_types::Value { kind: Some(NullValue(0)) }
+    };
+    let result = response_part(&config, "response").unwrap();
+    expect!(result).to(be_equal_to(vec![(config.clone(), None)]));
+  }
+
+  #[test]
+  fn configuring_response_part_returns_empty_map_if_there_is_no_response_element() {
+    let config = btreemap!{};
+    let result = response_part(&config, "").unwrap();
+    expect!(result).to(be_equal_to(vec![]));
+  }
+
+  #[test]
+  fn configuring_response_part_ignores_any_config_that_is_not_the_correct_form() {
+    let config = btreemap!{
+      "response".to_string() => prost_types::Value { kind: Some(NumberValue(0.0)) }
+    };
+    let result = response_part(&config, "").unwrap();
+    expect!(result).to(be_equal_to(vec![]));
+  }
+
+  #[test]
+  fn configuring_response_part_returns_any_struct_from_the_response_attribute() {
+    let response_config = btreemap!{
+      "A".to_string() => prost_types::Value { kind: Some(StringValue("B".to_string())) }
+    };
+    let config = btreemap!{
+      "response".to_string() => prost_types::Value { kind: Some(StructValue(Struct {
+          fields: response_config.clone()
+        }))
+      }
+    };
+    let result = response_part(&config, "").unwrap();
+    expect!(result).to(be_equal_to(vec![(response_config, None)]));
+  }
+
+  #[test]
+  fn configuring_response_part_returns_a_struct_with_a_value_attribute_if_the_response_attribute_is_a_string() {
+    let response_config = btreemap!{
+      "value".to_string() => prost_types::Value { kind: Some(StringValue("B".to_string())) }
+    };
+    let config = btreemap!{
+      "response".to_string() => prost_types::Value { kind: Some(StringValue("B".to_string())) }
+    };
+    let result = response_part(&config, "").unwrap();
+    expect!(result).to(be_equal_to(vec![(response_config, None)]));
+  }
+
+  #[test]
+  fn configuring_response_part_configures_each_item_if_the_response_attribute_is_a_list() {
+    let response_config = btreemap!{
+      "A".to_string() => prost_types::Value { kind: Some(StringValue("B".to_string())) }
+    };
+    let response_config2 = btreemap!{
+      "C".to_string() => prost_types::Value { kind: Some(StringValue("D".to_string())) }
+    };
+    let config = btreemap!{
+      "response".to_string() => prost_types::Value {
+        kind: Some(ListValue(prost_types::ListValue {
+          values: vec![
+            prost_types::Value { kind: Some(StructValue(Struct {
+                fields: response_config.clone()
+              }))
+            },
+            prost_types::Value { kind: Some(StructValue(Struct {
+                fields: response_config2.clone()
+              }))
+            }
+          ]
+        }))
+      }
+    };
+    let result = response_part(&config, "").unwrap();
+    expect!(result).to(be_equal_to(vec![
+      (response_config, None),
+      (response_config2, None)
+    ]));
+  }
+
+  #[test]
+  fn configuring_response_part_returns_also_returns_metadata_from_the_response_metadata_attribute() {
+    let response_config = btreemap!{
+      "A".to_string() => prost_types::Value { kind: Some(StringValue("B".to_string())) }
+    };
+    let response_metadata_config = btreemap!{
+      "C".to_string() => prost_types::Value { kind: Some(StringValue("D".to_string())) }
+    };
+    let config = btreemap!{
+      "response".to_string() => prost_types::Value { kind: Some(StructValue(Struct {
+          fields: response_config.clone()
+        }))
+      },
+      "responseMetadata".to_string() => prost_types::Value { kind: Some(StructValue(Struct {
+          fields: response_metadata_config.clone()
+        }))
+      }
+    };
+    let result = response_part(&config, "").unwrap();
+    let expected_metadata = prost_types::Value {
+      kind: Some(StructValue(Struct {
+        fields: response_metadata_config.clone()
+      }))
+    };
+    expect!(result).to(be_equal_to(vec![(response_config, Some(&expected_metadata))]));
   }
 }
