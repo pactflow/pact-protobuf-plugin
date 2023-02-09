@@ -1,16 +1,18 @@
 //! Module for dealing with gRPC metadata (as per https://grpc.io/docs/what-is-grpc/core-concepts/#metadata).
 
 use std::collections::HashMap;
+use ansi_term::Colour::{Green, Red};
+use ansi_term::Style;
 
 use anyhow::anyhow;
-use itertools::Either;
+use itertools::{Either, Itertools};
 use maplit::hashmap;
 use pact_matching::{CoreMatchingContext, matchers, MatchingContext, Mismatch};
 use pact_matching::matchers::Matches;
 use pact_models::generators::Generator;
 use pact_models::json_utils::json_to_string;
 use pact_models::matchingrules::{MatchingRule, MatchingRuleCategory, RuleLogic};
-use pact_models::matchingrules::expressions::{is_matcher_def, parse_matcher_def};
+use pact_models::matchingrules::expressions::{is_matcher_def, MatchingRuleDefinition, parse_matcher_def};
 use pact_models::path_exp::DocPath;
 use pact_plugin_driver::utils::proto_value_to_string;
 use prost_types::Value;
@@ -105,31 +107,36 @@ pub fn compare_metadata(
   expected_metadata: &HashMap<String, serde_json::Value>,
   actual_metadata: &MetadataMap,
   context: &CoreMatchingContext
-) -> anyhow::Result<MetadataMatchResult> {
+) -> anyhow::Result<(MetadataMatchResult, Vec<String>)> {
   if expected_metadata.is_empty() {
-    Ok(MetadataMatchResult::ok())
+    Ok((MetadataMatchResult::ok(), vec![]))
   } else if actual_metadata.is_empty() {
-    Ok(
-      MetadataMatchResult::mismatches(expected_metadata.iter()
-        .filter(|(k, _)| !is_special_metadata_key(k))
-        .map(|(k, v)| {
-          Mismatch::MetadataMismatch {
-            key: k.to_string(),
-            expected: v.to_string(),
-            actual: "".to_string(),
-            mismatch: format!("Expected metadata with key '{}' but was missing", k)
-          }
-        })
-        .collect()
-      )
-    )
+    let mut output = vec![];
+    let bold = Style::new().bold();
+    let mismatches = expected_metadata.iter()
+      .filter(|(k, _)| !is_special_metadata_key(k))
+      .map(|(k, v)| {
+        output.push(format!("          key '{}' ({})", bold.paint(k), Red.paint("FAILED")));
+        Mismatch::MetadataMismatch {
+          key: k.to_string(),
+          expected: v.to_string(),
+          actual: "".to_string(),
+          mismatch: format!("Expected metadata with key '{}' but was missing", k)
+        }
+      })
+      .collect();
+    Ok((MetadataMatchResult::mismatches(mismatches), output))
   } else {
     let mut mismatches = vec![];
+    let mut output = vec![];
+    let bold = Style::new().bold();
 
     for (key, expected_value) in expected_metadata {
       if let Some(actual_value) = actual_metadata.get(key) {
-        match_metadata_value(&mut mismatches, key, expected_value, actual_value, context);
+        let out = match_metadata_value(&mut mismatches, key, expected_value, actual_value, context);
+        output.push(out);
       } else if !is_special_metadata_key(key) {
+        output.push(format!("          key '{}' ({})", bold.paint(key), Red.paint("FAILED")));
         mismatches.push(Mismatch::MetadataMismatch { key: key.clone(),
           expected: expected_value.to_string(),
           actual: "".to_string(),
@@ -139,9 +146,9 @@ pub fn compare_metadata(
     }
 
     if mismatches.is_empty() {
-      Ok(MetadataMatchResult::ok())
+      Ok((MetadataMatchResult::ok(), output))
     } else {
-      Ok(MetadataMatchResult::mismatches(mismatches))
+      Ok((MetadataMatchResult::mismatches(mismatches), output))
     }
   }
 }
@@ -157,13 +164,15 @@ fn match_metadata_value(
   expected: &serde_json::Value,
   actual: &MetadataValue<Ascii>,
   context: &CoreMatchingContext
-) {
+) -> String {
   let path = DocPath::root().join(key);
   let expected = json_to_string(expected);
+  let bold = Style::new().bold();
   match actual.to_str() {
     Ok(actual) => {
       if context.matcher_is_defined(&path) {
-        if let Err(errors)  = matchers::match_values(&path, &context.select_best_matcher(&path), &expected, &actual.to_string()) {
+        let matchers = context.select_best_matcher(&path);
+        let result = if let Err(errors)  = matchers::match_values(&path, &matchers, &expected, &actual.to_string()) {
           for mismatch in errors {
             mismatches.push(Mismatch::MetadataMismatch {
               key: key.clone(),
@@ -172,7 +181,15 @@ fn match_metadata_value(
               mismatch: format!("Comparison of metadata key '{}' failed: {}", key, mismatch)
             });
           }
-        }
+          Red.paint("FAILED")
+        } else {
+          Green.paint("OK")
+        };
+        format!("        key '{}' matching with {} [{}]", bold.paint(key),
+          bold.paint(matchers.rules.iter()
+            .map(|r| matching_rule_description(r))
+            .join(", ")
+          ), result)
       } else {
         if let Err(err) = Matches::matches_with(&expected, actual, &MatchingRule::Equality, false) {
           mismatches.push(Mismatch::MetadataMismatch {
@@ -182,7 +199,8 @@ fn match_metadata_value(
             mismatch: format!("Comparison of metadata key '{}' failed: {}", key, err)
           });
         }
-      };
+        format!("        key '{}' with value '{}' [{}]", bold.paint(key), bold.paint(actual), Red.paint("FAILED"))
+      }
     }
     Err(err) => {
       mismatches.push(Mismatch::MetadataMismatch {
@@ -191,8 +209,40 @@ fn match_metadata_value(
         actual: "".to_string(),
         mismatch: format!("Could not convert actual value with key '{}' to a string - {}", key, err)
       });
+      format!("      key '{}' [{}]", bold.paint(key), Red.paint("FAILED"))
     }
   }
+}
+
+// TODO: This should move into the Pact-Rust repo
+fn matching_rule_description(rule: &MatchingRule) -> String {
+  match rule {
+    MatchingRule::Regex(r) => format!("regex '{}'", r),
+    MatchingRule::MinType(min) => format!("type with min length {}", min),
+    MatchingRule::MaxType(max) => format!("type with max length {}", max),
+    MatchingRule::MinMaxType(min, max) => format!("type with length between {} and {}", min, max),
+    MatchingRule::Timestamp(f) => format!("date-time with format '{}'", f),
+    MatchingRule::Time(f) => format!("time with format '{}'", f),
+    MatchingRule::Date(f) => format!("date with format '{}'", f),
+    MatchingRule::Include(s) => format!("string that includes '{}'", s),
+    MatchingRule::ContentType(ct) => format!("data with content type '{}'", ct),
+    MatchingRule::StatusCode(sc) => format!("HTTP status {}", sc),
+    MatchingRule::EachKey(m) => format!("each key matching {}", matching_def_description(m)),
+    MatchingRule::EachValue(m) => format!("each key matching {}", matching_def_description(m)),
+    _ => rule.name()
+  }
+}
+
+// TODO: This should move into the Pact-Rust repo
+fn matching_def_description(md: &MatchingRuleDefinition) -> String {
+  md.rules.iter()
+    .map(|def| {
+      match def {
+        Either::Left(m) => matching_rule_description(m),
+        Either::Right(def) => format!("an message like '{}'", def.name)
+      }
+    })
+    .join(", ")
 }
 
 #[cfg(test)]
@@ -274,7 +324,7 @@ mod tests {
     actual.insert("x-test", "test".parse().expect("Expected a value"));
     let context = CoreMatchingContext::default();
 
-    let result = compare_metadata(&expected, &actual, &context).unwrap();
+    let (result, _) = compare_metadata(&expected, &actual, &context).unwrap();
     expect!(result.result).to(be_true());
     expect!(result.mismatches.is_empty()).to(be_true());
   }
@@ -288,7 +338,7 @@ mod tests {
     let actual = MetadataMap::new();
     let context = CoreMatchingContext::default();
 
-    let result = compare_metadata(&expected, &actual, &context).unwrap();
+    let (result, _) = compare_metadata(&expected, &actual, &context).unwrap();
     expect!(result.result).to(be_false());
     expect!(result.mismatches.len()).to(be_equal_to(2));
   }
@@ -303,7 +353,7 @@ mod tests {
     actual.insert("x-a", "A".parse().expect("Expected a value"));
     let context = CoreMatchingContext::default();
 
-    let result = compare_metadata(&expected, &actual, &context).unwrap();
+    let (result, _) = compare_metadata(&expected, &actual, &context).unwrap();
     expect!(result.result).to(be_false());
     expect!(result.mismatches.len()).to(be_equal_to(1));
   }
@@ -319,7 +369,7 @@ mod tests {
     actual.insert("x-b", "A".parse().expect("Expected a value"));
     let context = CoreMatchingContext::default();
 
-    let result = compare_metadata(&expected, &actual, &context).unwrap();
+    let (result, _) = compare_metadata(&expected, &actual, &context).unwrap();
     expect!(result.result).to(be_false());
     expect!(result.mismatches.len()).to(be_equal_to(1));
   }
@@ -344,7 +394,7 @@ mod tests {
       &hashmap!{}
     );
 
-    let result = compare_metadata(&expected, &actual, &context).unwrap();
+    let (result, _) = compare_metadata(&expected, &actual, &context).unwrap();
     expect!(result.result).to(be_false());
     expect!(result.mismatches.len()).to(be_equal_to(1));
     expect!(result.mismatches.iter().map(|m| {
@@ -365,7 +415,7 @@ mod tests {
     actual.insert("x-a", "A".parse().expect("Expected a value"));
     let context = CoreMatchingContext::default();
 
-    let result = compare_metadata(&expected, &actual, &context).unwrap();
+    let (result, _) = compare_metadata(&expected, &actual, &context).unwrap();
     expect!(result.result).to(be_true());
     expect!(result.mismatches.len()).to(be_equal_to(0));
   }

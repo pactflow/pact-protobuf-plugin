@@ -732,7 +732,7 @@ impl PactPlugin for ProtobufPactPlugin {
 
     // TODO: use any generators here
     let decoded_body = match decode_message(&mut raw_request_body, &input_message, &file_desc) {
-      Ok(message) => DynamicMessage::new(&message, &file_desc, ),
+      Ok(message) => DynamicMessage::new(&message, &file_desc),
       Err(err) => {
         return Ok(Response::new(proto::VerificationPreparationResponse {
           response: Some(proto::verification_preparation_response::Response::Error(err.to_string())),
@@ -740,7 +740,7 @@ impl PactPlugin for ProtobufPactPlugin {
         }))
       }
     };
-    let request = tonic::Request::new(decoded_body.clone());
+    let request = Request::new(decoded_body.clone());
 
     let mut request_metadata: HashMap<String, proto::MetadataValue> = interaction.request.metadata.iter()
       .map(|(k, v)| (k.clone(), proto::MetadataValue {
@@ -751,7 +751,7 @@ impl PactPlugin for ProtobufPactPlugin {
     let path = format!("/{}.{}/{}", package, service_desc.name.unwrap_or_default(), method_desc.name.unwrap_or_default());
     request_metadata.insert("request-path".to_string(), proto::MetadataValue {
       value: Some(proto::metadata_value::Value::NonBinaryValue(prost_types::Value {
-        kind: Some(prost_types::value::Kind::StringValue(path))
+        kind: Some(Kind::StringValue(path))
       }))
     });
 
@@ -760,7 +760,7 @@ impl PactPlugin for ProtobufPactPlugin {
         KeyAndValueRef::Ascii(k, v) => {
           request_metadata.insert(k.to_string(), proto::MetadataValue {
             value: Some(proto::metadata_value::Value::NonBinaryValue(prost_types::Value {
-              kind: Some(prost_types::value::Kind::StringValue(v.to_str().unwrap_or_default().to_string()))
+              kind: Some(Kind::StringValue(v.to_str().unwrap_or_default().to_string()))
             }))
           });
         }
@@ -780,7 +780,7 @@ impl PactPlugin for ProtobufPactPlugin {
       }))
     }
     let integration_data = proto::InteractionData {
-      body: Some(proto::Body {
+      body: Some(Body {
         content_type: "application/grpc".to_string(),
         content: Some(buffer.to_vec()),
         content_type_hint: ContentTypeHint::Binary as i32,
@@ -788,7 +788,8 @@ impl PactPlugin for ProtobufPactPlugin {
       metadata: request_metadata
     };
 
-    Ok(tonic::Response::new(proto::VerificationPreparationResponse {
+    trace!(integration_data = ?integration_data, "returning request data");
+    Ok(Response::new(proto::VerificationPreparationResponse {
       response: Some(proto::verification_preparation_response::Response::InteractionData(integration_data)),
       .. proto::VerificationPreparationResponse::default()
     }))

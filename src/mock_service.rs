@@ -74,7 +74,7 @@ impl MockService {
 
     trace!("Comparison result = {:?}", mismatches);
     match (mismatches, md_mismatches) {
-      (Ok(result), Ok(md_result)) => {
+      (Ok(result), Ok((md_result, _))) => {
         {
           // record the result in the static store
           let mut guard = MOCK_SERVER_STATE.lock().unwrap();
