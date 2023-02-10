@@ -161,6 +161,7 @@ It supports the following:
 * Packed repeated fields.
 * oneOf fields.
 * gRPC Service method calls. 
+* Testing/verifying gRPC service call metadata.
 
 ## Unsupported features
 
@@ -170,7 +171,6 @@ The following features are currently unsupported, but may be supported in a late
 * default values for fields.
 * required fields (note that this is deprecated in Proto 3).
 * Testing/verifying Protobuf options.
-* Testing/verifying gRPC service call metadata.
 
 The following features will **not** be supported by this plugin:
 * proto2
