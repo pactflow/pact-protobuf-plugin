@@ -1,3 +1,15 @@
+# 0.3.0 - Supports gRPC metadata with Pact tests
+
+* cab8ce1 - fix: Upgrade pact_verifier crate to 0.13.21 (fixes pact verification test) (Ronald Holshausen, Fri Feb 10 13:40:48 2023 +1100)
+* b0e3bf9 - feat: implement validating response metadata (Ronald Holshausen, Thu Feb 9 18:04:23 2023 +1100)
+* 29dfb4a - fix: gRPC response metadata was not being processed correctly (Ronald Holshausen, Thu Feb 9 14:48:52 2023 +1100)
+* dc78c0c - feat: support validation and metadata in consumer tests (Ronald Holshausen, Wed Feb 8 16:05:38 2023 +1100)
+* 024e8d3 - feat: support configuring gRPC message metadata in consumer tests (Ronald Holshausen, Mon Feb 6 15:50:01 2023 +1100)
+* b2e8614 - chore: Upgrade clap to v4 (Ronald Holshausen, Fri Feb 3 15:21:44 2023 +1100)
+* 5aa7089 - chore: Upgrade base64 crate (Ronald Holshausen, Fri Feb 3 14:47:44 2023 +1100)
+* a702647 - chore: bump minor version (Ronald Holshausen, Fri Feb 3 14:02:52 2023 +1100)
+* 88ce08e - bump version to 0.2.6 (Ronald Holshausen, Fri Feb 3 13:25:02 2023 +1100)
+
 # 0.2.5 - Bugfix Release
 
 * 0f44247 - fix: Handle interactions with empty messages (Ronald Holshausen, Fri Feb 3 10:37:06 2023 +1100)
