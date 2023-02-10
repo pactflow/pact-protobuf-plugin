@@ -21,7 +21,7 @@ uuid = { version = "1.2.2", features = ["v4"] }
 maplit = "1.0.2"
 pact_matching = "1.0.5"
 pact_models = "1.0.4"
-pact_verifier = "0.13.20"
+pact_verifier = "0.13.21"
 pact-plugin-driver = "0.3.1"
 anyhow = "1.0.42"
 futures = "0.3.25"
@@ -73,5 +73,5 @@ home = "0.5.4"
 panic-message = "0.3.0"
 
 [build-dependencies]
-built = { version = "0.5.1", features = [ "git2" ] }
+built = { version = "0.6.0", features = [ "git2" ] }
 os_info = "3.0.7"
