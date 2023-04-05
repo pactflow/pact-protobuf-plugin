@@ -17,7 +17,7 @@ use pact_models::v4::message_parts::MessageContents;
 use pact_models::v4::sync_message::SynchronousMessage;
 use pact_plugin_driver::proto;
 use pact_plugin_driver::utils::proto_value_to_string;
-use pact_verifier::verification_result::MismatchResult;
+use pact_verifier::verification_result::VerificationMismatchResult;
 use prost_types::{DescriptorProto, FileDescriptorSet, MethodDescriptorProto, ServiceDescriptorProto};
 use serde_json::Value;
 use tonic::{Request, Response, Status};
@@ -51,7 +51,7 @@ pub async fn verify_interaction(
   request_body: &OptionalBody,
   metadata: &HashMap<String, proto::MetadataValue>,
   config: &HashMap<String, Value>
-) -> anyhow::Result<(Vec<MismatchResult>, Vec<String>)> {
+) -> anyhow::Result<(Vec<VerificationMismatchResult>, Vec<String>)> {
   debug!("Verifying interaction {}", interaction);
   trace!("interaction={:?}", interaction);
   trace!("metadata={:?}", metadata);
@@ -118,7 +118,7 @@ fn verify_response(
   file_desc: &FileDescriptorSet,
   service_desc: &ServiceDescriptorProto,
   method_desc: &MethodDescriptorProto
-) -> anyhow::Result<(Vec<MismatchResult>, Vec<String>)> {
+) -> anyhow::Result<(Vec<VerificationMismatchResult>, Vec<String>)> {
   let response = interaction.response.first().cloned()
     .unwrap_or_default();
   if interaction.response.len() > 1 {
@@ -152,18 +152,18 @@ fn verify_response(
         match result {
           BodyMatchResult::Ok => {}
           BodyMatchResult::BodyTypeMismatch { message, .. } => {
-            results.push(MismatchResult::Error { error: message, interaction_id: interaction.id.clone() });
+            results.push(VerificationMismatchResult::Error { error: message, interaction_id: interaction.id.clone() });
           }
           BodyMatchResult::BodyMismatches(mismatches) => {
             for (_, mismatches) in mismatches {
-              results.push(MismatchResult::Mismatches { mismatches, interaction_id: interaction.id.clone() });
+              results.push(VerificationMismatchResult::Mismatches { mismatches, interaction_id: interaction.id.clone() });
             }
           }
         }
       }
       Err(err) => {
         error!("Verifying the response failed with an error - {}", err);
-        results.push(MismatchResult::Error { error: err.to_string(), interaction_id: interaction.id.clone() })
+        results.push(VerificationMismatchResult::Error { error: err.to_string(), interaction_id: interaction.id.clone() })
       }
     }
   }
@@ -173,7 +173,7 @@ fn verify_response(
     match verify_metadata(response_metadata, &response) {
       Ok((result, md_output)) => {
         if !result.result {
-          results.push(MismatchResult::Mismatches {
+          results.push(VerificationMismatchResult::Mismatches {
             mismatches: result.mismatches,
             interaction_id: interaction.id.clone(),
           });
@@ -181,7 +181,7 @@ fn verify_response(
         output.extend(md_output);
       }
       Err(err) => {
-        results.push(MismatchResult::Mismatches {
+        results.push(VerificationMismatchResult::Mismatches {
           mismatches: vec![ Mismatch::MetadataMismatch {
             key: "".to_string(),
             expected: "".to_string(),

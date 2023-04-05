@@ -27,7 +27,7 @@ use pact_plugin_driver::utils::{
   proto_value_to_string,
   to_proto_value
 };
-use pact_verifier::verification_result::MismatchResult;
+use pact_verifier::verification_result::VerificationMismatchResult;
 use prost_types::FileDescriptorSet;
 use prost_types::value::Kind;
 use serde_json::Value;
@@ -848,7 +848,7 @@ impl PactPlugin for ProtobufPactPlugin {
       Ok((result, output)) => {
         let results = result.iter()
           .flat_map(|result| match result {
-            MismatchResult::Mismatches { mismatches, .. } => {
+            VerificationMismatchResult::Mismatches { mismatches, .. } => {
               mismatches.iter()
                 .map(|mismatch| {
                   if let Mismatch::BodyMismatch { path, expected, actual, mismatch } = mismatch {
@@ -874,7 +874,7 @@ impl PactPlugin for ProtobufPactPlugin {
                 })
                 .collect()
             }
-            MismatchResult::Error { error, .. } => {
+            VerificationMismatchResult::Error { error, .. } => {
               vec![proto::VerificationResultItem {
                 result: Some(proto::verification_result_item::Result::Error(error.clone())),
                 .. proto::VerificationResultItem::default()
