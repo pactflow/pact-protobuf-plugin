@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
+use std::panic::RefUnwindSafe;
 
 use anyhow::anyhow;
 use base64::Engine;
@@ -320,7 +321,7 @@ pub(crate) fn parse_pact_from_request_json(pact_json: &str, source: &str) -> any
 pub(crate) fn lookup_interaction_by_id<'a>(
   interaction_key: &str,
   pact: &'a V4Pact
-) -> anyhow::Result<&'a Box<dyn V4Interaction + Send + Sync>> {
+) -> anyhow::Result<&'a Box<dyn V4Interaction + Send + Sync + RefUnwindSafe>> {
   match pact.interactions.iter()
     .find(|i| i.key().unwrap_or_default() == interaction_key) {
     Some(interaction) => Ok(interaction),
