@@ -544,7 +544,7 @@ impl PactPlugin for ProtobufPactPlugin {
       }
       Err(err) => {
         error!("Failed to process protobuf: {}", err);
-        Ok(tonic::Response::new(proto::ConfigureInteractionResponse {
+        Ok(Response::new(proto::ConfigureInteractionResponse {
           error: format!("Failed to process protobuf: {}", err),
           .. proto::ConfigureInteractionResponse::default()
         }))

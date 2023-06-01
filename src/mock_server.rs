@@ -33,7 +33,6 @@ use tonic::body::{BoxBody, empty_body};
 use tonic::metadata::MetadataMap;
 use tower::make::Shared;
 use tower::ServiceBuilder;
-use tower_http::compression::CompressionLayer;
 use tower_http::ServiceBuilderExt;
 use tower_service::Service;
 use tracing::{debug, error, Instrument, instrument, trace, trace_span};
@@ -166,8 +165,6 @@ impl GrpcMockServer
       let service = ServiceBuilder::new()
         // High level logging of requests and responses
         .trace_for_grpc()
-        // Compress responses
-        .layer(CompressionLayer::new())
         // Wrap a `Service` in our middleware stack
         .service(self);
 
@@ -209,8 +206,8 @@ impl GrpcMockServer
 }
 
 impl Service<Request<hyper::Body>> for GrpcMockServer  {
-  type Response = hyper::Response<BoxBody>;
-  type Error = anyhow::Error;
+  type Response = Response<BoxBody>;
+  type Error = hyper::Error;
   type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
   fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -243,7 +240,7 @@ impl Service<Request<hyper::Body>> for GrpcMockServer  {
           let method = req.method();
           if method == Method::POST {
             let request_path = req.uri().path();
-            debug!("gRPC request received {}", request_path);
+            debug!(?request_path, "gRPC request received");
             if let Some((service, method)) = request_path[1..].split_once('/') {
               let service_name = last_name(service);
               let lookup = format!("{service_name}/{method}");
@@ -263,7 +260,9 @@ impl Service<Request<hyper::Body>> for GrpcMockServer  {
                       pact
                     );
                     let mut grpc = tonic::server::Grpc::new(codec);
-                    Ok(grpc.unary(mock_service, req).await)
+                    let response = grpc.unary(mock_service, req).await;
+                    trace!(?response, ">> sending response");
+                    Ok(response)
                   } else {
                     error!("Did not find the descriptor for the output message {}", output_message_name);
                     Ok(failed_precondition())

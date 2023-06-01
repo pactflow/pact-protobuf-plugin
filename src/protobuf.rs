@@ -219,11 +219,12 @@ fn response_part<'a>(
   config: &'a BTreeMap<String, prost_types::Value>,
   service_part: &str
 ) -> anyhow::Result<Vec<(BTreeMap<String, prost_types::Value>, Option<&'a prost_types::Value>)>> {
+  trace!(?config, ?service_part, "response_part");
   if service_part == "response" {
     Ok(vec![(config.clone(), None)])
-  } else {
-    Ok(config.get("response").and_then(|response_config| {
-      response_config.kind.as_ref().map(|kind| {
+  } else if let Some(response_config) = config.get("response") {
+    Ok(response_config.kind.as_ref()
+      .map(|kind| {
         match kind {
           Kind::StructValue(s) => {
             let metadata = config.get("responseMetadata");
@@ -240,9 +241,11 @@ fn response_part<'a>(
           Kind::StringValue(_) => vec![(btreemap! { "value".to_string() => response_config.clone() }, None)],
           _ => vec![]
         }
-      })
-    })
-      .unwrap_or_default())
+      }).unwrap_or_default())
+  } else if let Some(response_md_config) = config.get("responseMetadata") {
+    Ok(vec![(btreemap!{}, Some(response_md_config))])
+  } else {
+    Ok(vec![])
   }
 }
 
@@ -2142,7 +2145,7 @@ pub(crate) mod tests {
   }
 
   #[test]
-  fn configuring_response_part_returns_empty_map_if_there_is_no_response_element() {
+  fn configuring_response_part_returns_empty_map_if_there_is_no_response_elements() {
     let config = btreemap!{};
     let result = response_part(&config, "").unwrap();
     expect!(result).to(be_equal_to(vec![]));
@@ -2240,5 +2243,25 @@ pub(crate) mod tests {
       }))
     };
     expect!(result).to(be_equal_to(vec![(response_config, Some(&expected_metadata))]));
+  }
+
+  #[test]
+  fn configuring_response_part_deals_with_the_case_where_there_is_only_metadata() {
+    let response_metadata_config = btreemap!{
+      "C".to_string() => prost_types::Value { kind: Some(StringValue("D".to_string())) }
+    };
+    let config = btreemap!{
+      "responseMetadata".to_string() => prost_types::Value { kind: Some(StructValue(Struct {
+          fields: response_metadata_config.clone()
+        }))
+      }
+    };
+    let result = response_part(&config, "").unwrap();
+    let expected_metadata = prost_types::Value {
+      kind: Some(StructValue(Struct {
+        fields: response_metadata_config.clone()
+      }))
+    };
+    expect!(result).to(be_equal_to(vec![(btreemap!{}, Some(&expected_metadata))]));
   }
 }

@@ -170,6 +170,7 @@ async fn init_plugin_request(request_message: &MessageRequest) -> (Status, (Cont
 #[test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 async fn verify_plugin() {
   // Test Setup
+  #[allow(deprecated)]
   let provider_info = ProviderInfo {
     name: "plugin".to_string(),
     port: Some(8000),
