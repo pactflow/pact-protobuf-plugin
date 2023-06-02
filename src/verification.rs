@@ -28,7 +28,7 @@ use tracing::{debug, error, instrument, trace, warn};
 use crate::dynamic_message::{DynamicMessage, PactCodec};
 use crate::matching::match_service;
 use crate::message_decoder::decode_message;
-use crate::metadata::{compare_metadata, MetadataMatchResult};
+use crate::metadata::{compare_metadata, grpc_status, MetadataMatchResult};
 use crate::utils::{find_message_type_by_name, last_name, lookup_service_descriptors_for_interaction};
 
 #[derive(Debug)]
@@ -62,6 +62,7 @@ pub async fn verify_interaction(
   let input_message = find_message_type_by_name(last_name(input_message_name.as_str()), &file_desc)?.0;
   let output_message_name = method_desc.output_type.clone().unwrap_or_default();
   let output_message = find_message_type_by_name(last_name(output_message_name.as_str()), &file_desc)?.0;
+  let bold = Style::new().bold();
 
   match build_grpc_request(request_body, metadata, &file_desc, &input_message) {
     Ok(request) => match make_grpc_request(request, config, metadata, &file_desc, &input_message, &output_message, interaction).await {
@@ -74,7 +75,6 @@ pub async fn verify_interaction(
         let (result, verification_output) = verify_response(body, response_metadata, interaction,
           &file_desc, &service_desc, &method_desc)?;
 
-        let bold = Style::new().bold();
         let status_result = if !result.is_empty() {
           Red.paint("FAILED")
         } else {
@@ -85,7 +85,7 @@ pub async fn verify_interaction(
                   bold.paint(service_desc.name.unwrap_or_default()),
                   bold.paint(method_desc.name.unwrap_or_default())),
           format!("    with an input {} message", bold.paint(input_message_name)),
-          format!("    will return an output {} message ({})", bold.paint(output_message_name), status_result)
+          format!("    will return an output {} message [{}]", bold.paint(output_message_name), status_result)
         ];
         output.extend(verification_output);
 
@@ -93,12 +93,33 @@ pub async fn verify_interaction(
       }
       Err(err) => {
         error!("Received error response from gRPC provider - {:?}", err);
-
-        if let Some(grpc_status) = err.downcast_ref::<GrpcError>() {
-          trace!("gRPC message: {}", grpc_status.status.message());
-          trace!("gRPC metadata: {:?}", grpc_status.status.metadata());
-          Err(anyhow!(format!("gRPC error: status {}, message '{}'", grpc_status.status.code(),
-            grpc_status.status.message())))
+        if let Some(received_status) = err.downcast_ref::<GrpcError>() {
+          trace!("gRPC message: {}", received_status.status.message());
+          trace!("gRPC metadata: {:?}", received_status.status.metadata());
+          let default_contents = MessageContents::default();
+          let expected_response = interaction.response.first()
+            .unwrap_or_else(|| &default_contents);
+          if let Some(expected_status) = grpc_status(expected_response) {
+            let (result, verification_output) = verify_error_response(expected_response,
+                                                                      &received_status.status, &interaction.id);
+            let status_result = if !result.is_empty() {
+              Red.paint("FAILED")
+            } else {
+              Green.paint("OK")
+            };
+            let mut output = vec![
+              format!("Given a {}/{} request",
+                      bold.paint(service_desc.name.unwrap_or_default()),
+                      bold.paint(method_desc.name.unwrap_or_default())),
+              format!("    with an input {} message", bold.paint(input_message_name)),
+              format!("    will return an error response {} [{}]", bold.paint(expected_status.code().to_string()), status_result)
+            ];
+            output.extend(verification_output);
+            Ok((result, output))
+          } else {
+            Err(anyhow!(format!("gRPC error: status {}, message '{}'", received_status.status.code(),
+              received_status.status.message())))
+          }
         } else {
           Err(anyhow!(err))
         }
@@ -109,6 +130,50 @@ pub async fn verify_interaction(
       Err(anyhow!(err))
     }
   }
+}
+
+fn verify_error_response(
+  response: &MessageContents,
+  actual_status: &Status,
+  interaction_id: &Option<String>
+) -> (Vec<VerificationMismatchResult>, Vec<String>) {
+  let mut output = vec![];
+  let mut results = vec![];
+  if !response.metadata.is_empty() {
+    output.push(format!("      with metadata"));
+    let mut metadata = actual_status.metadata().clone();
+    if let Ok(code) = i32::from(actual_status.code()).to_string().parse() {
+      metadata.insert("grpc-status", code);
+    }
+    if !actual_status.message().is_empty() {
+      if let Ok(message) = actual_status.message().parse() {
+        metadata.insert("grpc-message", message);
+      }
+    }
+    match verify_metadata(&metadata, &response) {
+      Ok((result, md_output)) => {
+        if !result.result {
+          results.push(VerificationMismatchResult::Mismatches {
+            mismatches: result.mismatches,
+            interaction_id: interaction_id.clone()
+          });
+        }
+        output.extend(md_output);
+      }
+      Err(err) => {
+        results.push(VerificationMismatchResult::Mismatches {
+          mismatches: vec![ Mismatch::MetadataMismatch {
+            key: "".to_string(),
+            expected: "".to_string(),
+            actual: "".to_string(),
+            mismatch: format!("Failed to verify the message metadata: {}", err)
+          } ],
+          interaction_id: interaction_id.clone()
+        });
+      }
+    }
+  }
+  (results, output)
 }
 
 fn verify_response(

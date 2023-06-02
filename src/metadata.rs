@@ -1,9 +1,9 @@
 //! Module for dealing with gRPC metadata (as per https://grpc.io/docs/what-is-grpc/core-concepts/#metadata).
 
 use std::collections::HashMap;
+
 use ansi_term::Colour::{Green, Red};
 use ansi_term::Style;
-
 use anyhow::anyhow;
 use itertools::{Either, Itertools};
 use maplit::hashmap;
@@ -14,8 +14,10 @@ use pact_models::json_utils::json_to_string;
 use pact_models::matchingrules::{MatchingRule, MatchingRuleCategory, RuleLogic};
 use pact_models::matchingrules::expressions::{is_matcher_def, MatchingRuleDefinition, parse_matcher_def};
 use pact_models::path_exp::DocPath;
+use pact_models::v4::message_parts::MessageContents;
 use pact_plugin_driver::utils::proto_value_to_string;
 use prost_types::Value;
+use tonic::{Code, Status};
 use tonic::metadata::{Ascii, MetadataMap, MetadataValue};
 use tracing::instrument;
 use tracing::log::trace;
@@ -172,7 +174,7 @@ fn match_metadata_value(
     Ok(actual) => {
       if context.matcher_is_defined(&path) {
         let matchers = context.select_best_matcher(&path);
-        let result = if let Err(errors)  = matchers::match_values(&path, &matchers, &expected, &actual.to_string()) {
+        let result = if let Err(errors) = matchers::match_values(&path, &matchers, &expected, &actual.to_string()) {
           for mismatch in errors {
             mismatches.push(Mismatch::MetadataMismatch {
               key: key.clone(),
@@ -190,6 +192,25 @@ fn match_metadata_value(
             .map(|r| matching_rule_description(r))
             .join(", ")
           ), result)
+      } else if key == "grpc-status" {
+        let actual_status = string_to_code(actual, "").unwrap_or(Status::unknown(""));
+        if let Some(expected_status) = string_to_code(expected.as_str(), "") {
+          let result = if expected_status.code() != actual_status.code() {
+            mismatches.push(Mismatch::MetadataMismatch {
+              key: key.clone(),
+              expected,
+              actual: actual.to_string(),
+              mismatch: format!("Comparison of metadata key '{}' failed: expected {} but received {}", key,
+                                code_desc(&expected_status.code()), code_desc(&actual_status.code()))
+            });
+            Red.paint("FAILED")
+          } else {
+            Green.paint("OK")
+          };
+          format!("        key '{}' with value '{}' [{}]", bold.paint(key), bold.paint(code_desc(&expected_status.code())), result)
+        } else {
+          format!("        key '{}' with value '{}' [{}]", bold.paint(key), bold.paint("OK"), Green.paint("OK"))
+        }
       } else {
         if let Err(err) = Matches::matches_with(&expected, actual, &MatchingRule::Equality, false) {
           mismatches.push(Mismatch::MetadataMismatch {
@@ -245,6 +266,71 @@ fn matching_def_description(md: &MatchingRuleDefinition) -> String {
     .join(", ")
 }
 
+pub fn grpc_status(response_contents: &MessageContents) -> Option<Status> {
+  if let Some(value) = response_contents.metadata.get("grpc-status") {
+    let status = json_to_string(value);
+    let message = response_contents.metadata.get("grpc-message")
+      .map(json_to_string)
+      .unwrap_or("No message set".to_string());
+    string_to_code(status.as_str(), message.as_str())
+  } else {
+    None
+  }
+}
+
+pub fn string_to_code(status: &str, message: &str) -> Option<Status> {
+  match status {
+    // Taken from https://grpc.github.io/grpc/core/md_doc_statuscodes.html
+    "OK" => None,
+    "CANCELLED" => Some(Status::cancelled(message)),
+    "UNKNOWN" => Some(Status::unknown(message)),
+    "INVALID_ARGUMENT" => Some(Status::invalid_argument(message)),
+    "DEADLINE_EXCEEDED" => Some(Status::deadline_exceeded(message)),
+    "NOT_FOUND" => Some(Status::not_found(message)),
+    "ALREADY_EXISTS" => Some(Status::already_exists(message)),
+    "PERMISSION_DENIED" => Some(Status::permission_denied(message)),
+    "RESOURCE_EXHAUSTED" => Some(Status::resource_exhausted(message)),
+    "FAILED_PRECONDITION" => Some(Status::failed_precondition(message)),
+    "ABORTED" => Some(Status::aborted(message)),
+    "OUT_OF_RANGE" => Some(Status::out_of_range(message)),
+    "UNIMPLEMENTED" => Some(Status::unimplemented(message)),
+    "INTERNAL" => Some(Status::internal(message)),
+    "UNAVAILABLE" => Some(Status::unavailable(message)),
+    "DATA_LOSS" => Some(Status::data_loss(message)),
+    "UNAUTHENTICATED" => Some(Status::unauthenticated(message)),
+    _ => {
+      let code = Code::from_bytes(status.as_bytes());
+      if code == Code::Ok {
+        None
+      } else {
+        Some(Status::new(code, message))
+      }
+    }
+  }
+}
+
+fn code_desc(code: &Code) -> String {
+  match code {
+    Code::Ok => "OK",
+    Code::Cancelled => "CANCELLED",
+    Code::Unknown => "UNKNOWN",
+    Code::InvalidArgument => "INVALID_ARGUMENT",
+    Code::DeadlineExceeded => "DEADLINE_EXCEEDED",
+    Code::NotFound => "NOT_FOUND",
+    Code::AlreadyExists => "ALREADY_EXISTS",
+    Code::PermissionDenied => "PERMISSION_DENIED",
+    Code::ResourceExhausted => "RESOURCE_EXHAUSTED",
+    Code::FailedPrecondition => "FAILED_PRECONDITION",
+    Code::Aborted => "ABORTED",
+    Code::OutOfRange => "OUT_OF_RANGE",
+    Code::Unimplemented => "UNIMPLEMENTED",
+    Code::Internal => "INTERNAL",
+    Code::Unavailable => "UNAVAILABLE",
+    Code::DataLoss => "DATA_LOSS",
+    Code::Unauthenticated => "UNAUTHENTICATED"
+  }.to_string()
+}
+
 #[cfg(test)]
 mod tests {
   use expectest::prelude::*;
@@ -253,10 +339,13 @@ mod tests {
   use pact_models::matchingrules;
   use pact_models::matchingrules::MatchingRule;
   use pact_models::path_exp::DocPath;
+  use pact_models::v4::message_parts::MessageContents;
   use prost_types::{Struct, Value, value};
+  use serde_json::json;
+  use tonic::Code;
   use tonic::metadata::MetadataMap;
 
-  use crate::metadata::{compare_metadata, process_metadata};
+  use crate::metadata::{compare_metadata, grpc_status, process_metadata};
   use crate::utils::prost_string;
 
   #[test]
@@ -418,5 +507,58 @@ mod tests {
     let (result, _) = compare_metadata(&expected, &actual, &context).unwrap();
     expect!(result.result).to(be_true());
     expect!(result.mismatches.len()).to(be_equal_to(0));
+  }
+
+  #[test]
+  fn grpc_status_test_no_status_set() {
+    let message = MessageContents {
+      contents: Default::default(),
+      metadata: hashmap!{},
+      matching_rules: Default::default(),
+      generators: Default::default(),
+    };
+    expect!(grpc_status(&message)).to(be_none());
+  }
+
+  fn setup_message(status: &str, message: Option<&str>) -> MessageContents {
+    if let Some(message) = message {
+      MessageContents {
+        metadata: hashmap!{
+          "grpc-status".to_string() => json!(status),
+          "grpc-message".to_string() => json!(message)
+        },
+        .. MessageContents::default()
+      }
+    } else {
+      MessageContents {
+        metadata: hashmap!{ "grpc-status".to_string() => json!(status) },
+        .. MessageContents::default()
+      }
+    }
+  }
+
+  #[test]
+  fn grpc_status_test_status_set_by_value() {
+    let message = setup_message("OK", None);
+    expect!(grpc_status(&message)).to(be_none());
+
+    let message = setup_message("CANCELLED", None);
+    expect!(grpc_status(&message).unwrap().code()).to(be_equal_to(Code::Cancelled));
+    let message = setup_message("UNKNOWN", Some("it went bang, Mate!"));
+    let status = grpc_status(&message).unwrap();
+    expect!(status.code()).to(be_equal_to(Code::Unknown));
+    expect!(status.message()).to(be_equal_to("it went bang, Mate!"));
+
+    let message = setup_message("10", None);
+    expect!(grpc_status(&message).unwrap().code()).to(be_equal_to(Code::Aborted));
+  }
+
+  #[test]
+  fn grpc_status_test_invalid_status() {
+    let message = setup_message("GGGH", None);
+    expect!(grpc_status(&message).unwrap().code()).to(be_equal_to(Code::Unknown));
+
+    let message = setup_message("33", None);
+    expect!(grpc_status(&message).unwrap().code()).to(be_equal_to(Code::Unknown));
   }
 }
