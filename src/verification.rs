@@ -132,6 +132,7 @@ pub async fn verify_interaction(
   }
 }
 
+#[instrument]
 fn verify_error_response(
   response: &MessageContents,
   actual_status: &Status,

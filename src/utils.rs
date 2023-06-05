@@ -321,12 +321,9 @@ pub(crate) fn parse_pact_from_request_json(pact_json: &str, source: &str) -> any
 pub(crate) fn lookup_interaction_by_id<'a>(
   interaction_key: &str,
   pact: &'a V4Pact
-) -> anyhow::Result<&'a Box<dyn V4Interaction + Send + Sync + RefUnwindSafe>> {
-  match pact.interactions.iter()
-    .find(|i| i.key().unwrap_or_default() == interaction_key) {
-    Some(interaction) => Ok(interaction),
-    None => Err(anyhow!("Did not find interaction with key '{}' in the Pact", interaction_key))
-  }
+) -> Option<&'a Box<dyn V4Interaction + Send + Sync + RefUnwindSafe>> {
+  pact.interactions.iter()
+    .find(|i| i.unique_key() == interaction_key)
 }
 
 pub(crate) fn lookup_interaction_config(interaction: &dyn V4Interaction) -> Option<HashMap<String, serde_json::Value>> {

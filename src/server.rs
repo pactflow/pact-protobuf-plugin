@@ -692,17 +692,22 @@ impl PactPlugin for ProtobufPactPlugin {
       }))
     };
 
-    let interaction = match lookup_interaction_by_id(request.interaction_key.as_str(), &pact) {
-      Ok(interaction) => match interaction.as_v4_sync_message() {
+    let key = request.interaction_key.as_str();
+    let interaction_by_id = lookup_interaction_by_id(key, &pact);
+    let interaction = match interaction_by_id {
+      Some(interaction) => match interaction.as_v4_sync_message() {
         Some(interaction) => interaction,
         None => return Ok(Response::new(proto::VerificationPreparationResponse {
           response: Some(proto::verification_preparation_response::Response::Error(format!("gRPC interactions must be of type V4 synchronous message, got {}", interaction.type_of()))),
           ..proto::VerificationPreparationResponse::default()
         }))
       }
-      Err(err) => {
+      None => {
+        error!(?key, "Did not find an interaction that matches the given key");
         return Ok(Response::new(proto::VerificationPreparationResponse {
-          response: Some(proto::verification_preparation_response::Response::Error(err.to_string())),
+          response: Some(proto::verification_preparation_response::Response::Error(
+            format!("Did not find an interaction that matches the given key '{}'", key)
+          )),
           ..proto::VerificationPreparationResponse::default()
         }))
       }
@@ -812,17 +817,22 @@ impl PactPlugin for ProtobufPactPlugin {
       }))
     };
 
-    let interaction = match lookup_interaction_by_id(request.interaction_key.as_str(), &pact) {
-      Ok(interaction) => match interaction.as_v4_sync_message() {
+    let key = request.interaction_key.as_str();
+    let interaction_by_id = lookup_interaction_by_id(key, &pact);
+    let interaction = match interaction_by_id {
+      Some(interaction) => match interaction.as_v4_sync_message() {
         Some(interaction) => interaction,
         None => return Ok(Response::new(proto::VerifyInteractionResponse {
           response: Some(proto::verify_interaction_response::Response::Error(format!("gRPC interactions must be of type V4 synchronous message, got {}", interaction.type_of()))),
           .. proto::VerifyInteractionResponse::default()
         }))
       }
-      Err(err) => {
+      None => {
+        error!(?key, "Did not find an interaction that matches the given key");
         return Ok(Response::new(proto::VerifyInteractionResponse {
-          response: Some(proto::verify_interaction_response::Response::Error(err.to_string())),
+          response: Some(proto::verify_interaction_response::Response::Error(
+            format!("Did not find an interaction that matches the given key '{}'", key)
+          )),
           ..proto::VerifyInteractionResponse::default()
         }))
       }
