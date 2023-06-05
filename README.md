@@ -128,8 +128,8 @@ Host to bind to. Default is the IP4 loopback adapter `127.0.0.1`, to use the IP6
 
 #### `additionalIncludes` [string or list\<string\>]
 
-Additional includes to add to the Protocol buffers compiler. Each value will be added verbatim to the command line 
-using `-I`.
+Additional directories to include to add to the Protocol buffers compiler to search for proto files. Each value will be
+added verbatim to the protoc command line using `-I`. **THESE ARE DIRECTORIES NOT FILES!**
 
 ### Specifying configuration values in the tests
 
@@ -162,6 +162,7 @@ It supports the following:
 * oneOf fields.
 * gRPC Service method calls. 
 * Testing/verifying gRPC service call metadata.
+* Verifying gRPC error responses.  
 
 ## Unsupported features
 
@@ -324,6 +325,52 @@ There are two main ways to run the verification:
 
 1. Execute the Pact verifier, providing the source of the Pact file, and configure it to use the HTTP mock server.
 2. Write a test in the provider's code base. For an example of doing this in Rust, see [a test that verifies this plugin](tests/pact_verify.rs).
+
+#### Verifying gRPC error responses (0.3.1+)
+
+You can use this plugin to test negative cases where an error response is expected to be returned (for an example see
+[gRPC status](https://github.com/pact-foundation/pact-plugins/tree/main/examples/gRPC/grpc_status)). This works by
+checking if there is an expected `grpc-status` attribute set when an error response is returned (and also can check
+for a `grpc-message` attribute).
+
+To use it, don't configure a response message, but add the expected status (and message if required) to the response
+metadata. I.e, in the consumer test:
+
+```java
+.with(Map.of(
+    "pact:proto", filePath("../proto/grpc_status.proto"),
+    "pact:content-type", "application/grpc",
+    "pact:proto-service", "Calculator/calculate",
+
+    "request", Map.of(
+      "parallelogram", Map.of(
+        "base_length", "matching(number, 3)",
+        "height", "matching(number, 4)"
+      )
+    ),
+
+    // We are expecting an error responmse for this message
+    "responseMetadata", Map.of(
+      "grpc-status", "UNIMPLEMENTED",
+      "grpc-message", "matching(type, 'we do not currently support parallelograms')"
+    )
+))
+```
+
+then when the interaction is verified you will see (assuming the provider returns the correct response):
+
+```console
+Verifying a pact between grpc-consumer-rust and grpc-provider
+
+  invalid request (0s loading, 54ms verification)
+
+  Given a Calculator/calculate request
+      with an input .area_calculator.ShapeMessage message
+      will return an error response Operation is not implemented or not supported [OK]
+        with metadata
+          key 'grpc-message' with value 'we do not currently support parallelograms' [OK]
+          key 'grpc-status' with value 'UNIMPLEMENTED' [OK]
+```
 
 ### The Protobuf test configuration
 
