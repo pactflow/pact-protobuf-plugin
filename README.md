@@ -349,7 +349,7 @@ metadata. I.e, in the consumer test:
       )
     ),
 
-    // We are expecting an error responmse for this message
+    // We are expecting an error response for this message
     "responseMetadata", Map.of(
       "grpc-status", "UNIMPLEMENTED",
       "grpc-message", "matching(type, 'we do not currently support parallelograms')"
