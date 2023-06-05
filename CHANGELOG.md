@@ -1,3 +1,19 @@
+# 0.3.1 - Support gRPC error responses + bugfixes
+
+* d1f560f - chore: fix typo in readme (Ronald Holshausen, Mon Jun 5 16:21:18 2023 +1000)
+* c3ed9fa - chore: add section on Verifying gRPC error responses to readme (Ronald Holshausen, Mon Jun 5 16:19:31 2023 +1000)
+* 4b2c839 - fix: fix for "Did not find interaction with key XXXXX in the Pact" error (Ronald Holshausen, Mon Jun 5 15:37:23 2023 +1000)
+* 9b7ec93 - fix: correct incorrect status in the output from the metadata comparison results (Ronald Holshausen, Mon Jun 5 15:34:56 2023 +1000)
+* 8c57a04 - chore: Update dependencies (Ronald Holshausen, Mon Jun 5 15:33:43 2023 +1000)
+* ce32874 - feat: Support validating metadata when an error response is returned (Ronald Holshausen, Fri Jun 2 15:48:15 2023 +1000)
+* 564cefa - feat: Support setting the gRPC status for the response (Ronald Holshausen, Fri Jun 2 09:29:07 2023 +1000)
+* b25b4aa - chore: Upgrade all dependencies (Ronald Holshausen, Thu Jun 1 10:39:57 2023 +1000)
+* 46b7b23 - chore: add smartbear supported workflow (Matt Fellows, Sun May 21 19:09:32 2023 +1000)
+* 9c07576 - chore: Upgrade dependencies (Ronald Holshausen, Wed Apr 5 11:53:02 2023 +1000)
+* 8cb6c4f - fix: manifest had the wrong version (Ronald Holshausen, Wed Feb 22 09:03:12 2023 +1100)
+* 8ded034 - chore: update readme (Ronald Holshausen, Fri Feb 10 14:06:56 2023 +1100)
+* 5278a01 - bump version to 0.3.1 (Ronald Holshausen, Fri Feb 10 14:03:51 2023 +1100)
+
 # 0.3.0 - Supports gRPC metadata with Pact tests
 
 * cab8ce1 - fix: Upgrade pact_verifier crate to 0.13.21 (fixes pact verification test) (Ronald Holshausen, Fri Feb 10 13:40:48 2023 +1100)
