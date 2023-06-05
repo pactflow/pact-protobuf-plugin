@@ -219,8 +219,10 @@ fn match_metadata_value(
             actual: actual.to_string(),
             mismatch: format!("Comparison of metadata key '{}' failed: {}", key, err)
           });
+          format!("        key '{}' with value '{}' [{}]", bold.paint(key), bold.paint(actual), Red.paint("FAILED"))
+        } else {
+          format!("        key '{}' with value '{}' [{}]", bold.paint(key), bold.paint(actual), Green.paint("OK"))
         }
-        format!("        key '{}' with value '{}' [{}]", bold.paint(key), bold.paint(actual), Red.paint("FAILED"))
       }
     }
     Err(err) => {
