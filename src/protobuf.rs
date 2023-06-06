@@ -11,7 +11,7 @@ use maplit::{btreemap, hashmap};
 use pact_models::generators::Generator;
 use pact_models::json_utils::json_to_string;
 use pact_models::matchingrules;
-use pact_models::matchingrules::expressions::{is_matcher_def, parse_matcher_def, ValueType};
+use pact_models::matchingrules::expressions::{is_matcher_def, MatchingRuleDefinition, parse_matcher_def, ValueType};
 use pact_models::matchingrules::MatchingRuleCategory;
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::RuleLogic;
@@ -31,7 +31,7 @@ use prost_types::value::Kind;
 use serde_json::{json, Value};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
-use tracing::{debug, instrument, trace, warn};
+use tracing::{debug, error, instrument, trace, warn};
 use tracing_core::LevelFilter;
 
 use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValueType, RType};
@@ -340,7 +340,7 @@ fn construct_protobuf_interaction_for_message(
   for (key, value) in config {
     if !key.starts_with("pact:") {
       let field_path = path.join(key);
-      debug!("Building field for key {}, '{}'", key, field_path);
+      debug!(?field_path, "Building field for key '{}'", key);
       construct_message_field(&mut message_builder, &mut matching_rules, &mut generators,
         key, &proto_value_to_json(value), &field_path, all_descriptors)?;
     }
@@ -434,13 +434,16 @@ fn construct_message_field(
 ) -> anyhow::Result<()> {
   if !field_name.starts_with("pact:") {
     if let Some(field) = message_builder.field_by_name(field_name)  {
+      trace!(?field_name, descriptor = ?field, "Found a descriptor for field");
       match field.r#type {
         Some(r#type) => if r#type == Type::Message as i32 {
           // Embedded message
+          trace!(?field_name, "Field is for an embedded message");
           build_embedded_message_field_value(message_builder, path, &field, field_name,
             value, matching_rules, generators, all_descriptors)?;
         } else {
           // Non-embedded message field (singular value)
+          trace!(?field_name, "Field is not an embedded message");
           let field_type = if is_repeated_field(&field) {
             MessageFieldValueType::Repeated
           } else {
@@ -450,14 +453,15 @@ fn construct_message_field(
                             matching_rules, generators, all_descriptors)?;
         }
         None => {
-          return Err(anyhow!("Message {} field {} is of an unknown type", message_builder.message_name, field_name))
+          return Err(anyhow!("Message {} field '{}' is of an unknown type", message_builder.message_name, field_name))
         }
       }
     } else {
+      error!("Field '{}' was not found in message '{}'", field_name, message_builder.message_name);
       let fields: HashSet<String> = message_builder.descriptor.field.iter()
         .map(|field| field.name.clone().unwrap_or_default())
         .collect();
-      return Err(anyhow!("Message {} has no field {}. Fields are {:?}", message_builder.message_name, field_name, fields))
+      return Err(anyhow!("Message {} has no field '{}'. Fields are {:?}", message_builder.message_name, field_name, fields))
     }
   }
   Ok(())
@@ -943,24 +947,54 @@ fn construct_value_from_string(
   s: &str,
   all_descriptors: &HashMap<String, &FileDescriptorProto>
 ) -> anyhow::Result<MessageFieldValue> {
+  trace!(?field_name, string = ?s, "Building value from string");
   if is_matcher_def(s) {
+    trace!("String value is a matcher definition");
     let mrd = parse_matcher_def(s)?;
+    trace!("matcher definition = {:?}", mrd);
     if !mrd.rules.is_empty() {
       for rule in &mrd.rules {
         match rule {
-          Either::Left(rule) => matching_rules.add_rule(path.clone(), rule.clone(), RuleLogic::And),
+          Either::Left(rule) => {
+            let path = if rule.is_values_matcher() && path.is_wildcard() {
+              path.parent().unwrap_or(DocPath::root())
+            } else {
+              path.clone()
+            };
+            matching_rules.add_rule(path, rule.clone(), RuleLogic::And)
+          },
           Either::Right(mr) => return Err(anyhow!("Was expecting a value for '{}', but got a matching reference {:?}", path, mr))
         }
       }
     }
-    if let Some(generator) = mrd.generator {
-      generators.insert(path.to_string(), generator);
+    if let Some(generator) = &mrd.generator {
+      generators.insert(path.to_string(), generator.clone());
     }
-    value_for_type(field_name, mrd.value.as_str(), descriptor, &message_builder.descriptor,
-      all_descriptors)
+    value_for_type(field_name, &*value_for_field(&mrd), descriptor, &message_builder.descriptor,
+                   all_descriptors)
   } else {
     value_for_type(field_name, s, descriptor, &message_builder.descriptor,
       all_descriptors)
+  }
+}
+
+fn value_for_field(mrd: &MatchingRuleDefinition) -> String {
+  if mrd.value.is_empty() {
+    if let Some(value_matcher) = mrd.rules.iter().find_map(|m| {
+      match m {
+        Either::Left(mr) => match mr {
+          matchingrules::MatchingRule::EachValue(def) => Some(def.value.clone()),
+          _ => None
+        }
+        Either::Right(_) => None
+      }
+    }) {
+      value_matcher
+    } else {
+      String::default()
+    }
+  } else {
+    mrd.value.clone()
   }
 }
 
@@ -1021,7 +1055,8 @@ pub(crate) mod tests {
   use expectest::prelude::*;
   use lazy_static::lazy_static;
   use maplit::{btreemap, hashmap};
-  use pact_models::matchingrules;
+  use pact_models::{matchingrules, matchingrules_list};
+  use pact_models::matchingrules::expressions::{MatchingRuleDefinition, ValueType};
   use pact_models::path_exp::DocPath;
   use pact_models::prelude::MatchingRuleCategory;
   use pact_plugin_driver::proto::{MatchingRule, MatchingRules};
@@ -1044,8 +1079,19 @@ pub(crate) mod tests {
   use serde_json::{json, Value};
   use trim_margin::MarginTrimmable;
 
-  use crate::message_builder::{MessageBuilder, MessageFieldValueType, RType};
-  use crate::protobuf::{build_embedded_message_field_value, build_field_value, build_single_embedded_field_value, construct_message_field, construct_protobuf_interaction_for_message, construct_protobuf_interaction_for_service, request_part, response_part, value_for_type};
+  use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValueType, RType};
+  use crate::protobuf::{
+    build_embedded_message_field_value,
+    build_field_value,
+    build_single_embedded_field_value,
+    construct_message_field,
+    construct_protobuf_interaction_for_message,
+    construct_protobuf_interaction_for_service,
+    request_part,
+    response_part,
+    value_for_type
+  };
+  use crate::utils::find_message_type_by_name;
 
   #[test]
   fn value_for_type_test() {
@@ -1220,6 +1266,136 @@ pub(crate) mod tests {
       |}
       |```
       |".trim_margin().unwrap()));
+  }
+
+  const DESCRIPTORS_FOR_EACH_VALUE_TEST: [u8; 267] = [
+    10, 136, 2, 10, 12, 115, 105, 109, 112, 108, 101, 46, 112, 114, 111,
+    116, 111, 34, 27, 10, 9, 77, 101, 115, 115, 97, 103, 101, 73, 110, 18, 14, 10, 2, 105, 110,
+    24, 1, 32, 1, 40, 8, 82, 2, 105, 110, 34, 30, 10, 10, 77, 101, 115, 115, 97, 103, 101, 79,
+    117, 116, 18, 16, 10, 3, 111, 117, 116, 24, 1, 32, 1, 40, 8, 82, 3, 111, 117, 116, 34, 39,
+    10, 15, 86, 97, 108, 117, 101, 115, 77, 101, 115, 115, 97, 103, 101, 73, 110, 18, 20, 10, 5,
+    118, 97, 108, 117, 101, 24, 1, 32, 3, 40, 9, 82, 5, 118, 97, 108, 117, 101, 34, 40, 10, 16,
+    86, 97, 108, 117, 101, 115, 77, 101, 115, 115, 97, 103, 101, 79, 117, 116, 18, 20, 10, 5,
+    118, 97, 108, 117, 101, 24, 1, 32, 3, 40, 9, 82, 5, 118, 97, 108, 117, 101, 50, 96, 10, 4,
+    84, 101, 115, 116, 18, 36, 10, 7, 71, 101, 116, 84, 101, 115, 116, 18, 10, 46, 77, 101, 115,
+    115, 97, 103, 101, 73, 110, 26, 11, 46, 77, 101, 115, 115, 97, 103, 101, 79, 117, 116, 34,
+    0, 18, 50, 10, 9, 71, 101, 116, 86, 97, 108, 117, 101, 115, 18, 16, 46, 86, 97, 108, 117,
+    101, 115, 77, 101, 115, 115, 97, 103, 101, 73, 110, 26, 17, 46, 86, 97, 108, 117, 101, 115,
+    77, 101, 115, 115, 97, 103, 101, 79, 117, 116, 34, 0, 98, 6, 112, 114, 111, 116, 111, 51];
+
+  #[test_log::test]
+  fn construct_protobuf_interaction_for_message_with_each_value_matcher() {
+    let fds = FileDescriptorSet::decode(DESCRIPTORS_FOR_EACH_VALUE_TEST.as_slice()).unwrap();
+    let fs = fds.file.first().unwrap();
+    let all_descriptors = hashmap!{ "simple.proto".to_string() => fs };
+    let config = btreemap! {
+      "value".to_string() => prost_types::Value { kind: Some(prost_types::value::Kind::StringValue("eachValue(matching(type, '00000000000000000000000000000000'))".to_string())) }
+    };
+    let (message_descriptor, _) = find_message_type_by_name("ValuesMessageIn", &fds).unwrap();
+
+    let result = construct_protobuf_interaction_for_message(
+      &message_descriptor,
+      &config,
+      "ValuesMessageIn",
+      "",
+      fs,
+      &all_descriptors,
+      None
+    ).unwrap();
+
+    let body = result.contents.as_ref().unwrap();
+    expect!(body.content_type.as_str()).to(be_equal_to("application/protobuf;message=ValuesMessageIn"));
+    expect!(body.content.as_ref()).to(be_some().value(&vec![
+      10, // field 1 length encoded (1 << 3 + 2 == 10)
+      32, // 32 bytes
+      48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, // Lots of zeros
+      48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48
+    ]));
+
+    let value_matcher = result.rules.get("$.value").unwrap().rule.first().unwrap();
+    expect!(&value_matcher.r#type).to(be_equal_to("each-value"));
+    let values = value_matcher.values.clone().unwrap();
+    expect!(values.fields.get("value").unwrap().kind.clone().unwrap()).to(be_equal_to(
+      StringValue("00000000000000000000000000000000".to_string())
+    ));
+    expect!(result.generators).to(be_equal_to(hashmap! {}));
+  }
+
+  #[test_log::test]
+  fn construct_message_field_with_message_with_each_value_matcher() {
+    let fds = FileDescriptorSet::decode(DESCRIPTORS_FOR_EACH_VALUE_TEST.as_slice()).unwrap();
+    let fs = fds.file.first().unwrap();
+    let (message_descriptor, _) = find_message_type_by_name("ValuesMessageIn", &fds).unwrap();
+    let mut message_builder = MessageBuilder::new(&message_descriptor, "ValuesMessageIn", fs);
+    let path = DocPath::new("$.value").unwrap();
+    let mut matching_rules = MatchingRuleCategory::empty("body");
+    let mut generators = hashmap!{};
+    let file_descriptors: HashMap<String, &FileDescriptorProto> = fds.file
+      .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
+      .collect();
+
+    let result = construct_message_field(&mut message_builder, &mut matching_rules,
+      &mut generators, "value", &Value::String("eachValue(matching(type, '00000000000000000000000000000000'))".to_string()),
+      &path, &file_descriptors);
+    expect!(result).to(be_ok());
+
+    let field = message_builder.fields.get("value");
+    expect!(field).to(be_some());
+    let inner = field.unwrap();
+    expect!(inner.values.clone()).to(be_equal_to(vec![
+      MessageFieldValue {
+        name: "value".to_string(),
+        raw_value: Some("00000000000000000000000000000000".to_string()),
+        rtype: RType::String("00000000000000000000000000000000".to_string())
+      }
+    ]));
+
+    expect!(matching_rules).to(be_equal_to(matchingrules_list! {
+      "body";
+      "$.value" => [
+        pact_models::matchingrules::MatchingRule::EachValue(
+          MatchingRuleDefinition::new("00000000000000000000000000000000".to_string(),
+            ValueType::Unknown, pact_models::matchingrules::MatchingRule::Type, None)
+        )
+      ]
+    }));
+  }
+
+  #[test_log::test]
+  fn build_field_value_with_message_with_each_value_matcher() {
+    let fds = FileDescriptorSet::decode(DESCRIPTORS_FOR_EACH_VALUE_TEST.as_slice()).unwrap();
+    let fs = fds.file.first().unwrap();
+    let (message_descriptor, _) = find_message_type_by_name("ValuesMessageIn", &fds).unwrap();
+    let field_descriptor = message_descriptor.field.first().unwrap();
+    let mut message_builder = MessageBuilder::new(&message_descriptor, "ValuesMessageIn", fs);
+    let path = DocPath::new("$.value").unwrap();
+    let mut matching_rules = MatchingRuleCategory::empty("body");
+    let mut generators = hashmap!{};
+    let file_descriptors: HashMap<String, &FileDescriptorProto> = fds.file
+      .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
+      .collect();
+
+    let result = build_field_value(
+      &path, &mut message_builder, MessageFieldValueType::Repeated, field_descriptor,
+      "value", &Value::String("eachValue(matching(type, '00000000000000000000000000000000'))".to_string()),
+      &mut matching_rules, &mut generators, &file_descriptors
+    ).unwrap();
+
+    expect!(result.as_ref()).to(be_some());
+    let message_field_value = result.unwrap();
+    expect!(message_field_value).to(be_equal_to(MessageFieldValue {
+      name: "value".to_string(),
+      raw_value: Some("00000000000000000000000000000000".to_string()),
+      rtype: RType::String("00000000000000000000000000000000".to_string())
+    }));
+    let field_value = message_builder.fields.get("value").unwrap();
+    expect!(field_value.values.as_ref()).to(be_equal_to(vec![
+      MessageFieldValue {
+        name: "value".to_string(),
+        raw_value: Some("00000000000000000000000000000000".to_string()),
+        rtype: RType::String("00000000000000000000000000000000".to_string())
+      }
+    ]));
   }
 
   #[test]

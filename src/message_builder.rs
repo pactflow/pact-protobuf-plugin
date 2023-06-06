@@ -30,13 +30,13 @@ pub enum MessageFieldValueType {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FieldValueInner {
   /// Values for the field, only repeated and map fields will have more than one value.
-  values: Vec<MessageFieldValue>,
+  pub(crate) values: Vec<MessageFieldValue>,
   /// Descriptor for the field.
   descriptor: FieldDescriptorProto,
   /// Type of field (singular, map or repeated)
-  field_type: MessageFieldValueType,
+  pub(crate) field_type: MessageFieldValueType,
   /// Field data type
-  proto_type: Type
+  pub(crate) proto_type: Type
 }
 
 /// Builder struct for a Protobuf message

@@ -654,12 +654,13 @@ mod tests {
   use base64::Engine;
   use base64::engine::general_purpose::STANDARD as BASE64;
   use expectest::prelude::*;
-  use prost::Message;
+  use pact_models::matchingrules::expressions::{MatchingRuleDefinition, ValueType};
+  use pact_models::matchingrules_list;
   use prost::encoding::WireType;
+  use prost::Message;
   use prost_types::{DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto, FieldDescriptorProto, FileDescriptorSet, MessageOptions};
   use prost_types::field_descriptor_proto::Label::{Optional, Repeated};
   use prost_types::field_descriptor_proto::Type::{Enum, String};
-  use pact_models::matchingrules_list;
 
   use crate::message_decoder::ProtobufField;
 
@@ -914,6 +915,59 @@ mod tests {
           wire_type: WireType::LengthDelimited,
           data: ProtobufFieldData::Message(vec![18, 8, 112, 114, 111, 116, 111, 98, 117, 102, 26, 54, 10, 13, 99, 111, 110, 116, 101, 110, 116, 45, 116, 121, 112, 101, 115, 18, 37, 97, 112, 112, 108, 105, 99, 97, 116, 105, 111, 110, 47, 112, 114, 111, 116, 111, 98, 117, 102, 59, 97, 112, 112, 108, 105, 99, 97, 116, 105, 111, 110, 47, 103, 114, 112, 99], descriptor.clone())
         }
+    ];
+
+    let result = compare_message(
+      path,
+      &expected,
+      &actual,
+      &context,
+      &message_descriptor,
+      &fds,
+    ).unwrap();
+
+    expect!(result).to(be_equal_to(BodyMatchResult::Ok));
+  }
+
+  #[test_log::test]
+  fn compare_message_with_repeated_field_and_each_value_matcher() {
+    let descriptors = base64::engine::general_purpose::STANDARD.decode(
+      "CogCCgxzaW1wbGUucHJvdG8iGwoJTWVzc2FnZUluEg4KAmluGAEgASgIUgJpbiIeCgpNZXNzYWdlT3V0EhAKA291\
+    dBgBIAEoCFIDb3V0IicKD1ZhbHVlc01lc3NhZ2VJbhIUCgV2YWx1ZRgBIAMoCVIFdmFsdWUiKAoQVmFsdWVzTWVzc2FnZU\
+    91dBIUCgV2YWx1ZRgBIAMoCVIFdmFsdWUyYAoEVGVzdBIkCgdHZXRUZXN0EgouTWVzc2FnZUluGgsuTWVzc2FnZU91dCIA\
+    EjIKCUdldFZhbHVlcxIQLlZhbHVlc01lc3NhZ2VJbhoRLlZhbHVlc01lc3NhZ2VPdXQiAGIGcHJvdG8z").unwrap();
+    let fds = FileDescriptorSet::decode(descriptors.as_slice()).unwrap();
+
+    let (message_descriptor, _) = find_message_type_by_name("ValuesMessageIn", &fds).unwrap();
+
+    let path = DocPath::new("$").unwrap();
+    let context = CoreMatchingContext::new(DiffConfig::AllowUnexpectedKeys, &matchingrules_list! {
+      "body";
+      "$.value" => [
+        MatchingRule::EachValue(MatchingRuleDefinition::new("00000000000000000000000000000000".to_string(), ValueType::Unknown, MatchingRule::Type, None))
+      ]
+    }, &hashmap!{});
+    let expected = vec![
+      ProtobufField {
+        field_num: 1,
+        field_name: "value".to_string(),
+        wire_type: WireType::LengthDelimited,
+        data: ProtobufFieldData::String("00000000000000000000000000000000".to_string())
+      }
+    ];
+    let actual = vec![
+      ProtobufField {
+        field_num: 1,
+        field_name: "value".to_string(),
+        wire_type: WireType::LengthDelimited,
+        data: ProtobufFieldData::String("value1".to_string())
+      },
+      ProtobufField {
+        field_num: 1,
+        field_name: "value".to_string(),
+        wire_type: WireType::LengthDelimited,
+        data: ProtobufFieldData::String("value2".to_string())
+      }
     ];
 
     let result = compare_message(

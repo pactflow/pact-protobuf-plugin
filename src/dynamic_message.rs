@@ -17,7 +17,7 @@ use tracing::{debug, error, instrument, trace};
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
 
 #[derive(Debug, Clone)]
-pub(crate) struct PactCodec {
+pub struct PactCodec {
   message: SynchronousMessage,
   input_message: DescriptorProto,
   output_message: DescriptorProto,
@@ -25,7 +25,7 @@ pub(crate) struct PactCodec {
 }
 
 impl PactCodec {
-  pub(crate) fn new(
+  pub fn new(
     file: &FileDescriptorSet,
     input_message: &DescriptorProto,
     output_message: &DescriptorProto,
@@ -255,13 +255,13 @@ impl Encoder for DynamicMessageEncoder {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct DynamicMessageDecoder {
+pub struct DynamicMessageDecoder {
   descriptor: DescriptorProto,
   file_descriptor_set: FileDescriptorSet
 }
 
 impl DynamicMessageDecoder {
-  pub(crate) fn new(codec: &PactCodec) -> Self {
+  pub fn new(codec: &PactCodec) -> Self {
     DynamicMessageDecoder {
       descriptor: codec.input_message.clone(),
       file_descriptor_set: codec.file_descriptor_set.clone()

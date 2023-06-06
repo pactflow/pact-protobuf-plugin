@@ -8,6 +8,15 @@ message MessageOut {
   bool out = 1;
 }
 
+message ValuesMessageIn {
+  repeated string value = 1;
+}
+
+message ValuesMessageOut {
+  repeated string value = 1;
+}
+
 service Test {
   rpc GetTest(MessageIn) returns (MessageOut) {}
+  rpc GetValues(ValuesMessageIn) returns (ValuesMessageOut) {}
 }
