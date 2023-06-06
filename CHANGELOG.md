@@ -1,3 +1,8 @@
+# 0.3.2 - Bugfix Release
+
+* a0726e2 - fix: incorrect the matching rules where setup when an EachValues matcher was used with a repeated field #22 (Ronald Holshausen, Tue Jun 6 16:48:53 2023 +1000)
+* e0b3084 - bump version to 0.3.2 (Ronald Holshausen, Mon Jun 5 16:32:19 2023 +1000)
+
 # 0.3.1 - Support gRPC error responses + bugfixes
 
 * d1f560f - chore: fix typo in readme (Ronald Holshausen, Mon Jun 5 16:21:18 2023 +1000)
