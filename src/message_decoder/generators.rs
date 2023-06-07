@@ -2,7 +2,16 @@ use std::collections::HashMap;
 
 use anyhow::anyhow;
 use chrono::{DateTime, Local};
-use pact_models::generators::{generate_ascii_string, generate_decimal, generate_hexadecimal, generate_value_from_context, GenerateValue, Generator, UuidFormat, VariantMatcher};
+use pact_models::generators::{
+  generate_ascii_string,
+  generate_decimal,
+  generate_hexadecimal,
+  generate_value_from_context,
+  GenerateValue,
+  Generator,
+  UuidFormat,
+  VariantMatcher
+};
 use pact_models::generators::datetime_expressions::{
   execute_date_expression,
   execute_datetime_expression,
@@ -26,7 +35,7 @@ impl GenerateValue<ProtobufFieldData> for Generator {
   ) -> anyhow::Result<ProtobufFieldData> {
     let result = match self {
       Generator::RandomInt(min, max) => {
-        let rand_int = rand::thread_rng().gen_range(*min..max.saturating_add(1));
+        let rand_int = thread_rng().gen_range(*min..max.saturating_add(1));
         match value {
           ProtobufFieldData::String(_) => Ok(ProtobufFieldData::String(rand_int.to_string())),
           ProtobufFieldData::Double(_) => Ok(ProtobufFieldData::Double(rand_int as f64)),

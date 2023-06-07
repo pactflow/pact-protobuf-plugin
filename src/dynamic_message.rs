@@ -18,9 +18,7 @@ use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
 
 #[derive(Debug, Clone)]
 pub struct PactCodec {
-  message: SynchronousMessage,
   input_message: DescriptorProto,
-  output_message: DescriptorProto,
   file_descriptor_set: FileDescriptorSet,
 }
 
@@ -28,14 +26,12 @@ impl PactCodec {
   pub fn new(
     file: &FileDescriptorSet,
     input_message: &DescriptorProto,
-    output_message: &DescriptorProto,
-    message: &SynchronousMessage
+    _output_message: &DescriptorProto,
+    _message: &SynchronousMessage
   ) -> Self {
     PactCodec {
       file_descriptor_set: file.clone(),
-      input_message: input_message.clone(),
-      output_message: output_message.clone(),
-      message: message.clone()
+      input_message: input_message.clone()
     }
   }
 }
@@ -225,19 +221,11 @@ fn find_field<'a>(fields: &'a mut [ProtobufField], field_name: &str) -> Option<&
 }
 
 #[derive(Debug, Clone)]
-pub struct DynamicMessageEncoder {
-  descriptor: DescriptorProto,
-  message: SynchronousMessage,
-  file_descriptor_set: FileDescriptorSet
-}
+pub struct DynamicMessageEncoder {}
 
 impl DynamicMessageEncoder {
-  fn new(codec: &PactCodec) -> Self {
-    DynamicMessageEncoder {
-      descriptor: codec.output_message.clone(),
-      message: codec.message.clone(),
-      file_descriptor_set: codec.file_descriptor_set.clone()
-    }
+  fn new(_codec: &PactCodec) -> Self {
+    DynamicMessageEncoder {}
   }
 }
 
