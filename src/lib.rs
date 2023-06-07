@@ -6,7 +6,7 @@ mod protobuf;
 mod message_builder;
 pub mod message_decoder;
 pub mod utils;
-mod matching;
+pub mod matching;
 pub mod mock_server;
 pub mod tcp;
 pub mod dynamic_message;

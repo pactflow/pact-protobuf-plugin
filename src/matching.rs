@@ -128,7 +128,7 @@ pub(crate) fn compare(
   skip_all,
   fields(%path)
 )]
-fn compare_message(
+pub fn compare_message(
   path: DocPath,
   expected_message_fields: &[ProtobufField],
   actual_message_fields: &[ProtobufField],

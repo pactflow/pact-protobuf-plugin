@@ -93,7 +93,7 @@ fn mock_server_with_no_requests() {
   }
 }
 
-#[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn each_value_matcher() {
   let mut pact_builder = PactBuilderAsync::new_v4("each-value", "protobuf-plugin");
   pact_builder
@@ -164,3 +164,4 @@ async fn each_value_matcher() {
   let path = http::uri::PathAndQuery::try_from("/Test/GetValues").unwrap();
   grpc.unary(Request::new(message), path, codec).await.unwrap();
 }
+

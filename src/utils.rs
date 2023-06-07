@@ -318,7 +318,7 @@ pub(crate) fn parse_pact_from_request_json(pact_json: &str, source: &str) -> any
 }
 
 /// Lookup up the interaction in the Pact file, given the ID
-pub(crate) fn lookup_interaction_by_id<'a>(
+pub fn lookup_interaction_by_id<'a>(
   interaction_key: &str,
   pact: &'a V4Pact
 ) -> Option<&'a Box<dyn V4Interaction + Send + Sync + RefUnwindSafe>> {
@@ -326,7 +326,7 @@ pub(crate) fn lookup_interaction_by_id<'a>(
     .find(|i| i.unique_key() == interaction_key)
 }
 
-pub(crate) fn lookup_interaction_config(interaction: &dyn V4Interaction) -> Option<HashMap<String, serde_json::Value>> {
+pub fn lookup_interaction_config(interaction: &dyn V4Interaction) -> Option<HashMap<String, serde_json::Value>> {
   interaction.plugin_config().iter()
     .find_map(|(key, value)| {
       if key.as_str() == "protobuf" {
@@ -372,7 +372,7 @@ pub(crate) fn lookup_service_descriptors_for_interaction(
 }
 
 /// Get the encoded Protobuf descriptors from the Pact level configuration for the message key
-pub(crate) fn get_descriptors_for_interaction(
+pub fn get_descriptors_for_interaction(
   message_key: &str,
   plugin_config: &BTreeMap<String, serde_json::Value>
 ) -> anyhow::Result<FileDescriptorSet> {
