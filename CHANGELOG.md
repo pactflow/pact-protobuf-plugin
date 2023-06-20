@@ -1,3 +1,12 @@
+# 0.3.3 - Bugfix Release
+
+* b6fd769 - fix: correct invalid matchig rule path when using each value with a reference #22 (Ronald Holshausen, Tue Jun 20 11:45:51 2023 +1000)
+* 40c4ea3 - chore: add simple enum test with repeated field #27 (Ronald Holshausen, Wed Jun 7 16:21:27 2023 +1000)
+* 5a1abd8 - chore: cleanup some deprecation warnings (Ronald Holshausen, Wed Jun 7 10:15:39 2023 +1000)
+* 428a6ae - chore: lock cross to previous version as latest fails on GH (Ronald Holshausen, Wed Jun 7 10:12:22 2023 +1000)
+* 688fb69 - chore: correct release script (Ronald Holshausen, Wed Jun 7 09:16:42 2023 +1000)
+* f703e0e - chore: bump version to 0.3.3 (Ronald Holshausen, Wed Jun 7 09:15:46 2023 +1000)
+
 # 0.3.2 - Bugfix Release
 
 * a0726e2 - fix: incorrect the matching rules where setup when an EachValues matcher was used with a repeated field #22 (Ronald Holshausen, Tue Jun 6 16:48:53 2023 +1000)
