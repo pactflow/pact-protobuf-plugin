@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+message MessageIn {
+  bool in = 1;
+}
+
+message MessageOut {
+  repeated ResourcePermissions resource_permissions = 1;
+}
+
+message ResourcePermissions {
+  Resource resource = 1;
+  Effect effect = 2;
+}
+
+message Resource {
+  string application_resource = 1;
+  repeated string permissions = 2;
+  repeated string groups = 3;
+}
+
+enum EffectEnum {
+  ENFORCE_EFFECT_ALLOW = 0;
+}
+
+message Effect {
+  EffectEnum result = 1;
+}
+
+service Test {
+  rpc GetTest(MessageIn) returns (MessageOut) {}
+}

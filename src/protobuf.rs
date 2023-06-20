@@ -957,10 +957,13 @@ fn construct_value_from_string(
         match rule {
           Either::Left(rule) => {
             let path = if rule.is_values_matcher() && path.is_wildcard() {
-              path.parent().unwrap_or(DocPath::root())
+              // TODO: replace this with "path.parent().unwrap_or(DocPath::root())" when pact_models
+              // 1.1.6 is released
+              parent(path).unwrap_or(DocPath::root())
             } else {
               path.clone()
             };
+            trace!(?path, ?rule, "adding matching rule to path");
             matching_rules.add_rule(path, rule.clone(), RuleLogic::And)
           },
           Either::Right(mr) => return Err(anyhow!("Was expecting a value for '{}', but got a matching reference {:?}", path, mr))
@@ -975,6 +978,20 @@ fn construct_value_from_string(
   } else {
     value_for_type(field_name, s, descriptor, &message_builder.descriptor,
       all_descriptors)
+  }
+}
+
+fn parent(path: &DocPath) -> Option<DocPath> {
+  let tokens = path.tokens().clone();
+  if path.is_root() || tokens.len() <= 1 {
+    None
+  } else {
+    let mut path = DocPath::root();
+    let tokens = tokens.split_last().unwrap().1;
+    for part in tokens.iter().skip(1) {
+      path = path.join(part.to_string());
+    }
+    Some(path)
   }
 }
 
@@ -2439,5 +2456,25 @@ pub(crate) mod tests {
       }))
     };
     expect!(result).to(be_equal_to(vec![(btreemap!{}, Some(&expected_metadata))]));
+  }
+
+  #[test]
+  fn path_parent() {
+    let something = DocPath::root().join("something");
+    let something_else = something.join("else");
+    let something_star = something.join("*");
+    let something_escaped = something.join("e l s e");
+    let something_escaped2 = something_escaped.join("two");
+    let something_star_child = something_star.join("child");
+
+    expect!(super::parent(&something)).to(be_some().value(DocPath::root()));
+    expect!(super::parent(&something_else)).to(be_some().value(something.clone()));
+    expect!(super::parent(&something_star)).to(be_some().value(something.clone()));
+    expect!(super::parent(&something_escaped)).to(be_some().value(something.clone()));
+    expect!(super::parent(&something_escaped2)).to(be_some().value(something_escaped.clone()));
+    expect!(super::parent(&something_star_child)).to(be_some().value(something_star.clone()));
+
+    expect!(super::parent(&DocPath::root())).to(be_none());
+    expect!(super::parent(&DocPath::empty())).to(be_none());
   }
 }
