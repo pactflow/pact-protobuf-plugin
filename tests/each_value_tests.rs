@@ -1,12 +1,11 @@
-use std::collections::HashMap;
 use std::path::Path;
 
-use expectest::prelude::*;
+use pretty_assertions::assert_eq;
 use pact_consumer::builders::PactBuilderAsync;
 use pact_models::matchingrules;
 use pact_models::matchingrules::MatchingRule;
 use pact_models::matchingrules::expressions::{MatchingRuleDefinition, ValueType};
-use serde_json::{json, Value};
+use serde_json::json;
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn each_value_test() {
@@ -32,7 +31,7 @@ async fn each_value_test() {
               "resource": {
                 "application_resource": "matching(type, 'foo')",
                 "permissions": "eachValue(matching(type, 'foo'))",
-                "groups": ["bar"]
+                "groups": "eachValue(matching(regex, '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\\*', '00000000000000000000000000000000'))"
               },
               "effect": {
                 "result": "ENFORCE_EFFECT_ALLOW"
@@ -46,17 +45,21 @@ async fn each_value_test() {
     .await;
 
   let pact = pact_builder.build().as_v4_pact().unwrap();
-  let interaction = pact.interactions.first().unwrap().as_v4_sync_message().unwrap();
+  let interaction = dbg!(pact).interactions.first().unwrap().as_v4_sync_message().unwrap();
   let response = interaction.response.first().unwrap();
 
   let each_value = MatchingRule::EachValue(MatchingRuleDefinition::new("foo".to_string(), ValueType::Unknown, MatchingRule::Type, None));
+  let each_value_groups = MatchingRule::EachValue(MatchingRuleDefinition::new(
+    "00000000000000000000000000000000".to_string(), ValueType::Unknown,
+    MatchingRule::Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\\*".to_string()), None));
   let matching_rules = matchingrules! {
     "body" => {
       "$.resource_permissions.*.resource.application_resource" => [ MatchingRule::Type ],
       "$.resource_permissions" => [ MatchingRule::Values ],
       "$.resource_permissions.*" => [ MatchingRule::Type ],
-      "$.resource_permissions.*.resource.permissions" => [ each_value ]
+      "$.resource_permissions.*.resource.permissions" => [ each_value ],
+      "$.resource_permissions.*.resource.groups" => [ each_value_groups ]
     }
   };
-  expect!(&response.matching_rules).to(be_equal_to(dbg!(&matching_rules)));
+  assert_eq!(&matching_rules, &response.matching_rules);
 }

@@ -655,7 +655,7 @@ mod tests {
   use base64::engine::general_purpose::STANDARD as BASE64;
   use expectest::prelude::*;
   use pact_models::matchingrules::expressions::{MatchingRuleDefinition, ValueType};
-  use pact_models::matchingrules_list;
+  use pact_models::{matchingrules, matchingrules_list};
   use prost::encoding::WireType;
   use prost::Message;
   use prost_types::{DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto, FieldDescriptorProto, FileDescriptorSet, MessageOptions};
@@ -970,6 +970,72 @@ mod tests {
       }
     ];
 
+    let result = compare_message(
+      path,
+      &expected,
+      &actual,
+      &context,
+      &message_descriptor,
+      &fds,
+    ).unwrap();
+
+    expect!(result).to(be_equal_to(BodyMatchResult::Ok));
+  }
+
+  #[test_log::test]
+  fn compare_message_with_repeated_string_field_and_each_value_matcher_with_a_regex() {
+    let descriptors = base64::engine::general_purpose::STANDARD.decode(
+      "CusDChBlYWNoX3ZhbHVlLnByb3RvIhsKCU1lc3NhZ2VJbhIOCgJpbhgBIAEoCFICaW4iVQoKTWVzc2FnZU91d\
+      BJHChRyZXNvdXJjZV9wZXJtaXNzaW9ucxgBIAMoCzIULlJlc291cmNlUGVybWlzc2lvbnNSE3Jlc291cmNlUGVybWlzc\
+      2lvbnMiXQoTUmVzb3VyY2VQZXJtaXNzaW9ucxIlCghyZXNvdXJjZRgBIAEoCzIJLlJlc291cmNlUghyZXNvdXJjZRIfC\
+      gZlZmZlY3QYAiABKAsyBy5FZmZlY3RSBmVmZmVjdCJ3CghSZXNvdXJjZRIxChRhcHBsaWNhdGlvbl9yZXNvdXJjZRgBI\
+      AEoCVITYXBwbGljYXRpb25SZXNvdXJjZRIgCgtwZXJtaXNzaW9ucxgCIAMoCVILcGVybWlzc2lvbnMSFgoGZ3JvdXBzG\
+      AMgAygJUgZncm91cHMiLQoGRWZmZWN0EiMKBnJlc3VsdBgBIAEoDjILLkVmZmVjdEVudW1SBnJlc3VsdComCgpFZmZlY\
+      3RFbnVtEhgKFEVORk9SQ0VfRUZGRUNUX0FMTE9XEAAyLAoEVGVzdBIkCgdHZXRUZXN0EgouTWVzc2FnZUluGgsuTWVzc\
+      2FnZU91dCIAYgZwcm90bzM=").unwrap();
+    let fds = FileDescriptorSet::decode(descriptors.as_slice()).unwrap();
+
+    let (message_descriptor, _) = find_message_type_by_name("Resource", &fds).unwrap();
+
+    let each_value = MatchingRule::EachValue(MatchingRuleDefinition::new("foo".to_string(), ValueType::Unknown, MatchingRule::Type, None));
+    let each_value_groups = MatchingRule::EachValue(MatchingRuleDefinition::new(
+      "00000000000000000000000000000000".to_string(), ValueType::Unknown,
+      MatchingRule::Regex(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\*".to_string()), None));
+    let matching_rules = matchingrules! {
+      "body" => {
+        "$.resource_permissions.*.resource.application_resource" => [ MatchingRule::Type ],
+        "$.resource_permissions" => [ MatchingRule::Values ],
+        "$.resource_permissions.*" => [ MatchingRule::Type ],
+        "$.resource_permissions.*.resource.permissions" => [ each_value ],
+        "$.resource_permissions.*.resource.groups" => [ each_value_groups ]
+      }
+    };
+    let context = CoreMatchingContext::new(DiffConfig::AllowUnexpectedKeys,
+      &matching_rules.rules_for_category("body").unwrap(), &hashmap!{});
+    let expected = vec![
+      ProtobufField {
+        field_num: 3,
+        field_name: "groups".to_string(),
+        wire_type: WireType::LengthDelimited,
+        data: ProtobufFieldData::String("*".to_string())
+      }
+    ];
+    let actual = vec![
+      ProtobufField {
+        field_num: 3,
+        field_name: "groups".to_string(),
+        wire_type: WireType::LengthDelimited,
+        data: ProtobufFieldData::String("*".to_string())
+      },
+      ProtobufField {
+        field_num: 3,
+        field_name: "groups".to_string(),
+        wire_type: WireType::LengthDelimited,
+        data: ProtobufFieldData::String("*".to_string())
+      }
+    ];
+
+    let path = DocPath::new("$.resource_permissions.*.resource").unwrap();
     let result = compare_message(
       path,
       &expected,
