@@ -1,3 +1,9 @@
+# 0.3.4 - Bugfix Release
+
+* 098903e - fix: EachValue matcher was not applying regex to repeated fields correctly #22 (Ronald Holshausen, Thu Jun 22 16:06:29 2023 +1000)
+* 7ec725a - chore: Run aarch64 build with 1.69 rust as 1.70 fails with a gcc link error (Ronald Holshausen, Tue Jun 20 13:32:45 2023 +1000)
+* cfcd63e - bump version to 0.3.4 (Ronald Holshausen, Tue Jun 20 12:03:43 2023 +1000)
+
 # 0.3.3 - Bugfix Release
 
 * b6fd769 - fix: correct invalid matchig rule path when using each value with a reference #22 (Ronald Holshausen, Tue Jun 20 11:45:51 2023 +1000)
