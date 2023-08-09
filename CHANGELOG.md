@@ -1,3 +1,9 @@
+# 0.3.5 - Bugfix Release
+
+* fe47ce2 - fix: Corrected processing of Map fields to also support primitive values (Ronald Holshausen, Wed Aug 9 14:33:39 2023 +1000)
+* 80c8b75 - chore: Update all dependencies (Ronald Holshausen, Wed Aug 9 11:24:59 2023 +1000)
+* fb22bfb - bump version to 0.3.5 (Ronald Holshausen, Thu Jun 22 16:20:37 2023 +1000)
+
 # 0.3.4 - Bugfix Release
 
 * 098903e - fix: EachValue matcher was not applying regex to repeated fields correctly #22 (Ronald Holshausen, Thu Jun 22 16:06:29 2023 +1000)
