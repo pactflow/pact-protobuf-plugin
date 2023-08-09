@@ -847,6 +847,8 @@ fn build_map_field(
       let value_descriptor = map_type.field.iter()
         .find(|f| f.name.clone().unwrap_or_default() == "value")
         .ok_or_else(|| anyhow!("Did not find the value field in the descriptor for the map field"))?;
+      trace!("Map field key descriptor = {:?}", key_descriptor);
+      trace!("Map field value descriptor = {:?}", value_descriptor);
 
       let mut embedded_builder = MessageBuilder::new(&map_type, message_name.as_str(), &message_builder.file_descriptor);
       for (inner_field, value) in config {
@@ -858,9 +860,20 @@ fn build_map_field(
             matching_rules, generators, all_descriptors
           )?
             .ok_or_else(|| anyhow!("Was not able to construct map key value {:?}", key_descriptor.type_name))?;
-          let value_value = build_single_embedded_field_value(&entry_path, &mut embedded_builder, MessageFieldValueType::Normal,
-            value_descriptor, "value", value, matching_rules, generators, all_descriptors)?
+
+          let value_value = if value_descriptor.r#type() == Type::Message {
+            // Embedded message
+            trace!("Value is an embedded message type");
+            build_single_embedded_field_value(&entry_path, &mut embedded_builder, MessageFieldValueType::Normal,
+              value_descriptor, "value", value, matching_rules, generators, all_descriptors)?
+          } else {
+            // Non-embedded message field (singular value)
+            trace!("Value is not an embedded message");
+            build_field_value(&entry_path, &mut embedded_builder, MessageFieldValueType::Normal,
+              value_descriptor, "value", value, matching_rules, generators, all_descriptors)?
+          }
             .ok_or_else(|| anyhow!("Was not able to construct map value value {:?}", value_descriptor.type_name))?;
+
           message_builder.add_map_field_value(field_descriptor, field, key_value, value_value);
         }
       }
@@ -2476,5 +2489,67 @@ pub(crate) mod tests {
 
     expect!(super::parent(&DocPath::root())).to(be_none());
     expect!(super::parent(&DocPath::empty())).to(be_none());
+  }
+
+  const DESCRIPTORS_MAP_WITH_PRIMITIVE_FIELDS: [u8; 334] = [
+    10, 203, 2, 10, 10, 109, 97, 112, 115, 46, 112, 114, 111, 116, 111, 18, 4, 109, 97, 112, 115,
+    34, 169, 1, 10, 13, 65, 99, 116, 105, 111, 110, 82, 101, 113, 117, 101, 115, 116, 18, 22, 10,
+    6, 97, 99, 116, 105, 111, 110, 24, 1, 32, 1, 40, 9, 82, 6, 97, 99, 116, 105, 111, 110, 18, 52,
+    10, 5, 112, 97, 114, 97, 109, 24, 2, 32, 3, 40, 11, 50, 30, 46, 109, 97, 112, 115, 46, 65, 99,
+    116, 105, 111, 110, 82, 101, 113, 117, 101, 115, 116, 46, 80, 97, 114, 97, 109, 69, 110, 116,
+    114, 121, 82, 5, 112, 97, 114, 97, 109, 18, 16, 10, 3, 105, 100, 115, 24, 3, 32, 3, 40, 9, 82,
+    3, 105, 100, 115, 26, 56, 10, 10, 80, 97, 114, 97, 109, 69, 110, 116, 114, 121, 18, 16, 10, 3,
+    107, 101, 121, 24, 1, 32, 1, 40, 9, 82, 3, 107, 101, 121, 18, 20, 10, 5, 118, 97, 108, 117, 101,
+    24, 2, 32, 1, 40, 9, 82, 5, 118, 97, 108, 117, 101, 58, 2, 56, 1, 34, 56, 10, 14, 65, 99, 116,
+    105, 111, 110, 82, 101, 115, 112, 111, 110, 115, 101, 18, 38, 10, 14, 114, 101, 115, 112, 111,
+    110, 115, 101, 83, 116, 97, 116, 117, 115, 24, 1, 32, 1, 40, 8, 82, 14, 114, 101, 115, 112, 111,
+    110, 115, 101, 83, 116, 97, 116, 117, 115, 50, 73, 10, 6, 79, 77, 67, 97, 108, 99, 18, 63, 10,
+    18, 104, 97, 110, 100, 108, 101, 66, 97, 116, 99, 104, 82, 101, 113, 117, 101, 115, 116, 18, 19,
+    46, 109, 97, 112, 115, 46, 65, 99, 116, 105, 111, 110, 82, 101, 113, 117, 101, 115, 116, 26, 20,
+    46, 109, 97, 112, 115, 46, 65, 99, 116, 105, 111, 110, 82, 101, 115, 112, 111, 110, 115, 101,
+    98, 6, 112, 114, 111, 116, 111, 51
+  ];
+
+  #[test_log::test]
+  fn configure_message_with_map_with_primitive_fields() {
+    let bytes: &[u8] = &DESCRIPTORS_MAP_WITH_PRIMITIVE_FIELDS;
+    let buffer = Bytes::from(bytes);
+    let fds: FileDescriptorSet = FileDescriptorSet::decode(buffer).unwrap();
+    dbg!(&fds);
+
+    let main_descriptor = fds.file.iter()
+      .find(|fd| fd.name.clone().unwrap_or_default() == "maps.proto")
+      .unwrap();
+    let message_descriptor = main_descriptor.message_type.iter()
+      .find(|md| md.name.clone().unwrap_or_default() == "ActionRequest").unwrap();
+    let mut message_builder = MessageBuilder::new(&message_descriptor, "ActionRequest", main_descriptor);
+    let path = DocPath::new("$.param").unwrap();
+    let mut matching_rules = MatchingRuleCategory::empty("body");
+    let mut generators = hashmap!{};
+    let file_descriptors: HashMap<String, &FileDescriptorProto> = fds.file
+      .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
+      .collect();
+
+    let result = construct_message_field(
+      &mut message_builder,
+      &mut matching_rules,
+      &mut generators,
+      "param",
+      &json!({"apply":"Skip_holiday"}),
+      &path,
+      &file_descriptors
+    );
+
+    expect!(result).to(be_ok());
+
+    let constructed = message_builder.fields.get("param").unwrap();
+    expect!(constructed.proto_type).to(be_equal_to(Type::Message));
+    expect!(constructed.field_type).to(be_equal_to(MessageFieldValueType::Map));
+    expect!(&constructed.values).to(be_equal_to(
+      &vec![
+        MessageFieldValue { name: "key".to_string(), raw_value: Some("apply".to_string()), rtype: RType::String("apply".to_string()) },
+        MessageFieldValue { name: "value".to_string(), raw_value: Some("Skip_holiday".to_string()), rtype: RType::String("Skip_holiday".to_string()) }
+      ]
+    ));
   }
 }
