@@ -103,7 +103,7 @@ pub(crate) fn compare(
   message_descriptor: &DescriptorProto,
   expected_message: &[ProtobufField],
   actual_message: &[ProtobufField],
-  matching_context: &dyn MatchingContext,
+  matching_context: &(dyn MatchingContext + Send + Sync),
   expected_message_bytes: &Bytes,
   descriptors: &FileDescriptorSet
 ) -> anyhow::Result<BodyMatchResult> {
@@ -132,7 +132,7 @@ pub fn compare_message(
   path: DocPath,
   expected_message_fields: &[ProtobufField],
   actual_message_fields: &[ProtobufField],
-  matching_context: &dyn MatchingContext,
+  matching_context: &(dyn MatchingContext + Send + Sync),
   message_descriptor: &DescriptorProto,
   descriptors: &FileDescriptorSet,
 ) -> anyhow::Result<BodyMatchResult> {
@@ -213,7 +213,7 @@ fn compare_field(
   field: &ProtobufField,
   descriptor: &FieldDescriptorProto,
   actual: &ProtobufField,
-  matching_context: &dyn MatchingContext,
+  matching_context: &(dyn MatchingContext + Send + Sync),
   descriptors: &FileDescriptorSet
 ) -> Vec<Mismatch> {
   match (&field.data, &actual.data) {
@@ -437,7 +437,7 @@ fn compare_repeated_field(
   descriptor: &FieldDescriptorProto,
   expected_fields: &[ProtobufField],
   actual_fields: &[ProtobufField],
-  matching_context: &dyn MatchingContext,
+  matching_context: &(dyn MatchingContext + Send + Sync),
   descriptors: &FileDescriptorSet
 ) -> Vec<Mismatch> {
   trace!(">>> compare_repeated_field({}, {:?}, {:?})", path, expected_fields, actual_fields);
@@ -497,7 +497,7 @@ fn compare_map_field(
   descriptor: &FieldDescriptorProto,
   expected_fields: Vec<&ProtobufField>,
   actual_fields: Vec<&ProtobufField>,
-  matching_context: &dyn MatchingContext,
+  matching_context: &(dyn MatchingContext + Send + Sync),
   descriptors: &FileDescriptorSet
 ) -> Vec<Mismatch> {
   trace!(">> compare_map_field('{}', {:?}, {:?})", path, expected_fields, actual_fields);
@@ -538,8 +538,8 @@ fn compare_map_field(
       for matcher in &rules.rules {
         trace!("compare_map_field: matcher = {:?}", matcher);
         if let Err(comparison) = compare_maps_with_matchingrule(matcher, rules.cascaded, path,
-          &expected_map, &actual_map, matching_context, &mut |field_path, expected, actual| {
-            let comparison = compare_field(field_path, &expected.value, &expected.field_descriptor, &actual.value, matching_context, descriptors);
+          &expected_map, &actual_map, matching_context, &mut |field_path, expected, actual, context| {
+            let comparison = compare_field(field_path, &expected.value, &expected.field_descriptor, &actual.value, context, descriptors);
             if comparison.is_empty() {
               Ok(())
             } else {
@@ -620,7 +620,7 @@ fn compare_list_content(
   descriptor: &FieldDescriptorProto,
   expected: &[ProtobufField],
   actual: &[ProtobufField],
-  matching_context: &dyn MatchingContext,
+  matching_context: &(dyn MatchingContext + Send + Sync),
   descriptors: &FileDescriptorSet
 ) -> Vec<Mismatch> {
   let mut result = vec![];
