@@ -27,6 +27,9 @@ async fn repeated_enum_test() {
 
         "in": [
           "matching(equalTo, 'A')"
+        ],
+        "in2": [
+          "matching(equalTo, 'VALUES_2_A')"
         ]
       })).await;
       i
@@ -68,12 +71,6 @@ async fn repeated_enum_test() {
         wire_type: WireType::LengthDelimited,
         data: ProtobufFieldData::Enum(1, enum_descriptor.clone())
       },
-      // ProtobufField {
-      //   field_num: 1,
-      //   field_name: "in".to_string(),
-      //   wire_type: WireType::LengthDelimited,
-      //   data: ProtobufFieldData::Enum(1, enum_descriptor.clone())
-      // }
     ];
 
     let result = compare_message(

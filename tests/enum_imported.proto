@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package example.enum.package;
+
+enum Values2 {
+    VALUES_2_NONE = 0;
+    VALUES_2_A = 1;
+    VALUES_2_B = 2;
+    VALUES_2_C = 3;
+}

@@ -1,5 +1,9 @@
 syntax = "proto3";
 
+package example.enum.package;
+
+import "enum_imported.proto";
+
 enum Values {
   NONE = 0;
   A = 1;
@@ -9,6 +13,7 @@ enum Values {
 
 message MessageIn {
   repeated Values in = 1;
+  repeated Values2 in2 = 2;
 }
 
 message MessageOut {
