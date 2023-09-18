@@ -1,5 +1,7 @@
 syntax = "proto3";
 
+package com.pact.protobuf.example;
+
 message MessageIn {
   bool in = 1;
 }

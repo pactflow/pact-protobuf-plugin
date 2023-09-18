@@ -216,9 +216,19 @@ pub fn find_enum_value_by_name(
   let package_names = enum_name.split('.').filter(|v| !v.is_empty()).collect::<Vec<_>>();
   if let Some((_name, package)) = package_names.split_last() {
     let package = package.join(".");
-    descriptors.values()
-      .find(|fd| fd.package.clone().unwrap_or_default() == package)
-      .and_then(|fd| find_enum_value_by_name_in_message(&fd.enum_type, enum_name, enum_value))
+    let result = descriptors.values()
+      .find_map(|fd| {
+        if fd.package.clone().unwrap_or_default() == package {
+          find_enum_value_by_name_in_message(&fd.enum_type, enum_name, enum_value)
+        } else {
+          None
+        }
+      });
+    if result.is_some() {
+      result
+    } else {
+      None
+    }
   } else {
     None
   }
@@ -235,15 +245,20 @@ pub fn find_enum_by_name(
   trace!("package_names={:?}", package_names);
   if let Some((_name, package)) = package_names.split_last() {
     let package = package.join(".");
-    descriptors.file.iter()
-      .find(|fd| {
+    let result = descriptors.file.iter()
+      .find_map(|fd| {
         if let Some(fd_package) = &fd.package {
-          package == fd_package.as_str()
-        } else {
-          false
+          if package == fd_package.as_str() {
+            return find_enum_by_name_in_message(&fd.enum_type, enum_name)  
+          }
         }
-      })
-      .and_then(|fd| find_enum_by_name_in_message(&fd.enum_type, enum_name))
+        return None
+      });
+      if result.is_some() {
+        result
+      } else {
+        None
+      }
   } else {
     None
   }
