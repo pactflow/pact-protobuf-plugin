@@ -1,3 +1,8 @@
+# 0.3.6 - Bugfix Release
+
+* 2731ee4 - Fix bug resolving enum across multiple files. (Rohit Krishnan, Mon Sep 18 16:06:06 2023 -0400)
+* d5fcc14 - bump version to 0.3.6 (Ronald Holshausen, Wed Aug 9 14:36:23 2023 +1000)
+
 # 0.3.5 - Bugfix Release
 
 * fe47ce2 - fix: Corrected processing of Map fields to also support primitive values (Ronald Holshausen, Wed Aug 9 14:33:39 2023 +1000)
