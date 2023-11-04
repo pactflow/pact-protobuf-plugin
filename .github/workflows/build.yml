@@ -27,6 +27,8 @@ jobs:
         env:
           RUST_LOG: debug
           RUST_BACKTRACE: 1
+      - name: Build Plugin
+        run: cargo build
       - name: Black box Tests
         run: |
           mkdir -p ~/.pact/plugins/protobuf-debug
@@ -35,8 +37,6 @@ jobs:
         env:
           RUST_LOG: debug
           RUST_BACKTRACE: 1
-      - name: Build Plugin
-        run: cargo build
       - name: Clippy
         run: cargo clippy
 
