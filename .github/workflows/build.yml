@@ -37,6 +37,7 @@ jobs:
         env:
           RUST_LOG: debug
           RUST_BACKTRACE: 1
+        shell: bash
       - name: Clippy
         run: cargo clippy
 
