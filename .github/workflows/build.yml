@@ -29,7 +29,7 @@ jobs:
           RUST_BACKTRACE: 1
       - name: Build Plugin
         run: cargo build
-      - name: Black box Tests
+      - name: Integration Tests
         run: |
           mkdir -p ~/.pact/plugins/protobuf-debug
           cp pact-plugin.json target/debug/pact-protobuf-plugin ~/.pact/plugins/protobuf-debug/
