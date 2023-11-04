@@ -22,8 +22,13 @@ jobs:
       - name: Install shared mime info DB
         if: runner.os == 'macOS'
         run: brew install shared-mime-info
-      - name: Tests
+      - name: Unit Tests
         run: cargo test --lib
+        env:
+          RUST_LOG: debug
+          RUST_BACKTRACE: 1
+      - name: Black box Tests
+        run: cargo test --test '*' -- --skip verify_plugin
         env:
           RUST_LOG: debug
           RUST_BACKTRACE: 1
