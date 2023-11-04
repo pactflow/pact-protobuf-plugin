@@ -28,7 +28,10 @@ jobs:
           RUST_LOG: debug
           RUST_BACKTRACE: 1
       - name: Black box Tests
-        run: cargo test --test '*' -- --skip verify_plugin
+        run: |
+          mkdir -p ~/.pact/plugins/protobuf-debug
+          cp pact-plugin.json target/debug/pact-protobuf-plugin ~/.pact/plugins/protobuf-debug/
+          cargo test --test '*' -- --skip verify_plugin
         env:
           RUST_LOG: debug
           RUST_BACKTRACE: 1
