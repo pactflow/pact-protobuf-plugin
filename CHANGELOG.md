@@ -1,3 +1,12 @@
+# 0.3.7 - Bugfix Release
+
+* 27af477 - chore: fix black box tests in CI (Ronald Holshausen, Sat Nov 4 15:06:53 2023 +1100)
+* 6c626dd - chore: Black box tests require the plugin to be built first (Ronald Holshausen, Sat Nov 4 13:45:59 2023 +1100)
+* 12fab8e - chore: Black box tests require the plugin to be installed (Ronald Holshausen, Sat Nov 4 13:32:43 2023 +1100)
+* b04dc47 - chore: Integration (black box) tests were not being run in CI (Ronald Holshausen, Sat Nov 4 13:19:06 2023 +1100)
+* 0a540eb - fix nested enum not resolving (zsylvia, Thu Nov 2 17:18:51 2023 -0400)
+* 8bea782 - bump version to 0.3.7 (Ronald Holshausen, Thu Sep 21 08:29:45 2023 +1000)
+
 # 0.3.6 - Bugfix Release
 
 * 2731ee4 - Fix bug resolving enum across multiple files. (Rohit Krishnan, Mon Sep 18 16:06:06 2023 -0400)
