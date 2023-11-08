@@ -189,7 +189,7 @@ pub fn find_enum_by_name_in_message(
   enum_types: &[EnumDescriptorProto],
   enum_name: &str
 ) -> Option<EnumDescriptorProto> {
-  trace!(">> find_enum_value_by_name_in_message({})",enum_name);
+  trace!(">> find_enum_by_name_in_message({})",enum_name);
   enum_types.iter()
     .find_map(|enum_descriptor| {
       trace!("find_enum_by_name_in_message: enum type = {:?}", enum_descriptor.name);
@@ -213,22 +213,33 @@ pub fn find_enum_value_by_name(
   enum_value: &str
 ) -> Option<(i32, EnumDescriptorProto)> {
   trace!(">> find_enum_value_by_name({}, {})", enum_name, enum_value);
-  let package_names = enum_name.split('.').filter(|v| !v.is_empty()).collect::<Vec<_>>();
-  if let Some((_name, package)) = package_names.split_last() {
-    let package = package.join(".");
-    let result = descriptors.values()
-      .find_map(|fd| {
-        if fd.package.clone().unwrap_or_default() == package {
-          find_enum_value_by_name_in_message(&fd.enum_type, enum_name, enum_value)
-        } else {
-          None
-        }
-      });
-    if result.is_some() {
-      result
-    } else {
-      None
-    }
+  let enum_name_full = enum_name.split('.').filter(|v| !v.is_empty()).collect::<Vec<_>>().join(".");
+  let result = descriptors.values()
+        .find_map(|fd| {
+          let package = fd.package.clone().unwrap_or_default();
+          if enum_name_full.starts_with(&package) {
+            let enum_name_short = enum_name_full.replace(&package, "");
+            let enum_name_parts = enum_name_short.split('.').filter(|v| !v.is_empty()).collect::<Vec<_>>();
+            if let Some((_name, message_name)) = enum_name_parts.split_last() {
+              if message_name.is_empty() {
+                find_enum_value_by_name_in_message(&fd.enum_type, enum_name, enum_value)
+              } else {
+                let message_name = message_name.join(".");
+                if let Ok(message_descriptor) = find_message_type_in_file_descriptor(&message_name, fd) {
+                  find_enum_value_by_name_in_message(&message_descriptor.enum_type, enum_name, enum_value)
+                } else {
+                  None
+                }
+              }
+            } else {
+              None
+            }
+          } else {
+            None
+          }
+        });
+  if result.is_some() {
+    result
   } else {
     None
   }
@@ -241,24 +252,33 @@ pub fn find_enum_by_name(
   enum_name: &str
 ) -> Option<EnumDescriptorProto> {
   trace!(">> find_enum_by_name({})", enum_name);
-  let package_names = enum_name.split('.').filter(|v| !v.is_empty()).collect::<Vec<_>>();
-  trace!("package_names={:?}", package_names);
-  if let Some((_name, package)) = package_names.split_last() {
-    let package = package.join(".");
-    let result = descriptors.file.iter()
-      .find_map(|fd| {
-        if let Some(fd_package) = &fd.package {
-          if package == fd_package.as_str() {
-            return find_enum_by_name_in_message(&fd.enum_type, enum_name)  
+  let enum_name_full = enum_name.split('.').filter(|v| !v.is_empty()).collect::<Vec<_>>().join(".");
+  let result = descriptors.file.iter()
+        .find_map(|fd| {
+          let package = fd.package.clone().unwrap_or_default();
+          if enum_name_full.starts_with(&package) {
+            let enum_name_short = enum_name_full.replace(&package, "");
+            let enum_name_parts = enum_name_short.split('.').filter(|v| !v.is_empty()).collect::<Vec<_>>();
+            if let Some((_name, message_name)) = enum_name_parts.split_last() {
+              if message_name.is_empty() {
+                return find_enum_by_name_in_message(&fd.enum_type, enum_name)
+              } else {
+                let message_name = message_name.join(".");
+                if let Ok(message_descriptor) = find_message_type_in_file_descriptor(&message_name, fd) {
+                  return find_enum_by_name_in_message(&message_descriptor.enum_type, enum_name)
+                } else {
+                  return None
+                }
+              }
+            } else {
+              return None
+            }
+          } else {
+            return None
           }
-        }
-        return None
-      });
-      if result.is_some() {
-        result
-      } else {
-        None
-      }
+        });
+  if result.is_some() {
+    result
   } else {
     None
   }
@@ -759,10 +779,25 @@ pub(crate) mod tests {
       ],
       .. FileDescriptorProto::default()
     };
+    let fds4 = FileDescriptorProto {
+      name: Some("test_enum4.proto".to_string()),
+      package: Some("routeguide.v3".to_string()),
+      message_type: vec![
+        DescriptorProto {
+          name: Some("Feature".to_string()),
+          enum_type: vec![
+            enum1.clone()
+          ],
+          .. DescriptorProto::default()
+        }
+      ],
+      .. FileDescriptorProto::default()
+    };
     let descriptors = hashmap!{
       "test_enum.proto".to_string() => &fds,
       "test_enum2.proto".to_string() => &fds2,
-      "test_enum3.proto".to_string() => &fds3
+      "test_enum3.proto".to_string() => &fds3,
+      "test_enum4.proto".to_string() => &fds4
     };
 
     let result = find_enum_value_by_name(&descriptors, ".routeguide.v2.TestEnum", "VALUE_ONE");
@@ -773,5 +808,8 @@ pub(crate) mod tests {
 
     let result3 = find_enum_value_by_name(&descriptors, ".TestEnum", "VALUE_TWO");
     expect!(result3).to(be_some().value((2, enum1.clone())));
+
+    let result4 = find_enum_value_by_name(&descriptors, ".routeguide.v3.Feature.TestEnum", "VALUE_ONE");
+    expect!(result4).to(be_some().value((1, enum1.clone())));
   }
 }
