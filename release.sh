@@ -24,9 +24,8 @@ case "$1" in
             openssl dgst -sha256 -r target/artifacts/install-plugin.sh > target/artifacts/install-plugin.sh.sha256
 
             # Build aarch64
-            rustup toolchain install 1.69
-            cargo install cross
-            rustup run 1.69 cross build --target aarch64-unknown-linux-gnu --release
+            cargo install cross --git https://github.com/cross-rs/cross
+            cross build --target aarch64-unknown-linux-gnu --release
             gzip -c target/aarch64-unknown-linux-gnu/release/pact-protobuf-plugin > target/artifacts/pact-protobuf-plugin-linux-aarch64.gz
             openssl dgst -sha256 -r target/artifacts/pact-protobuf-plugin-linux-aarch64.gz > target/artifacts/pact-protobuf-plugin-linux-aarch64.gz.sha256
             ;;
