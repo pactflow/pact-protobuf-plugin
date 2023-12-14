@@ -292,7 +292,11 @@ fn os_type(os_info: Bitness, arch: &str, os: &str) -> String {
       "s390x" => "linux-s390_64",
       _ => "unknown"
     }.to_string(),
-    "macos" => format!("osx-{}", arch),
+    "macos" => match arch {
+      "x86_64" => "osx-x86_64",
+      "aarch64" => "osx-aarch_64",
+      _ => "unknown"
+    }.to_string(),
     "windows" => format!("win{}", match os_info {
       Bitness::X32 => "32",
       Bitness::X64 => "64",
@@ -315,6 +319,7 @@ mod tests {
     expect!(os_type(Bitness::X64, "x86_64", "linux").as_str()).to(be_equal_to("linux-x86_64"));
     expect!(os_type(Bitness::X64, "aarch64", "linux").as_str()).to(be_equal_to("linux-aarch_64"));
     expect!(os_type(Bitness::X64, "x86_64", "macos").as_str()).to(be_equal_to("osx-x86_64"));
+    expect!(os_type(Bitness::X64, "aarch64", "macos").as_str()).to(be_equal_to("osx-aarch_64"));
     expect!(os_type(Bitness::X32, "", "windows").as_str()).to(be_equal_to("win32"));
     expect!(os_type(Bitness::X64, "", "windows").as_str()).to(be_equal_to("win64"));
   }
