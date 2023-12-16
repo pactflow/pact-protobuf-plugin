@@ -1,3 +1,19 @@
+# 0.3.8 - Bugfix Release
+
+* 97113ab - chore: Upgrade all dependencies (Ronald Holshausen, Sat Dec 16 19:57:28 2023 +1100)
+* af9657f - fix: correct URL for aarch64 macs. Fixes #39 (Stan, Thu Dec 14 13:07:12 2023 -0800)
+* 0212f56 - chore: Use cross from GitHub for building aarch64 target for release (Ronald Holshausen, Wed Nov 8 17:17:11 2023 +1100)
+* 12c98c5 - chore: revert Cargo lock update (Ronald Holshausen, Sat Nov 4 15:34:36 2023 +1100)
+* 96ed737 - chore: rename step in CI (Ronald Holshausen, Sat Nov 4 15:25:43 2023 +1100)
+* d678376 - bump version to 0.3.8 (Ronald Holshausen, Sat Nov 4 15:25:17 2023 +1100)
+* 71333ba - update changelog for release 0.3.7 (Ronald Holshausen, Sat Nov 4 15:24:52 2023 +1100)
+* 27af477 - chore: fix black box tests in CI (Ronald Holshausen, Sat Nov 4 15:06:53 2023 +1100)
+* 6c626dd - chore: Black box tests require the plugin to be built first (Ronald Holshausen, Sat Nov 4 13:45:59 2023 +1100)
+* 12fab8e - chore: Black box tests require the plugin to be installed (Ronald Holshausen, Sat Nov 4 13:32:43 2023 +1100)
+* b04dc47 - chore: Integration (black box) tests were not being run in CI (Ronald Holshausen, Sat Nov 4 13:19:06 2023 +1100)
+* 0a540eb - fix nested enum not resolving (zsylvia, Thu Nov 2 17:18:51 2023 -0400)
+* 8bea782 - bump version to 0.3.7 (Ronald Holshausen, Thu Sep 21 08:29:45 2023 +1000)
+
 # 0.3.7 - Bugfix Release
 
 * 27af477 - chore: fix black box tests in CI (Ronald Holshausen, Sat Nov 4 15:06:53 2023 +1100)
