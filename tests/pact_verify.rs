@@ -28,7 +28,6 @@ use reqwest::Client;
 use rocket::{Data, Request};
 use rocket::data::{ByteUnit, FromData, Outcome};
 use rocket::http::{ContentType, Status};
-use rocket::outcome::Outcome::{Failure, Success};
 use serde_json::Value;
 use test_log::test;
 use tracing::{debug, error};
@@ -79,22 +78,22 @@ impl <'r> FromData<'r> for MessageRequest {
               if let Some(contents) = json.get("request") {
                 debug!("contents = {:?}", contents);
                 match MessageContents::from_json(contents) {
-                  Ok(contents) => Success(MessageRequest { contents }),
-                  Err(err) => Failure((Status::UnprocessableEntity, anyhow!(err)))
+                  Ok(contents) => Outcome::Success(MessageRequest { contents }),
+                  Err(err) => Outcome::Error((Status::UnprocessableEntity, anyhow!(err)))
                 }
               } else {
-                Failure((Status::UnprocessableEntity, anyhow!("Missing request")))
+                Outcome::Error((Status::UnprocessableEntity, anyhow!("Missing request")))
               }
             }
-            Err(err) => Failure((Status::UnprocessableEntity, anyhow!("Failed to parse JSON: {}", err)))
+            Err(err) => Outcome::Error((Status::UnprocessableEntity, anyhow!("Failed to parse JSON: {}", err)))
           }
-          Err(err) => Failure((Status::UnprocessableEntity, anyhow!(err)))
+          Err(err) => Outcome::Error((Status::UnprocessableEntity, anyhow!(err)))
         }
       } else {
-        Failure((Status::UnprocessableEntity, anyhow!("Expected JSON, got {}", content_type)))
+        Outcome::Error((Status::UnprocessableEntity, anyhow!("Expected JSON, got {}", content_type)))
       }
     } else {
-      Failure((Status::UnprocessableEntity, anyhow!("No content type")))
+      Outcome::Error((Status::UnprocessableEntity, anyhow!("No content type")))
     }
   }
 }
