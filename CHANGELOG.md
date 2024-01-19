@@ -1,3 +1,13 @@
+# 0.3.9 - Bugfix Release
+
+* 216c13f - chore: Upgrade dependencies (Ronald Holshausen, Sat Jan 20 06:48:00 2024 +1100)
+* 08599f2 - chore: Add a test for merging between plugin config and manifest values #41 (Ronald Holshausen, Sat Jan 20 05:46:17 2024 +1100)
+* 3c51f8d - Merge pull request #42 from rkrishnan2012/main (Ronald Holshausen, Tue Jan 23 15:35:02 2024 +1100)
+* 884b36c - fix: Repeated enum fields must be encoded as packed varints #27 (Ronald Holshausen, Sat Jan 20 04:33:05 2024 +1100)
+* 6f9844c - Fix merging between plugin config and manifest values. (Rohit Krishnan, Fri Jan 19 10:32:27 2024 -0500)
+* 9caef2a - chore: Add example test with a repeated enum field #27 (Ronald Holshausen, Sat Jan 20 02:20:10 2024 +1100)
+* b5881d7 - bump version to 0.3.9 (Ronald Holshausen, Sat Dec 16 22:03:53 2023 +1100)
+
 # 0.3.8 - Bugfix Release
 
 * 97113ab - chore: Upgrade all dependencies (Ronald Holshausen, Sat Dec 16 19:57:28 2023 +1100)
