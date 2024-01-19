@@ -1045,10 +1045,11 @@ mod tests {
   use pact_plugin_driver::proto::catalogue_entry::EntryType;
   use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
   use pact_plugin_driver::proto::start_mock_server_response;
+  use prost_types::value::Kind;
   use serde_json::{json, Map, Value};
   use tonic::Request;
-  use crate::metadata::MetadataMatchResult;
 
+  use crate::metadata::MetadataMatchResult;
   use crate::server::{merge_value, ProtobufPactPlugin};
 
   #[tokio::test]
@@ -1183,6 +1184,29 @@ mod tests {
       "/path1".to_string(),
       "200".to_string()
     ]));
+  }
+
+  #[test]
+  fn ProtobufPactPlugin__setup_plugin_config__overwrites_manifest_config_from_test_config() {
+    let manifest = PactPluginManifest {
+      plugin_config: hashmap!{
+        "protocVersion".to_string() => json!("1")
+      },
+      ..PactPluginManifest::default()
+    };
+    let plugin = ProtobufPactPlugin { manifest };
+    let config = btreemap!{
+      "pact:protobuf-config".to_string() => prost_types::Value { kind: Some(Kind::StructValue(
+        prost_types::Struct {
+          fields: btreemap!{
+            "protocVersion".to_string() => prost_types::Value { kind: Some(Kind::StringValue("2".to_string())) }
+          }
+        }))
+      }
+    };
+    expect!(plugin.setup_plugin_config(&config).unwrap()).to(be_equal_to(hashmap!{
+      "protocVersion".to_string() => json!("2")
+    }));
   }
 
   #[test_log::test]
