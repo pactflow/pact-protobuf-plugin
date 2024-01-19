@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package pactissue;
+
+option go_package = "github.com/stan-is-hate/pact-proto-issue-demo/;pactissue";
+
+
+service BrokenSampleService {
+  rpc GetSample (BrokenSampleRequest) returns (BrokenSampleResponse) {};
+}
+
+
+message BrokenSampleRequest {
+  enum Type {
+    UNKNOWN = 0;
+    TYPE1 = 1;
+    TYPE2 = 2;
+  }
+  repeated Type type = 1;
+}
+
+message BrokenSampleResponse {
+  bool ok = 1;
+}
+
+service WorkingSampleService {
+  rpc GetSample (WorkingSampleRequest) returns (WorkingSampleResponse) {};
+}
+
+message WorkingSampleRequest {
+  enum Type {
+    UNKNOWN = 0;
+    TYPE1 = 1;
+    TYPE2 = 2;
+  }
+  Type type = 1;
+}
+
+message WorkingSampleResponse {
+  bool ok = 1;
+}
