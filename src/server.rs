@@ -369,7 +369,7 @@ impl ProtobufPactPlugin {
               let val = proto_value_to_json(v);
               match plugin_config.entry(k.clone()) {
                 Entry::Occupied(mut e) => {
-                  e.insert(merge_value(&val, e.get())?);
+                  e.insert(merge_value(e.get(), &val)?);
                 },
                 Entry::Vacant(e) => {
                   e.insert(val);
