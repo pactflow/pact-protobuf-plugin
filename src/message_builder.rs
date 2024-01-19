@@ -13,7 +13,7 @@ use prost_types::{DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, Fi
 use prost_types::field_descriptor_proto::Type;
 use tracing::{trace, warn};
 
-use crate::utils::{last_name, should_be_packed_type};
+use crate::utils::{last_name, should_be_packed_type, display_bytes};
 
 /// Enum to set what type of field the value is for
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -133,9 +133,9 @@ impl MessageBuilder {
       }
     }
 
-    trace!("encode_message: {} bytes", buffer.len());
-
-    Ok(buffer.freeze())
+    let bytes = buffer.freeze();
+    trace!("encode_message: {} bytes {}", bytes.len(), display_bytes(&bytes));
+    Ok(bytes)
   }
 
   fn encode_single_field(&self, mut buffer: &mut BytesMut, field_data: &FieldValueInner, value: Option<MessageFieldValue>) -> anyhow::Result<()> {
@@ -329,6 +329,7 @@ impl MessageBuilder {
     buffer: &mut BytesMut,
     field_value: &FieldValueInner
   ) -> anyhow::Result<()> {
+    trace!(">> encode_packed_field({:?})", field_value);
     if let Some(tag) = field_value.descriptor.number {
       match field_value.proto_type {
         Type::Double => {
@@ -363,6 +364,16 @@ impl MessageBuilder {
           let values = field_value.values.iter()
               .map(|v| v.rtype.as_i32().unwrap_or_default())
               .collect::<Vec<i32>>();
+          prost::encoding::int32::encode_packed(tag as u32, &values, buffer);
+          Ok(())
+        }
+        Type::Enum => {
+          let values = field_value.values.iter()
+            .map(|v| match &v.rtype {
+              RType::Enum(i, _) => *i,
+              _ => v.rtype.as_i32().unwrap_or_default()
+            })
+            .collect::<Vec<i32>>();
           prost::encoding::int32::encode_packed(tag as u32, &values, buffer);
           Ok(())
         }
@@ -708,7 +719,7 @@ impl MessageFieldValue {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
   use base64::Engine;
   use base64::engine::general_purpose::STANDARD as BASE64;
   use bytes::{Bytes, BytesMut};
@@ -743,6 +754,7 @@ mod tests {
   use crate::message_builder::MessageFieldValueType::Repeated;
   use crate::message_decoder::{decode_message, ProtobufFieldData};
   use crate::protobuf::tests::DESCRIPTOR_WITH_ENUM_BYTES;
+  use crate::utils::find_enum_by_name_in_message;
 
   const ENCODED_MESSAGE: &str = "CuIFChxnb29nbGUvcHJvdG9idWYvc3RydWN0LnByb3RvEg9nb29nbGUucHJv\
   dG9idWYimAEKBlN0cnVjdBI7CgZmaWVsZHMYASADKAsyIy5nb29nbGUucHJvdG9idWYuU3RydWN0LkZpZWxkc0VudHJ5\
@@ -1728,6 +1740,51 @@ mod tests {
     builder.add_repeated_field_value(values_field_descriptor, "value", message_field_value2);
 
     let expected = vec![10, 8, 0, 0, 64, 65, 0, 0, 16, 65];
+    let result = builder.encode_message().unwrap();
+    expect!(result.to_vec()).to(be_equal_to(expected));
+  }
+
+  pub(crate) const REPEATED_ENUM_DESCRIPTORS: &str = "Cv4EChNyZXBlYXRlZF9lbnVtLnByb3RvEglwYWN0aXNzdWUieQoTQn\
+  Jva2VuU2FtcGxlUmVxdWVzdBI3CgR0eXBlGAEgAygOMiMucGFjdGlzc3VlLkJyb2tlblNhbXBsZVJlcXVlc3QuVHlwZVIEd\
+  HlwZSIpCgRUeXBlEgsKB1VOS05PV04QABIJCgVUWVBFMRABEgkKBVRZUEUyEAIiJgoUQnJva2VuU2FtcGxlUmVzcG9uc2US\
+  DgoCb2sYASABKAhSAm9rInsKFFdvcmtpbmdTYW1wbGVSZXF1ZXN0EjgKBHR5cGUYASABKA4yJC5wYWN0aXNzdWUuV29ya2l\
+  uZ1NhbXBsZVJlcXVlc3QuVHlwZVIEdHlwZSIpCgRUeXBlEgsKB1VOS05PV04QABIJCgVUWVBFMRABEgkKBVRZUEUyEAIiJw\
+  oVV29ya2luZ1NhbXBsZVJlc3BvbnNlEg4KAm9rGAEgASgIUgJvazJlChNCcm9rZW5TYW1wbGVTZXJ2aWNlEk4KCUdldFNhb\
+  XBsZRIeLnBhY3Rpc3N1ZS5Ccm9rZW5TYW1wbGVSZXF1ZXN0Gh8ucGFjdGlzc3VlLkJyb2tlblNhbXBsZVJlc3BvbnNlIgAya\
+  AoUV29ya2luZ1NhbXBsZVNlcnZpY2USUAoJR2V0U2FtcGxlEh8ucGFjdGlzc3VlLldvcmtpbmdTYW1wbGVSZXF1ZXN0GiAuc\
+  GFjdGlzc3VlLldvcmtpbmdTYW1wbGVSZXNwb25zZSIAQjpaOGdpdGh1Yi5jb20vc3Rhbi1pcy1oYXRlL3BhY3QtcHJvdG8ta\
+  XNzdWUtZGVtby87cGFjdGlzc3VlYgZwcm90bzM=";
+
+  #[test_log::test]
+  fn repeated_enum_fields_must_be_packed() {
+    let file_descriptor = get_file_descriptor("repeated_enum.proto", REPEATED_ENUM_DESCRIPTORS).unwrap();
+    let request_descriptor = file_descriptor.message_type.iter()
+      .find(|desc| desc.name.clone().unwrap_or_default() == "BrokenSampleRequest")
+      .unwrap();
+    let values_field_descriptor = request_descriptor.field.iter()
+      .find(|desc| desc.name.clone().unwrap_or_default() == "type")
+      .unwrap();
+    let mut builder = MessageBuilder::new(request_descriptor, "BrokenSampleRequest", &file_descriptor);
+    let enum_proto = find_enum_by_name_in_message(&request_descriptor.enum_type, "Type").unwrap();
+    let message_field_value = MessageFieldValue {
+      name: "type".to_string(),
+      raw_value: Some("Type2".to_string()),
+      rtype: RType::Enum(2, enum_proto.clone())
+    };
+    let message_field_value2 = MessageFieldValue {
+      name: "type".to_string(),
+      raw_value: Some("Type1".to_string()),
+      rtype: RType::Enum(1, enum_proto.clone())
+    };
+    builder.add_repeated_field_value(values_field_descriptor, "type", message_field_value);
+    builder.add_repeated_field_value(values_field_descriptor, "type", message_field_value2);
+
+    let expected = vec![
+      10, // Field 1, VARINT
+      2,  // 2 bytes
+      2,  // Enum 2 (Type2)
+      1   // Enum 1 (Type1)
+    ];
     let result = builder.encode_message().unwrap();
     expect!(result.to_vec()).to(be_equal_to(expected));
   }

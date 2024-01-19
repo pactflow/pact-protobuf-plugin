@@ -461,7 +461,7 @@ pub(crate) fn find_service_descriptor<'a>(
 pub fn should_be_packed_type(field_type: Type) -> bool {
   matches!(field_type, Type::Double | Type::Float | Type::Int64 | Type::Uint64 | Type::Int32 | Type::Fixed64 |
      Type::Fixed32 | Type::Uint32 | Type::Sfixed32 | Type::Sfixed64 | Type::Sint32 |
-     Type::Sint64)
+     Type::Sint64 | Type::Enum)
 }
 
 /// Tries to convert a Protobuf Value to a Map. Returns an error if the incoming value is not a

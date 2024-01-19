@@ -281,11 +281,7 @@ pub fn decode_message<B>(
               Type::Bool => vec![ (ProtobufFieldData::Boolean(varint > 0), wire_type) ],
               Type::Uint32 => vec![ (ProtobufFieldData::UInteger32(varint as u32), wire_type) ],
               Type::Enum => {
-                let enum_type_name = field_descriptor.type_name.clone().unwrap_or_default();
-                let enum_proto = find_enum_by_name_in_message(&descriptor.enum_type, enum_type_name.as_str())
-                  .or_else(|| find_enum_by_name(descriptors, enum_type_name.as_str()))
-                  .ok_or_else(|| anyhow!("Did not find the enum {} for the field {} in the Protobuf descriptor", enum_type_name, field_num))?;
-                vec![ (ProtobufFieldData::Enum(varint as i32, enum_proto.clone()), wire_type) ]
+                vec![ (decode_enum(descriptor, descriptors, &field_descriptor, varint)?, wire_type) ]
               },
               Type::Sint32 => {
                 let value = varint as u32;
@@ -333,7 +329,7 @@ pub fn decode_message<B>(
               Type::Bytes => vec![ (ProtobufFieldData::Bytes(data_buffer.to_vec()), wire_type) ],
               _ => if should_be_packed_type(t) && is_repeated_field(&field_descriptor) {
                 debug!("Reading length delimited field as a packed repeated field");
-                decode_packed_field(field_descriptor, &mut data_buffer)?
+                decode_packed_field(field_descriptor, descriptor, descriptors, &mut data_buffer)?
               } else {
                 error!("Was expecting {:?} but received an unknown length-delimited type", t);
                 let mut buf = BytesMut::with_capacity((data_length + 8) as usize);
@@ -397,7 +393,25 @@ pub fn decode_message<B>(
   Ok(fields.iter().sorted_by(|a, b| Ord::cmp(&a.field_num, &b.field_num)).cloned().collect())
 }
 
-fn decode_packed_field(field: FieldDescriptorProto, data: &mut Bytes) -> anyhow::Result<Vec<(ProtobufFieldData, WireType)>> {
+fn decode_enum(
+  descriptor: &DescriptorProto,
+  descriptors: &FileDescriptorSet,
+  field_descriptor: &FieldDescriptorProto,
+  varint: u64
+) -> anyhow::Result<ProtobufFieldData> {
+  let enum_type_name = field_descriptor.type_name.clone().unwrap_or_default();
+  let enum_proto = find_enum_by_name_in_message(&descriptor.enum_type, enum_type_name.as_str())
+    .or_else(|| find_enum_by_name(descriptors, enum_type_name.as_str()))
+    .ok_or_else(|| anyhow!("Did not find the enum {} for the field in the Protobuf descriptor", enum_type_name))?;
+  Ok(ProtobufFieldData::Enum(varint as i32, enum_proto.clone()))
+}
+
+fn decode_packed_field(
+  field: FieldDescriptorProto,
+  descriptor: &DescriptorProto,
+  descriptors: &FileDescriptorSet,
+  data: &mut Bytes
+) -> anyhow::Result<Vec<(ProtobufFieldData, WireType)>> {
   let mut values = vec![];
   let t: Type = field.r#type();
   match t {
@@ -427,6 +441,13 @@ fn decode_packed_field(field: FieldDescriptorProto, data: &mut Bytes) -> anyhow:
       while data.remaining() > 0 {
         let varint = decode_varint(data)?;
         values.push((ProtobufFieldData::Integer32(varint as i32), WireType::Varint));
+      }
+    }
+    Type::Enum => {
+      while data.remaining() > 0 {
+        let varint = decode_varint(data)?;
+        let enum_value = decode_enum(descriptor, descriptors, &field, varint)?;
+        values.push((enum_value, WireType::Varint));
       }
     }
     Type::Fixed64 => {
@@ -492,6 +513,8 @@ fn find_field_descriptor(field_num: i32, descriptor: &DescriptorProto) -> anyhow
 
 #[cfg(test)]
 mod tests {
+  use base64::Engine;
+  use base64::engine::general_purpose::STANDARD as BASE64;
   use bytes::{BufMut, Bytes, BytesMut};
   use expectest::prelude::*;
   use pact_plugin_driver::proto::InitPluginRequest;
@@ -514,6 +537,7 @@ mod tests {
   };
   use crate::message_decoder::{decode_message, ProtobufFieldData};
   use crate::protobuf::tests::DESCRIPTOR_WITH_ENUM_BYTES;
+  use crate::message_builder::tests::REPEATED_ENUM_DESCRIPTORS;
 
   const FIELD_1_MESSAGE: [u8; 2] = [8, 1];
   const FIELD_2_MESSAGE: [u8; 2] = [16, 55];
@@ -1206,5 +1230,33 @@ mod tests {
     expect!(field_result.field_num).to(be_equal_to(5));
     expect!(field_result.wire_type).to(be_equal_to(WireType::Varint));
     expect!(&field_result.data).to(be_equal_to(&ProtobufFieldData::Enum(1, enum_proto.clone())));
+  }
+
+  #[test_log::test]
+  fn decode_message_with_repeated_enum_field() {
+    let bytes = BASE64.decode(REPEATED_ENUM_DESCRIPTORS).unwrap();
+    let buffer = Bytes::from(bytes);
+    let fds: FileDescriptorSet = FileDescriptorSet::decode(buffer).unwrap();
+    let main_descriptor = fds.file.iter()
+      .find(|fd| fd.name.clone().unwrap_or_default() == "repeated_enum.proto")
+      .unwrap();
+    let message_descriptor = main_descriptor.message_type.iter()
+      .find(|md| md.name.clone().unwrap_or_default() == "BrokenSampleRequest").unwrap();
+    let enum_proto = message_descriptor.enum_type.first().unwrap();
+
+    let message_bytes: &[u8] = &[10, 3, 2, 0, 1];
+    let mut buffer = Bytes::from(message_bytes);
+    let result = decode_message(&mut buffer, &message_descriptor, &fds).unwrap();
+    expect!(result.len()).to(be_equal_to(3));
+
+    expect!(result[0].field_num).to(be_equal_to(1));
+    expect!(result[0].wire_type).to(be_equal_to(WireType::Varint));
+    expect!(&result[0].data).to(be_equal_to(&ProtobufFieldData::Enum(2, enum_proto.clone())));
+    expect!(result[1].field_num).to(be_equal_to(1));
+    expect!(result[1].wire_type).to(be_equal_to(WireType::Varint));
+    expect!(&result[1].data).to(be_equal_to(&ProtobufFieldData::Enum(0, enum_proto.clone())));
+    expect!(result[2].field_num).to(be_equal_to(1));
+    expect!(result[2].wire_type).to(be_equal_to(WireType::Varint));
+    expect!(&result[2].data).to(be_equal_to(&ProtobufFieldData::Enum(1, enum_proto.clone())));
   }
 }
