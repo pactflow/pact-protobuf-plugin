@@ -1,6 +1,6 @@
 //! Decoder for encoded Protobuf messages using the descriptors
 
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::mem;
 use std::str::from_utf8;
 
@@ -46,6 +46,103 @@ impl ProtobufField {
       wire_type: self.wire_type,
       data: self.data.default_field_value(descriptor)
     }
+  }
+
+  /// Configure a field with the default value
+  pub fn default_field(
+    field_descriptor: &FieldDescriptorProto,
+    descriptor: &DescriptorProto,
+    fds: &FileDescriptorSet
+  ) -> Option<ProtobufField> {
+    default_field_data(field_descriptor, descriptor, fds).map(|data|
+      ProtobufField {
+        field_num: field_descriptor.number.unwrap_or_default() as u32,
+        field_name: field_descriptor.name.clone().unwrap_or_default(),
+        wire_type: wire_type_for_field(field_descriptor),
+        data
+      }
+    )
+  }
+}
+
+fn default_field_data(
+  field_descriptor: &FieldDescriptorProto,
+  descriptor: &DescriptorProto,
+  fds: &FileDescriptorSet
+) -> Option<ProtobufFieldData> {
+  match &field_descriptor.default_value {
+    Some(s) => {
+      // For numeric types, contains the original text representation of the value.
+      // For booleans, "true" or "false".
+      // For strings, contains the default text contents (not escaped in any way).
+      // For bytes, contains the C escaped value.  All bytes >= 128 are escaped.
+      match field_descriptor.r#type() {
+        Type::Double => Some(ProtobufFieldData::Double(s.parse().unwrap_or_default())),
+        Type::Float => Some(ProtobufFieldData::Float(s.parse().unwrap_or_default())),
+        Type::Int64 => Some(ProtobufFieldData::Integer64(s.parse().unwrap_or_default())),
+        Type::Uint64 => Some(ProtobufFieldData::UInteger64(s.parse().unwrap_or_default())),
+        Type::Int32 => Some(ProtobufFieldData::Integer32(s.parse().unwrap_or_default())),
+        Type::Fixed64 => Some(ProtobufFieldData::Integer64(s.parse().unwrap_or_default())),
+        Type::Fixed32 => Some(ProtobufFieldData::Integer32(s.parse().unwrap_or_default())),
+        Type::Bool => Some(ProtobufFieldData::Boolean(s == "true")),
+        Type::String => Some(ProtobufFieldData::String(s.clone())),
+        Type::Bytes => Some(ProtobufFieldData::Bytes(s.as_bytes().to_vec())),
+        Type::Uint32 => Some(ProtobufFieldData::UInteger32(s.parse().unwrap_or_default())),
+        Type::Enum => {
+          let enum_type_name = field_descriptor.type_name.clone().unwrap_or_default();
+          find_enum_by_name_in_message(&descriptor.enum_type, enum_type_name.as_str())
+            .or_else(|| find_enum_by_name(fds, enum_type_name.as_str()))
+            .map(|enum_proto| ProtobufFieldData::Enum(s.parse().unwrap_or_default(), enum_proto.clone()))
+        },
+        Type::Sfixed32 => Some(ProtobufFieldData::Integer32(s.parse().unwrap_or_default())),
+        Type::Sfixed64 => Some(ProtobufFieldData::Integer64(s.parse().unwrap_or_default())),
+        Type::Sint32 => Some(ProtobufFieldData::Integer32(s.parse().unwrap_or_default())),
+        Type::Sint64 => Some(ProtobufFieldData::Integer64(s.parse().unwrap_or_default())),
+        _ => None
+      }
+    }
+    None => {
+      // For strings, the default value is the empty string.
+      // For bytes, the default value is empty bytes.
+      // For bools, the default value is false.
+      // For numeric types, the default value is zero.
+      // For enums, the default value is the first defined enum value, which must be 0.
+      // For message fields, the field is not set. Its exact value is language-dependent.
+      match field_descriptor.r#type() {
+        Type::Double => Some(ProtobufFieldData::Double(0.0)),
+        Type::Float => Some(ProtobufFieldData::Float(0.0)),
+        Type::Int64 => Some(ProtobufFieldData::Integer64(0)),
+        Type::Uint64 => Some(ProtobufFieldData::UInteger64(0)),
+        Type::Int32 => Some(ProtobufFieldData::Integer32(0)),
+        Type::Fixed64 => Some(ProtobufFieldData::Integer64(0)),
+        Type::Fixed32 => Some(ProtobufFieldData::Integer32(0)),
+        Type::Bool => Some(ProtobufFieldData::Boolean(false)),
+        Type::String => Some(ProtobufFieldData::String(String::default())),
+        Type::Bytes => Some(ProtobufFieldData::Bytes(vec![])),
+        Type::Uint32 => Some(ProtobufFieldData::UInteger32(0)),
+        Type::Enum => {
+          let enum_type_name = field_descriptor.type_name.clone().unwrap_or_default();
+          find_enum_by_name_in_message(&descriptor.enum_type, enum_type_name.as_str())
+            .or_else(|| find_enum_by_name(fds, enum_type_name.as_str()))
+            .map(|enum_proto| ProtobufFieldData::Enum(0, enum_proto.clone()))
+        },
+        Type::Sfixed32 => Some(ProtobufFieldData::Integer32(0)),
+        Type::Sfixed64 => Some(ProtobufFieldData::Integer64(0)),
+        Type::Sint32 => Some(ProtobufFieldData::Integer32(0)),
+        Type::Sint64 => Some(ProtobufFieldData::Integer64(0)),
+        _ => None
+      }
+    }
+  }
+}
+
+fn wire_type_for_field(descriptor: &FieldDescriptorProto) -> WireType {
+  match descriptor.r#type() {
+    Type::Double | Type::Fixed64 | Type::Sfixed64 => WireType::SixtyFourBit,
+    Type::Float | Type::Fixed32 | Type::Sfixed32 => WireType::ThirtyTwoBit,
+    Type::Int64 | Type::Uint64 | Type::Int32 | Type::Bool | Type::Uint32 | Type::Enum |
+    Type::Sint32 | Type::Sint64 => WireType::Varint,
+    _ => WireType::LengthDelimited
   }
 }
 
@@ -261,6 +358,7 @@ pub fn decode_message<B>(
   descriptors: &FileDescriptorSet
 ) -> anyhow::Result<Vec<ProtobufField>>
   where B: Buf {
+  trace!("Incoming buffer has {} bytes", buffer.remaining());
   let mut fields = vec![];
 
   while buffer.has_remaining() {

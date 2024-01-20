@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package pactissue;
+
+enum TestDefault {
+  A = 0;
+  B = 1;
+  C = 2;
+}
+
+message MessageIn {
+  bool in = 1;
+  TestDefault e = 2;
+  string s = 3;
+}
+
+message MessageOut {
+  TestDefault e = 1;
+  bool out = 2;
+}
+
+service Test {
+  rpc GetTest(MessageIn) returns (MessageOut) {}
+}
