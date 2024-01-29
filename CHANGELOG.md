@@ -1,3 +1,10 @@
+# 0.3.10 - Maintenance Release
+
+* 2aa8016 - chore: Update flaky mock server test (Ronald Holshausen, Mon Jan 29 15:50:16 2024 +1100)
+* ddd2449 - chore: Upgrade prost and tonic to latest versions (Ronald Holshausen, Sun Jan 21 07:03:38 2024 +1100)
+* 661a154 - fix: Missing fields may have been dropped from the payload if they had a default value (Ronald Holshausen, Sun Jan 21 06:52:07 2024 +1100)
+* 5b665a6 - bump version to 0.3.10 (Ronald Holshausen, Sat Jan 20 07:04:33 2024 +1100)
+
 # 0.3.9 - Bugfix Release
 
 * 216c13f - chore: Upgrade dependencies (Ronald Holshausen, Sat Jan 20 06:48:00 2024 +1100)
