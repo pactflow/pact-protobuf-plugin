@@ -63,6 +63,11 @@ impl ProtobufField {
       }
     )
   }
+
+  /// If the field contains the default value for its type
+  pub fn is_default_value(&self) -> bool {
+    self.data.is_default_field_value()
+  }
 }
 
 fn default_field_data(
@@ -263,6 +268,30 @@ impl ProtobufFieldData {
           ProtobufFieldData::Unknown(_) => ProtobufFieldData::Unknown(Default::default())
         }
       }
+    }
+  }
+
+  /// If the value is the default for the type
+  pub fn is_default_field_value(&self) -> bool {
+    // For strings, the default value is the empty string.
+    // For bytes, the default value is empty bytes.
+    // For bools, the default value is false.
+    // For numeric types, the default value is zero.
+    // For enums, the default value is the first defined enum value, which must be 0.
+    // For message fields, the field is not set. Its exact value is language-dependent.
+    match self {
+      ProtobufFieldData::String(v) => v.is_empty(),
+      ProtobufFieldData::Boolean(v) => !*v,
+      ProtobufFieldData::UInteger32(v) => *v == 0,
+      ProtobufFieldData::Integer32(v) => *v == 0,
+      ProtobufFieldData::UInteger64(v) => *v == 0,
+      ProtobufFieldData::Integer64(v) => *v == 0,
+      ProtobufFieldData::Float(v) => *v == 0.0,
+      ProtobufFieldData::Double(v) => *v == 0.0,
+      ProtobufFieldData::Bytes(v) => v.is_empty(),
+      ProtobufFieldData::Enum(v, _) => *v == 0,
+      ProtobufFieldData::Message(v, _) => v.is_empty(),
+      ProtobufFieldData::Unknown(v) => v.is_empty()
     }
   }
 

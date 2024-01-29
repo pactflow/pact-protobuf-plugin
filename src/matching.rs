@@ -221,14 +221,16 @@ pub fn compare_message(
       }
     } else if !actual.is_empty() && matching_context.config() == DiffConfig::NoUnexpectedKeys {
       trace!(field_name = field_name.as_str(), field_no, "actual field list is not empty");
-      results.insert(field_path.to_string(), vec![
-        BodyMismatch {
-          path: field_path.to_string(),
-          expected: None,
-          actual: actual.first().map(|field_data| Bytes::from(field_data.data.as_bytes())),
-          mismatch: format!("Expected field '{}' to be missing, but received a value for it", field_name)
-        }
-      ]);
+      if !actual[0].is_default_value() {
+        results.insert(field_path.to_string(), vec![
+          BodyMismatch {
+            path: field_path.to_string(),
+            expected: None,
+            actual: actual.first().map(|field_data| Bytes::from(field_data.data.as_bytes())),
+            mismatch: format!("Expected field '{}' to be missing, but received a value for it", field_name)
+          }
+        ]);
+      }
     }
   }
 
@@ -1164,5 +1166,99 @@ mod tests {
       &fds
     ).unwrap();
     expect!(result).to(be_equal_to(BodyMatchResult::Ok));
+  }
+
+  #[test_log::test]
+  fn compare_should_ignore_additional_fields_with_default_values() {
+    let descriptors: &[u8] = &[10, 165, 2, 10, 19, 100, 101, 102, 97, 117, 108, 116, 95, 118, 97,
+      108, 117, 101, 46, 112, 114, 111, 116, 111, 18, 9, 112, 97, 99, 116, 105, 115, 115, 117, 101,
+      34, 79, 10, 9, 77, 101, 115, 115, 97, 103, 101, 73, 110, 18, 14, 10, 2, 105, 110, 24, 1, 32,
+      1, 40, 8, 82, 2, 105, 110, 18, 36, 10, 1, 101, 24, 2, 32, 1, 40, 14, 50, 22, 46, 112, 97, 99,
+      116, 105, 115, 115, 117, 101, 46, 84, 101, 115, 116, 68, 101, 102, 97, 117, 108, 116, 82, 1,
+      101, 18, 12, 10, 1, 115, 24, 3, 32, 1, 40, 9, 82, 1, 115, 34, 68, 10, 10, 77, 101, 115, 115,
+      97, 103, 101, 79, 117, 116, 18, 36, 10, 1, 101, 24, 1, 32, 1, 40, 14, 50, 22, 46, 112, 97,
+      99, 116, 105, 115, 115, 117, 101, 46, 84, 101, 115, 116, 68, 101, 102, 97, 117, 108, 116, 82,
+      1, 101, 18, 16, 10, 3, 111, 117, 116, 24, 2, 32, 1, 40, 8, 82, 3, 111, 117, 116, 42, 34, 10,
+      11, 84, 101, 115, 116, 68, 101, 102, 97, 117, 108, 116, 18, 5, 10, 1, 65, 16, 0, 18, 5, 10,
+      1, 66, 16, 1, 18, 5, 10, 1, 67, 16, 2, 50, 64, 10, 4, 84, 101, 115, 116, 18, 56, 10, 7, 71,
+      101, 116, 84, 101, 115, 116, 18, 20, 46, 112, 97, 99, 116, 105, 115, 115, 117, 101, 46, 77,
+      101, 115, 115, 97, 103, 101, 73, 110, 26, 21, 46, 112, 97, 99, 116, 105, 115, 115, 117, 101,
+      46, 77, 101, 115, 115, 97, 103, 101, 79, 117, 116, 34, 0, 98, 6, 112, 114, 111, 116, 111, 51];
+    let fds = FileDescriptorSet::decode(descriptors).unwrap();
+
+    let (message_descriptor, _) = find_message_type_by_name("MessageIn", &fds).unwrap();
+    let enum_descriptor= find_enum_by_name(&fds, "pactissue.TestDefault").unwrap();
+
+    let matching_rules = matchingrules! {
+      "body" => {
+        "$.in" => [ MatchingRule::Type ],
+        "$.e" => [ MatchingRule::Type ]
+      }
+    };
+    let context = CoreMatchingContext::new(DiffConfig::NoUnexpectedKeys,
+      &matching_rules.rules_for_category("body").unwrap(), &hashmap!{});
+    let expected = vec![
+      ProtobufField {
+        field_num: 1,
+        field_name: "in".to_string(),
+        wire_type: WireType::Varint,
+        data: ProtobufFieldData::Boolean(false)
+      },
+      ProtobufField {
+        field_num: 2,
+        field_name: "e".to_string(),
+        wire_type: WireType::Varint,
+        data: ProtobufFieldData::Enum(0, enum_descriptor)
+      }
+    ];
+    let expected_bytes = Bytes::from_static(&[8, 0, 16, 0, 26, 0]);
+
+    let actual = &[
+      ProtobufField {
+        field_num: 1,
+        field_name: "in".to_string(),
+        wire_type: WireType::Varint,
+        data: ProtobufFieldData::Boolean(true)
+      },
+      ProtobufField {
+        field_num: 3,
+        field_name: "s".to_string(),
+        wire_type: WireType::LengthDelimited,
+        data: ProtobufFieldData::String("".to_string())
+      }
+    ];
+    let result = compare(
+      &message_descriptor,
+      &expected,
+      actual,
+      &context,
+      &expected_bytes,
+      &fds
+    ).unwrap();
+    expect!(result).to(be_equal_to(BodyMatchResult::Ok));
+
+    let actual = &[
+      ProtobufField {
+        field_num: 1,
+        field_name: "in".to_string(),
+        wire_type: WireType::Varint,
+        data: ProtobufFieldData::Boolean(true)
+      },
+      ProtobufField {
+        field_num: 3,
+        field_name: "s".to_string(),
+        wire_type: WireType::LengthDelimited,
+        data: ProtobufFieldData::String("not empty".to_string())
+      }
+    ];
+    let result = compare(
+      &message_descriptor,
+      &expected,
+      actual,
+      &context,
+      &expected_bytes,
+      &fds
+    ).unwrap();
+    expect!(result).to_not(be_equal_to(BodyMatchResult::Ok));
   }
 }
