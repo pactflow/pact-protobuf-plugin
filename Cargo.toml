@@ -1,6 +1,6 @@
 [package]
 name = "pact-protobuf-plugin"
-version = "0.3.11"
+version = "0.3.12"
 edition = "2021"
 authors = ["Ronald Holshausen <ronald.holshausen@gmail.com>"]
 description = "Pact plugin for Protobufs and gRPC"
