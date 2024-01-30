@@ -1,3 +1,8 @@
+# 0.3.11 - Bugfix Release
+
+* 4db4328 - fix: when checking for unexpected fields, ignore fields with default values (Ronald Holshausen, Tue Jan 30 10:15:18 2024 +1100)
+* b32bdb6 - bump version to 0.3.11 (Ronald Holshausen, Mon Jan 29 16:43:23 2024 +1100)
+
 # 0.3.10 - Maintenance Release
 
 * 2aa8016 - chore: Update flaky mock server test (Ronald Holshausen, Mon Jan 29 15:50:16 2024 +1100)
