@@ -68,3 +68,26 @@ jobs:
           RUST_LOG: debug
           RUST_BACKTRACE: 1
           PACTFLOW_TOKEN: ${{ secrets.PACTFLOW_TOKEN }}
+
+  integrated-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build plugin
+        run: cargo build
+      - name: Install plugin
+        run: |
+          mkdir -p ~/.pact/plugins/pact-protobuf-plugin
+          cp pact-plugin.json target/debug/pact-protobuf-plugin ~/.pact/plugins/pact-protobuf-plugin/
+      - name: Run integrated test examples
+        run: |
+          pushd integrated_tests/default_values && cargo test && popd
+          pushd integrated_tests/matching_maps && cargo test && popd
+          pushd integrated_tests/repeated_enums && cargo test && popd
+        env:
+          RUST_LOG: debug
+          RUST_BACKTRACE: 1
