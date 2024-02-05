@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package pactissue;
+
+service ExampleService {
+  rpc GetSample (ExampleRequest) returns (ExampleResponse) {};
+}
+
+message ExampleRequest {
+  map<string, string> labels = 1;
+  bool ok = 2;
+}
+
+message ExampleResponse {
+  bool ok = 1;
+}

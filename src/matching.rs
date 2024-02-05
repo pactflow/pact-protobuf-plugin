@@ -18,7 +18,7 @@ use pact_models::path_exp::DocPath;
 use pact_models::prelude::MatchingRuleCategory;
 use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet};
 use prost_types::field_descriptor_proto::Type;
-use tracing::{debug, trace, warn};
+use tracing::{debug, instrument, trace, warn};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
 use crate::utils::{display_bytes, enum_name, field_data_to_json, find_message_field_by_name, find_message_type_by_name, find_service_descriptor, is_map_field, is_repeated_field, last_name};
@@ -530,6 +530,7 @@ fn compare_repeated_field(
 }
 
 /// Compare a map field
+#[instrument(ret, skip_all, fields(%path))]
 fn compare_map_field(
   path: &DocPath,
   descriptor: &FieldDescriptorProto,
@@ -542,55 +543,55 @@ fn compare_map_field(
 
   let mut result = vec![];
 
-  if expected_fields.is_empty() && !actual_fields.is_empty() && matching_context.config() == DiffConfig::NoUnexpectedKeys {
-    result.push(Mismatch::BodyMismatch {
-      path: path.to_string(),
-      expected: None,
-      actual: None,
-      mismatch: format!("Expected repeated field '{}' to be empty but received {} values",
-        descriptor.name.clone().unwrap_or_else(|| descriptor.number.unwrap_or_default().to_string()),
-        actual_fields.len()
-      )
-    });
-  } else {
-    let expected_map = expected_fields.iter()
-      .filter_map(|f| {
-        match &f.data {
-          ProtobufFieldData::Message(d, descriptor) => decode_message_map_entry(descriptor, d, descriptors).ok(),
-          _ => None
-        }
-      })
-      .collect::<BTreeMap<String, MapEntry>>();
-    let actual_map = actual_fields.iter()
-      .filter_map(|f| {
-        match &f.data {
-          ProtobufFieldData::Message(d, descriptor) => decode_message_map_entry(descriptor, d, descriptors).ok(),
-          _ => None
-        }
-      })
-      .collect::<BTreeMap<String, MapEntry>>();
-
-    if matching_context.matcher_is_defined(path) {
-      debug!("compare_map_field: matcher defined for path '{}'", path);
-      let rules = matching_context.select_best_matcher(path);
-      for matcher in &rules.rules {
-        trace!("compare_map_field: matcher = {:?}", matcher);
-        if let Err(comparison) = compare_maps_with_matchingrule(matcher, rules.cascaded, path,
-          &expected_map, &actual_map, matching_context, &mut |field_path, expected, actual, context| {
-            let comparison = compare_field(field_path, &expected.value, &expected.field_descriptor, &actual.value, context, descriptors);
-            if comparison.is_empty() {
-              Ok(())
-            } else {
-              Err(comparison)
-            }
-          }) {
-          result.extend(comparison);
-        }
+  let expected_map = expected_fields.iter()
+    .filter_map(|f| {
+      match &f.data {
+        ProtobufFieldData::Message(d, descriptor) => decode_message_map_entry(descriptor, d, descriptors).ok(),
+        _ => None
       }
+    })
+    .collect::<BTreeMap<String, MapEntry>>();
+  let actual_map = actual_fields.iter()
+    .filter_map(|f| {
+      match &f.data {
+        ProtobufFieldData::Message(d, descriptor) => decode_message_map_entry(descriptor, d, descriptors).ok(),
+        _ => None
+      }
+    })
+    .collect::<BTreeMap<String, MapEntry>>();
+
+  if matching_context.matcher_is_defined(path) {
+    debug!("compare_map_field: matcher defined for path '{}'", path);
+    let rules = matching_context.select_best_matcher(path);
+    for matcher in &rules.rules {
+      trace!("compare_map_field: matcher = {:?}", matcher);
+      if let Err(comparison) = compare_maps_with_matchingrule(matcher, rules.cascaded, path,
+        &expected_map, &actual_map, matching_context, &mut |field_path, expected, actual, context| {
+          let comparison = compare_field(field_path, &expected.value, &expected.field_descriptor, &actual.value, context, descriptors);
+          if comparison.is_empty() {
+            Ok(())
+          } else {
+            Err(comparison)
+          }
+        }) {
+        result.extend(comparison);
+      }
+    }
+  } else {
+    debug!("compare_map_field: no matcher defined for path '{}'", path);
+    debug!("                   expected keys {:?}", expected_map.keys());
+    debug!("                   actual keys {:?}", actual_map.keys());
+    if expected_fields.is_empty() && !actual_fields.is_empty() && matching_context.config() == DiffConfig::NoUnexpectedKeys {
+      result.push(BodyMismatch {
+        path: path.to_string(),
+        expected: None,
+        actual: None,
+        mismatch: format!("Expected repeated field '{}' to be empty but received {} values",
+                          descriptor.name.clone().unwrap_or_else(|| descriptor.number.unwrap_or_default().to_string()),
+                          actual_fields.len()
+        )
+      });
     } else {
-      debug!("compare_map_field: no matcher defined for path '{}'", path);
-      debug!("                   expected keys {:?}", expected_map.keys());
-      debug!("                   actual keys {:?}", actual_map.keys());
       let expected_keys = expected_map.keys().cloned().collect();
       let actual_keys = actual_map.keys().cloned().collect();
       if let Err(mismatches) = matching_context.match_keys(path, &expected_keys, &actual_keys) {
@@ -601,13 +602,13 @@ fn compare_map_field(
         if let Some(actual) = actual_map.get(key.as_str()) {
           result.extend(compare_field(&entry_path, &value.value, &value.field_descriptor, &actual.value, matching_context, descriptors));
         } else {
-          result.push(Mismatch::BodyMismatch {
+          result.push(BodyMismatch {
             path: path.to_string(),
             expected: None,
             actual: None,
             mismatch: format!("Expected map field '{}' to have entry '{}', but was missing",
-              descriptor.name.clone().unwrap_or_else(|| descriptor.number.unwrap_or_default().to_string()),
-              key
+                              descriptor.name.clone().unwrap_or_else(|| descriptor.number.unwrap_or_default().to_string()),
+                              key
             )
           });
         }

@@ -39,7 +39,6 @@ pub(crate) struct MockService {
 }
 
 impl MockService {
-  #[instrument(skip(self, message_descriptor, response_descriptor))]
   pub(crate) async fn handle_message(
     &self,
     request: DynamicMessage,
