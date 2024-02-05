@@ -358,7 +358,10 @@ pub fn lookup_interaction_by_id<'a>(
   pact: &'a V4Pact
 ) -> Option<&'a Box<dyn V4Interaction + Send + Sync + RefUnwindSafe>> {
   pact.interactions.iter()
-    .find(|i| i.unique_key() == interaction_key)
+    .find(|i| {
+      trace!(interaction_key, unique_key=i.unique_key(), "Checking interaction for key");
+      i.unique_key() == interaction_key
+    })
 }
 
 pub fn lookup_interaction_config(interaction: &dyn V4Interaction) -> Option<HashMap<String, serde_json::Value>> {
