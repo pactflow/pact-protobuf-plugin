@@ -18,7 +18,7 @@ use prost_types::{DescriptorProto, FileDescriptorSet, MethodDescriptorProto};
 use tonic::{Request, Response, Status};
 use tonic::metadata::{Entry, MetadataMap};
 use tower_service::Service;
-use tracing::{debug, error, info, instrument, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::dynamic_message::DynamicMessage;
 use crate::matching::compare;

@@ -642,32 +642,55 @@ fn build_single_embedded_field_value(
         .ok_or_else(|| anyhow!("Did not find message '{}' in the current message or in the file descriptors", type_name))?;
       let mut embedded_builder = MessageBuilder::new(&embedded_type, message_name, &message_builder.file_descriptor);
 
-      if let Some(definition) = config.get("pact:match") {
+      let field_value = if let Some(definition) = config.get("pact:match") {
+        let mut field_value = None;
         let mrd = parse_matcher_def(json_to_string(definition).as_str())?;
-        // when (val ruleDefinition = MatchingRuleDefinition.parseMatchingRuleDefinition(definition)) {
-        //   is Ok -> for (rule in ruleDefinition.value.rules) {
-        //     when (rule) {
-        //       is Either.A -> TODO()
-        //       is Either.B -> TODO()
-        //     }
-        //   }
-        todo!()
-      } else {
-        for (key, value) in config {
-          if !key.starts_with("pact:") {
-            let field_path = path.join(key);
-            construct_message_field(&mut embedded_builder, matching_rules, generators,
-              key, value, &field_path, all_descriptors)?;
+        for rule in &mrd.rules {
+          match rule {
+            Either::Left(rule) => {
+              matching_rules.add_rule(path.clone(), rule.clone(), RuleLogic::And);
+            },
+            Either::Right(reference) => if let Some(field_def) = config.get(reference.name.as_str()) {
+              matching_rules.add_rule(path.clone(), matchingrules::MatchingRule::Values, RuleLogic::And);
+              let array_path = path.join("*");
+              matching_rules.add_rule(array_path.clone(), matchingrules::MatchingRule::Type, RuleLogic::And);
+              field_value = build_single_embedded_field_value(&array_path, message_builder, MessageFieldValueType::Normal,
+                                                field_descriptor, field, field_def, matching_rules, generators, all_descriptors)?;
+            } else {
+              return Err(anyhow!("Expression '{}' refers to non-existent item '{}'", definition, reference.name));
+            }
           }
         }
-        let field_value = MessageFieldValue {
+        if let Some(field_value) = field_value {
+          field_value
+        } else {
+          for (key, value) in config {
+            if !key.starts_with("pact:") {
+              let field_path = path.join(key);
+              construct_message_field(&mut embedded_builder, matching_rules, generators,
+                                      key, value, &field_path, all_descriptors)?;
+            }
+          }
+          MessageFieldValue {
+            name: field.to_string(),
+            raw_value: None,
+            rtype: RType::Message(Box::new(embedded_builder))
+          }
+        }
+      } else {
+        for (key, value) in config {
+          let field_path = path.join(key);
+          construct_message_field(&mut embedded_builder, matching_rules, generators, key, value, &field_path, all_descriptors)?;
+        }
+        MessageFieldValue {
           name: field.to_string(),
           raw_value: None,
           rtype: RType::Message(Box::new(embedded_builder))
-        };
-        message_builder.set_field_value(field_descriptor, field, field_value.clone());
-        Ok(Some(field_value))
-      }
+        }
+      };
+
+      message_builder.set_field_value(field_descriptor, field, field_value.clone());
+      Ok(Some(field_value))
     } else {
       Err(anyhow!("For message fields, you need to define a Map of expected fields, got {:?}", value))
     }

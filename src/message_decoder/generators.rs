@@ -31,7 +31,7 @@ impl GenerateValue<ProtobufFieldData> for Generator {
   fn generate_value(&self,
                     value: &ProtobufFieldData,
                     context: &HashMap<&str, Value>,
-                    matcher: &Box<dyn VariantMatcher + Send + Sync>
+                    _matcher: &Box<dyn VariantMatcher + Send + Sync>
   ) -> anyhow::Result<ProtobufFieldData> {
     let result = match self {
       Generator::RandomInt(min, max) => {

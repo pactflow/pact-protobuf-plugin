@@ -5,7 +5,7 @@ use std::fmt::{Debug, Display, Formatter};
 
 use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use maplit::hashmap;
 use pact_matching::{BodyMatchResult, CoreMatchingContext, DiffConfig, MatchingContext, Mismatch};
 use pact_matching::json::compare_json;
@@ -13,7 +13,7 @@ use pact_matching::matchers::{match_values, Matches};
 use pact_matching::matchingrules::{compare_lists_with_matchingrule, compare_maps_with_matchingrule};
 use pact_matching::Mismatch::BodyMismatch;
 use pact_models::content_types::ContentType;
-use pact_models::matchingrules::MatchingRule;
+use pact_models::matchingrules::{Category, MatchingRule, RuleList, RuleLogic};
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::MatchingRuleCategory;
 use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet};
@@ -215,9 +215,59 @@ pub fn compare_message(
         expected_value.default_field_value(field_descriptor)
       });
 
-      let comparison = compare_field(&field_path, expected_value, field_descriptor, &actual_value, matching_context, descriptors);
-      if !comparison.is_empty() {
-        results.insert(field_path.to_string(), comparison);
+      if matching_context.values_matcher_defined(&path) {
+        debug!("compare_message: Values Matcher defined for path '{}'", path);
+        let rules = matching_context.select_best_matcher(&path);
+        let associated_rules = rules.rules.iter().find_map(|rule| match rule {
+          MatchingRule::EachValue(associated) => if !rules.cascaded {
+            debug!("Matching {} with EachValue", path);
+            Some(associated.rules.iter().filter_map(|rule| {
+              match rule {
+                Either::Left(rule) => Some(rule.clone()),
+                Either::Right(reference) => {
+                  results.insert(field_path.to_string(), vec![BodyMismatch {
+                    path: path.to_string(),
+                    expected: Some(format!("{:?}", expected).into()),
+                    actual: Some(format!("{:?}", actual).into()),
+                    mismatch: format!("Found an un-resolved reference {}", reference.name)
+                  }]);
+                  None
+                }
+              }
+            }).collect::<Vec<_>>())
+          } else {
+            None
+          },
+          _ => None
+        });
+        let context = if let Some(associated_rules) = associated_rules {
+          if associated_rules.is_empty() {
+            matching_context.clone_with(matching_context.matchers())
+          } else {
+            let rules = MatchingRuleCategory {
+              name: Category::BODY,
+              rules: hashmap! {
+              path.join("*") => RuleList {
+                rules: associated_rules,
+                rule_logic: RuleLogic::And,
+                cascaded: false
+              }
+            }
+            };
+            matching_context.clone_with(&rules)
+          }
+        } else {
+          matching_context.clone_with(matching_context.matchers())
+        };
+        let comparison = compare_field(&field_path, expected_value, field_descriptor, &actual_value, context.as_ref(), descriptors);
+        if !comparison.is_empty() {
+          results.insert(field_path.to_string(), comparison);
+        }
+      } else {
+        let comparison = compare_field(&field_path, expected_value, field_descriptor, &actual_value, matching_context, descriptors);
+        if !comparison.is_empty() {
+          results.insert(field_path.to_string(), comparison);
+        }
       }
     } else if !actual.is_empty() && matching_context.config() == DiffConfig::NoUnexpectedKeys {
       trace!(field_name = field_name.as_str(), field_no, "actual field list is not empty");
