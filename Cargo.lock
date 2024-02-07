@@ -1824,7 +1824,7 @@ dependencies = [
 
 [[package]]
 name = "pact-protobuf-plugin"
-version = "0.3.13"
+version = "0.3.14"
 dependencies = [
  "ansi_term",
  "anyhow",
