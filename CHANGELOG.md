@@ -1,3 +1,14 @@
+# 0.3.12 - Bugfix Release
+
+* 131ffc4 - doc: Add docs on matching on maps to the README (Ronald Holshausen, Wed Feb 7 13:52:32 2024 +1100)
+* 3f369a9 - fix: Correct the use of matching rules on maps (Ronald Holshausen, Wed Feb 7 13:43:02 2024 +1100)
+* 9d88e92 - feat: Support defining an each values matcher for a whole message (Ronald Holshausen, Tue Feb 6 16:31:24 2024 +1100)
+* 002c9d6 - chore: only run clippy on linux CI agent (Ronald Holshausen, Tue Feb 6 11:01:43 2024 +1100)
+* eb0acc5 - chore: Add integrated test examples to the CI build (Ronald Holshausen, Tue Feb 6 10:53:48 2024 +1100)
+* 0a6458c - fix: accept empty maps where there is a eachKey or eachValue matcher (Ronald Holshausen, Tue Feb 6 10:40:24 2024 +1100)
+* c81187c - chore: Update dependencies (Ronald Holshausen, Tue Feb 6 09:59:28 2024 +1100)
+* 7d80aba - bump version to 0.3.12 (Ronald Holshausen, Tue Jan 30 11:02:22 2024 +1100)
+
 # 0.3.11 - Bugfix Release
 
 * 4db4328 - fix: when checking for unexpected fields, ignore fields with default values (Ronald Holshausen, Tue Jan 30 10:15:18 2024 +1100)
