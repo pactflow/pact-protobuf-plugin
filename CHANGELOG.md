@@ -1,3 +1,8 @@
+# 0.3.13 - Bugfix Release
+
+* 341d4d7 - fix: do not inject a default value for repeated fields #45 (Ronald Holshausen, Wed Feb 7 16:13:59 2024 +1100)
+* 7674f5e - bump version to 0.3.13 (Ronald Holshausen, Wed Feb 7 13:57:26 2024 +1100)
+
 # 0.3.12 - Bugfix Release
 
 * 131ffc4 - doc: Add docs on matching on maps to the README (Ronald Holshausen, Wed Feb 7 13:52:32 2024 +1100)
