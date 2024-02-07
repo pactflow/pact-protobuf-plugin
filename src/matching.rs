@@ -670,7 +670,7 @@ fn compare_map_field(
 }
 
 /// Struct to represent a protobuf map entry
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct MapEntry {
   pub field_descriptor: FieldDescriptorProto,
   pub value: ProtobufField
