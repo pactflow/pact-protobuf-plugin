@@ -167,6 +167,7 @@ impl MockService {
 }
 
 impl MockService {
+  #[allow(clippy::too_many_arguments)]
   pub(crate) fn new(
     file_descriptor_set: &FileDescriptorSet,
     service_name: &str,

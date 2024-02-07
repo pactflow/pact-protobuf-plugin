@@ -116,7 +116,7 @@ pub fn compare_metadata(
     let mut output = vec![];
     let bold = Style::new().bold();
     let mismatches = expected_metadata.iter()
-      .filter(|(k, _)| !is_special_metadata_key(k))
+      .filter(|(k, _)| !is_special_metadata_key(k.as_str()))
       .map(|(k, v)| {
         output.push(format!("          key '{}' ({})", bold.paint(k), Red.paint("FAILED")));
         Mismatch::MetadataMismatch {
@@ -137,7 +137,7 @@ pub fn compare_metadata(
       if let Some(actual_value) = actual_metadata.get(key) {
         let out = match_metadata_value(&mut mismatches, key, expected_value, actual_value, context);
         output.push(out);
-      } else if !is_special_metadata_key(key) {
+      } else if !is_special_metadata_key(key.as_str()) {
         output.push(format!("          key '{}' ({})", bold.paint(key), Red.paint("FAILED")));
         mismatches.push(Mismatch::MetadataMismatch { key: key.clone(),
           expected: expected_value.to_string(),
@@ -155,7 +155,7 @@ pub fn compare_metadata(
   }
 }
 
-fn is_special_metadata_key(key: &String) -> bool {
+fn is_special_metadata_key(key: &str) -> bool {
   let key = key.to_lowercase();
   key == "content-type" || key == "contenttype"
 }

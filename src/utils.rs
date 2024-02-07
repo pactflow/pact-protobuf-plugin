@@ -356,12 +356,13 @@ pub(crate) fn parse_pact_from_request_json(pact_json: &str, source: &str) -> any
 pub fn lookup_interaction_by_id<'a>(
   interaction_key: &str,
   pact: &'a V4Pact
-) -> Option<&'a Box<dyn V4Interaction + Send + Sync + RefUnwindSafe>> {
+) -> Option<&'a (dyn V4Interaction + Send + Sync + RefUnwindSafe)> {
   pact.interactions.iter()
     .find(|i| {
       trace!(interaction_key, unique_key=i.unique_key(), "Checking interaction for key");
       i.unique_key() == interaction_key
     })
+    .map(|i| i.as_ref())
 }
 
 pub fn lookup_interaction_config(interaction: &dyn V4Interaction) -> Option<HashMap<String, serde_json::Value>> {
