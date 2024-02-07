@@ -45,7 +45,7 @@ async fn each_value_test() {
     .await;
 
   let pact = pact_builder.build().as_v4_pact().unwrap();
-  let interaction = dbg!(pact).interactions.first().unwrap().as_v4_sync_message().unwrap();
+  let interaction = pact.interactions.first().unwrap().as_v4_sync_message().unwrap();
   let response = interaction.response.first().unwrap();
 
   let each_value = MatchingRule::EachValue(MatchingRuleDefinition::new("foo".to_string(), ValueType::Unknown, MatchingRule::Type, None));

@@ -8,6 +8,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use itertools::{Either, Itertools};
 use maplit::{btreemap, hashmap};
+use num::ToPrimitive;
 use pact_models::generators::Generator;
 use pact_models::json_utils::json_to_string;
 use pact_models::matchingrules;
@@ -969,7 +970,137 @@ fn build_field_value(
         Ok(None)
       }
     }
+    Value::Bool(b) => if descriptor.r#type() == Type::Bool {
+      let constructed_value = MessageFieldValue {
+        name: field_name.to_string(),
+        raw_value: Some(b.to_string()),
+        rtype: RType::Boolean(*b)
+      };
+      update_message_builder(message_builder, field_type, descriptor, field_name, &constructed_value);
+      Ok(Some(constructed_value))
+    } else {
+      Err(anyhow!("Only boolean field values can be configured with a boolean value, field {} type is {:?}",
+        field_name,
+        descriptor.r#type()))
+    }
+    Value::Number(n) => if n.is_u64() {
+      let f = n.as_u64().unwrap_or_default();
+      construct_numeric_value(message_builder, field_type, descriptor, field_name, value, f)
+    } else if n.is_i64() {
+      let f = n.as_i64().unwrap_or_default();
+      construct_numeric_value(message_builder, field_type, descriptor, field_name, value, f)
+    } else {
+      let f = n.as_f64().unwrap_or_default();
+      construct_numeric_value(message_builder, field_type, descriptor, field_name, value, f)
+    }
     _ => Err(anyhow!("Field values must be configured with a string value, got {:?}", value))
+  }
+}
+
+fn construct_numeric_value<N: ToPrimitive>(
+  message_builder: &mut MessageBuilder,
+  field_type: MessageFieldValueType,
+  descriptor: &FieldDescriptorProto,
+  field_name: &str,
+  value: &Value,
+  f: N
+) -> anyhow::Result<Option<MessageFieldValue>> {
+  match descriptor.r#type() {
+    Type::Double => if let Some(f) = f.to_f64() {
+      let constructed_value = MessageFieldValue {
+        name: field_name.to_string(),
+        raw_value: Some(f.to_string()),
+        rtype: RType::Double(f)
+      };
+      update_message_builder(message_builder, field_type, descriptor, field_name, &constructed_value);
+      Ok(Some(constructed_value))
+    } else {
+      Err(anyhow!("Can not construct a double value from the given value, field {} type is {:?} but value is {:?}",
+        field_name, descriptor.r#type(), value))
+    }
+    Type::Float => if let Some(f) = f.to_f32() {
+      let constructed_value = MessageFieldValue {
+        name: field_name.to_string(),
+        raw_value: Some(f.to_string()),
+        rtype: RType::Float(f)
+      };
+      update_message_builder(message_builder, field_type, descriptor, field_name, &constructed_value);
+      Ok(Some(constructed_value))
+    } else {
+      Err(anyhow!("Can not construct a float value from the given value, field {} type is {:?} but value is {:?}",
+        field_name, descriptor.r#type(), value))
+    }
+    Type::Int32 | Type::Sint32 | Type::Sfixed32 => if let Some(i) = f.to_i32() {
+      let constructed_value = MessageFieldValue {
+        name: field_name.to_string(),
+        raw_value: Some(i.to_string()),
+        rtype: RType::Integer32(i)
+      };
+      update_message_builder(message_builder, field_type, descriptor, field_name, &constructed_value);
+      Ok(Some(constructed_value))
+    } else {
+      Err(anyhow!("Can not construct an integer value from the given value, field {} type is {:?} but value is {:?}",
+        field_name, descriptor.r#type(), value))
+    }
+    Type::Uint32 | Type::Fixed32 => if let Some(i) = f.to_u32() {
+      let constructed_value = MessageFieldValue {
+        name: field_name.to_string(),
+        raw_value: Some(i.to_string()),
+        rtype: RType::UInteger32(i)
+      };
+      update_message_builder(message_builder, field_type, descriptor, field_name, &constructed_value);
+      Ok(Some(constructed_value))
+    } else {
+      Err(anyhow!("Can not construct an unsigned integer value from the given value, field {} type is {:?} but value is {:?}",
+        field_name, descriptor.r#type(), value))
+    }
+    Type::Int64 | Type::Sint64 | Type::Sfixed64 => if let Some(i) = f.to_i64() {
+      let constructed_value = MessageFieldValue {
+        name: field_name.to_string(),
+        raw_value: Some(i.to_string()),
+        rtype: RType::Integer64(i)
+      };
+      update_message_builder(message_builder, field_type, descriptor, field_name, &constructed_value);
+      Ok(Some(constructed_value))
+    } else {
+      Err(anyhow!("Can not construct an integer value from the given value, field {} type is {:?} but value is {:?}",
+        field_name, descriptor.r#type(), value))
+    }
+    Type::Uint64 | Type::Fixed64 => if let Some(i) = f.to_u64() {
+      let constructed_value = MessageFieldValue {
+        name: field_name.to_string(),
+        raw_value: Some(i.to_string()),
+        rtype: RType::UInteger64(i)
+      };
+      update_message_builder(message_builder, field_type, descriptor, field_name, &constructed_value);
+      Ok(Some(constructed_value))
+    } else {
+      Err(anyhow!("Can not construct an unsigned integer value from the given value, field {} type is {:?} but value is {:?}",
+        field_name, descriptor.r#type(), value))
+    },
+    _ => {
+      Err(anyhow!("Only numeric field values can be configured with a numeric value, field {} type is {:?} but value is {:?}",
+        field_name, descriptor.r#type(), value))
+    }
+  }
+}
+
+fn update_message_builder(
+  message_builder: &mut MessageBuilder,
+  field_type: MessageFieldValueType,
+  descriptor: &FieldDescriptorProto,
+  field_name: &str,
+  constructed_value: &MessageFieldValue
+) {
+  match field_type {
+    MessageFieldValueType::Repeated => {
+      debug!("Setting field {:?}:repeated to value {:?}", field_name, constructed_value);
+      message_builder.add_repeated_field_value(descriptor, field_name, constructed_value.clone());
+    },
+    _ => {
+      debug!("Setting field {:?}:{:?} to value {:?}", field_name, field_type, constructed_value);
+      message_builder.set_field_value(descriptor, field_name, constructed_value.clone());
+    }
   }
 }
 
