@@ -440,6 +440,45 @@ builder
   ))
 ```
 
+### Matching repeated fields
+
+You can apply matching rules to enforce the minimum or maximum number fo fields, as well as applying rules for each
+item. 
+
+For instance, assume that `numbers` is a repeated String field. You could define
+```json
+    "numbers": "atLeast(1), eachValue(matching(regex, '\\d+', '100))"
+```
+This will make aure that there is always at least one number, and that any numbers match the given regular expression.
+
+**Note: `atLeast` and `atMost` require version 0.3.12+**
+
+This would also work if `numbers` was a numeric repeated field. In fact, it would work with any primitive field by
+applying the regex to the string representation of the field value.
+
+### Matching on map fields
+
+With maps, you can apply matching rules on either the keys in the map, or the values, or both. For instance, given
+```protobuf
+message ExampleRequest {
+  map<string, string> labels = 1;
+  bool ok = 2;
+}
+```
+
+You could define a test like
+```json
+    "request": {
+        "labels": {
+          "pact:match": "eachKey(matching(regex, '\\d+', '')), eachValue(matching(regex, '(\\w|\\s)+', '')), atLeast(1)",
+          "100": "this is a label"
+        },
+        "ok": "true"
+    }
+```
+This will require the map of labels to only have keys and values that match the given regular expressions, and the map
+must have at least one entry. `"100": "this is a label"` is the example value used in the consumer test.
+
 ## Running within docker containers
 
 The plugin will try to use an IP6 address when opening the port for the gRPC server. Docker will only support IP6
