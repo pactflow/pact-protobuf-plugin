@@ -154,7 +154,7 @@ fn should_use_default(descriptor: &FieldDescriptorProto) -> bool {
   match descriptor.r#type() {
     Type::Double | Type::Float | Type::Int64 | Type::Uint64 | Type::Int32 | Type::Fixed64 |
     Type::Fixed32 | Type::Bool | Type::String | Type::Bytes | Type::Uint32 | Type::Enum |
-    Type::Sfixed32 | Type::Sfixed64 | Type::Sint32 | Type::Sint64 => true,
+    Type::Sfixed32 | Type::Sfixed64 | Type::Sint32 | Type::Sint64 => !is_repeated_field(descriptor),
     _ => false
   }
 }
@@ -162,7 +162,7 @@ fn should_use_default(descriptor: &FieldDescriptorProto) -> bool {
 /// Compare the fields of the expected and actual messages
 #[tracing::instrument(ret,
   skip_all,
-  fields(%path)
+  fields(%path, expected_message_fields, actual_message_fields)
 )]
 pub fn compare_message(
   path: DocPath,
@@ -748,6 +748,7 @@ mod tests {
   use prost::encoding::WireType;
   use prost::Message;
   use prost_types::{DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto, FieldDescriptorProto, FileDescriptorSet, MessageOptions};
+  use prost_types::field_descriptor_proto::Label;
   use prost_types::field_descriptor_proto::Label::{Optional, Repeated};
   use prost_types::field_descriptor_proto::Type::{Enum, String};
 
@@ -1311,5 +1312,59 @@ mod tests {
       &fds
     ).unwrap();
     expect!(result).to_not(be_equal_to(BodyMatchResult::Ok));
+  }
+
+  #[rstest::rstest]
+  #[case::double(Type::Double, true)]
+  #[case::float(Type::Float, true)]
+  #[case::int64(Type::Int64, true)]
+  #[case::uint64(Type::Uint64, true)]
+  #[case::int32(Type::Int32, true)]
+  #[case::fixed64(Type::Fixed64, true)]
+  #[case::fixed32(Type::Fixed32, true)]
+  #[case::bool(Type::Bool, true)]
+  #[case::string(Type::String, true)]
+  #[case::group(Type::Group, false)]
+  #[case::message(Type::Message, false)]
+  #[case::bytes(Type::Bytes, true)]
+  #[case::uint32(Type::Uint32, true)]
+  #[case::enums(Type::Enum, true)]
+  #[case::sfixed32(Type::Sfixed32, true)]
+  #[case::sfixed64(Type::Sfixed64, true)]
+  #[case::sint32(Type::Sint32, true)]
+  #[case::sint64(Type::Sint64, true)]
+  fn should_use_default_is_true_for_primitive_fields(#[case] input: Type, #[case] expected: bool) {
+    let field = FieldDescriptorProto {
+      name: None,
+      number: None,
+      label: None,
+      r#type: Some(input as i32),
+      type_name: None,
+      extendee: None,
+      default_value: None,
+      oneof_index: None,
+      json_name: None,
+      options: None,
+      proto3_optional: None
+    };
+    expect!(should_use_default(&field)).to(be_equal_to(expected));
+  }
+
+  #[test]
+  fn should_use_default_is_false_for_repeated_fields() {
+    let field = FieldDescriptorProto {
+      name: None,
+      number: None,
+      label: Some(Label::Repeated as i32),
+      r#type: Some(Type::Enum as i32),
+      type_name: None,
+      extendee: None,
+      default_value: None,
+      oneof_index: None,
+      json_name: None,
+      options: None,
+      proto3_optional: None
+    };
+    expect!(should_use_default(&field)).to(be_false());
   }
 }
