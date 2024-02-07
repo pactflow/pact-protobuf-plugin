@@ -189,7 +189,7 @@ fn match_metadata_value(
         };
         format!("        key '{}' matching with {} [{}]", bold.paint(key),
           bold.paint(matchers.rules.iter()
-            .map(|r| matching_rule_description(r))
+            .map(matching_rule_description)
             .join(", ")
           ), result)
       } else if key == "grpc-status" {
@@ -211,18 +211,16 @@ fn match_metadata_value(
         } else {
           format!("        key '{}' with value '{}' [{}]", bold.paint(key), bold.paint("OK"), Green.paint("OK"))
         }
+      } else if let Err(err) = Matches::matches_with(&expected, actual, &MatchingRule::Equality, false) {
+        mismatches.push(Mismatch::MetadataMismatch {
+          key: key.clone(),
+          expected,
+          actual: actual.to_string(),
+          mismatch: format!("Comparison of metadata key '{}' failed: {}", key, err)
+        });
+        format!("        key '{}' with value '{}' [{}]", bold.paint(key), bold.paint(actual), Red.paint("FAILED"))
       } else {
-        if let Err(err) = Matches::matches_with(&expected, actual, &MatchingRule::Equality, false) {
-          mismatches.push(Mismatch::MetadataMismatch {
-            key: key.clone(),
-            expected,
-            actual: actual.to_string(),
-            mismatch: format!("Comparison of metadata key '{}' failed: {}", key, err)
-          });
-          format!("        key '{}' with value '{}' [{}]", bold.paint(key), bold.paint(actual), Red.paint("FAILED"))
-        } else {
-          format!("        key '{}' with value '{}' [{}]", bold.paint(key), bold.paint(actual), Green.paint("OK"))
-        }
+        format!("        key '{}' with value '{}' [{}]", bold.paint(key), bold.paint(actual), Green.paint("OK"))
       }
     }
     Err(err) => {

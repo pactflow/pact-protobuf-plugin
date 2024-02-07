@@ -1140,7 +1140,7 @@ fn construct_value_from_string(
     if let Some(generator) = &mrd.generator {
       generators.insert(path.to_string(), generator.clone());
     }
-    value_for_type(field_name, &*value_for_field(&mrd), descriptor, &message_builder.descriptor,
+    value_for_type(field_name, &value_for_field(&mrd), descriptor, &message_builder.descriptor,
                    all_descriptors)
   } else {
     value_for_type(field_name, s, descriptor, &message_builder.descriptor,

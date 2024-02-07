@@ -53,7 +53,7 @@ async fn basic_values_test() {
   let interaction_config = lookup_interaction_config(&interaction).unwrap();
   let descriptor_key = interaction_config.get("descriptorKey").map(json_to_string).unwrap();
   let fds = get_descriptors_for_interaction(descriptor_key.as_str(), &plugin_config).unwrap();
-  let (message_descriptor, fs) = find_message_type_by_name("MessageIn", &fds).unwrap();
+  let (message_descriptor, _) = find_message_type_by_name("MessageIn", &fds).unwrap();
   let mut buffer = request.contents.value().unwrap();
 
   let fields = decode_message(&mut buffer, &message_descriptor, &fds).unwrap();

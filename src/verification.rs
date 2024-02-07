@@ -98,7 +98,7 @@ pub async fn verify_interaction(
           trace!("gRPC metadata: {:?}", received_status.status.metadata());
           let default_contents = MessageContents::default();
           let expected_response = interaction.response.first()
-            .unwrap_or_else(|| &default_contents);
+            .unwrap_or(&default_contents);
           if let Some(expected_status) = grpc_status(expected_response) {
             let (result, verification_output) = verify_error_response(expected_response,
                                                                       &received_status.status, &interaction.id);
@@ -141,7 +141,7 @@ fn verify_error_response(
   let mut output = vec![];
   let mut results = vec![];
   if !response.metadata.is_empty() {
-    output.push(format!("      with metadata"));
+    output.push("      with metadata".to_string());
     let mut metadata = actual_status.metadata().clone();
     if let Ok(code) = i32::from(actual_status.code()).to_string().parse() {
       metadata.insert("grpc-status", code);
@@ -151,7 +151,7 @@ fn verify_error_response(
         metadata.insert("grpc-message", message);
       }
     }
-    match verify_metadata(&metadata, &response) {
+    match verify_metadata(&metadata, response) {
       Ok((result, md_output)) => {
         if !result.result {
           results.push(VerificationMismatchResult::Mismatches {
@@ -235,7 +235,7 @@ fn verify_response(
   }
 
   if !response.metadata.is_empty() {
-    output.push(format!("      with metadata"));
+    output.push("      with metadata".to_string());
     match verify_metadata(response_metadata, &response) {
       Ok((result, md_output)) => {
         if !result.result {

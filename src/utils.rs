@@ -261,20 +261,20 @@ pub fn find_enum_by_name(
             let enum_name_parts = enum_name_short.split('.').filter(|v| !v.is_empty()).collect::<Vec<_>>();
             if let Some((_name, message_name)) = enum_name_parts.split_last() {
               if message_name.is_empty() {
-                return find_enum_by_name_in_message(&fd.enum_type, enum_name)
+                find_enum_by_name_in_message(&fd.enum_type, enum_name)
               } else {
                 let message_name = message_name.join(".");
                 if let Ok(message_descriptor) = find_message_type_in_file_descriptor(&message_name, fd) {
-                  return find_enum_by_name_in_message(&message_descriptor.enum_type, enum_name)
+                  find_enum_by_name_in_message(&message_descriptor.enum_type, enum_name)
                 } else {
-                  return None
+                  None
                 }
               }
             } else {
-              return None
+              None
             }
           } else {
-            return None
+            None
           }
         });
   if result.is_some() {

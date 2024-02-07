@@ -154,8 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (snd, rcr) = channel::<()>();
     update_access_time();
 
-    let timeout = matches.get_one::<u64>("timeout")
-      .map(|port| *port)
+    let timeout = matches.get_one::<u64>("timeout").copied()
       .unwrap_or(MAX_TIME);
     tokio::spawn(async move {
       let mut interval = time::interval(Duration::from_secs(10));
