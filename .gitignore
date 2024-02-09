@@ -7,3 +7,5 @@ target/
 # IntelliJ IDEA files
 .idea/
 *.iml
+
+.vscode/

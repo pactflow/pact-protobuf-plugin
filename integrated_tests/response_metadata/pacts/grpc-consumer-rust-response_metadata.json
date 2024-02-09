@@ -1,0 +1,98 @@
+{
+  "consumer": {
+    "name": "grpc-consumer-rust"
+  },
+  "interactions": [
+    {
+      "description": "response metadata request",
+      "interactionMarkup": {
+        "markup": "```protobuf\nmessage MessageIn {\n    string s = 1;\n}\n```\n```protobuf\nmessage MessageOut {\n    bool b = 2;\n}\n```\n",
+        "markupType": "COMMON_MARK"
+      },
+      "pending": false,
+      "pluginConfiguration": {
+        "protobuf": {
+          "descriptorKey": "628d9de1211ee7ee1d167e3e12b170bf",
+          "service": "Test/GetTest"
+        }
+      },
+      "request": {
+        "contents": {
+          "content": "CgA=",
+          "contentType": "application/protobuf;message=MessageIn",
+          "contentTypeHint": "BINARY",
+          "encoded": "base64"
+        },
+        "matchingRules": {
+          "body": {
+            "$.s": {
+              "combine": "AND",
+              "matchers": [
+                {
+                  "match": "type"
+                }
+              ]
+            }
+          }
+        },
+        "metadata": {
+          "contentType": "application/protobuf;message=MessageIn",
+          "key": "value"
+        }
+      },
+      "response": [
+        {
+          "contents": {
+            "content": "EAE=",
+            "contentType": "application/protobuf;message=MessageOut",
+            "contentTypeHint": "BINARY",
+            "encoded": "base64"
+          },
+          "matchingRules": {
+            "body": {
+              "$.b": {
+                "combine": "AND",
+                "matchers": [
+                  {
+                    "match": "boolean"
+                  }
+                ]
+              }
+            }
+          },
+          "metadata": {
+            "contentType": "application/protobuf;message=MessageOut",
+            "grpc-message": "not found",
+            "grpc-status": "NOT_FOUND"
+          }
+        }
+      ],
+      "transport": "grpc",
+      "type": "Synchronous/Messages"
+    }
+  ],
+  "metadata": {
+    "pactRust": {
+      "consumer": "1.1.1",
+      "models": "1.1.18"
+    },
+    "pactSpecification": {
+      "version": "4.0"
+    },
+    "plugins": [
+      {
+        "configuration": {
+          "628d9de1211ee7ee1d167e3e12b170bf": {
+            "protoDescriptors": "CqUBChdyZXNwb25zZV9tZXRhZGF0YS5wcm90bxIJcGFjdGlzc3VlIhkKCU1lc3NhZ2VJbhIMCgFzGAEgASgJUgFzIhoKCk1lc3NhZ2VPdXQSDAoBYhgCIAEoCFIBYjJACgRUZXN0EjgKB0dldFRlc3QSFC5wYWN0aXNzdWUuTWVzc2FnZUluGhUucGFjdGlzc3VlLk1lc3NhZ2VPdXQiAGIGcHJvdG8z",
+            "protoFile": "syntax = \"proto3\";\n\npackage pactissue;\n\nmessage MessageIn {\n  string s = 1;\n}\n\nmessage MessageOut {\n  bool b = 2;\n}\n\nservice Test {\n  rpc GetTest(MessageIn) returns (MessageOut) {}\n}\n"
+          }
+        },
+        "name": "protobuf",
+        "version": "0.3.12"
+      }
+    ]
+  },
+  "provider": {
+    "name": "response_metadata"
+  }
+}
