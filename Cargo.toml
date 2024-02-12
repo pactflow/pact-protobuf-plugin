@@ -1,3 +1,14 @@
+[workspace]
+
+members = [
+    ".",
+    "integrated_tests/response_metadata",
+    "integrated_tests/repeated_enums",
+    "integrated_tests/default_values",
+    "integrated_tests/matching_maps",
+]
+
+
 [package]
 name = "pact-protobuf-plugin"
 version = "0.3.14"

@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package pactissue;
+
+message MessageIn {
+  string s = 1;
+}
+
+message MessageOut {
+  bool b = 2;
+}
+
+service Test {
+  rpc GetTest(MessageIn) returns (MessageOut) {}
+}
