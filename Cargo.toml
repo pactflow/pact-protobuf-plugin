@@ -8,7 +8,6 @@ members = [
     "integrated_tests/matching_maps",
 ]
 
-
 [package]
 name = "pact-protobuf-plugin"
 version = "0.3.14"

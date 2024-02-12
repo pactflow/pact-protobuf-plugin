@@ -7,7 +7,7 @@ mod tests {
   use expectest::prelude::*;
   use pact_consumer::prelude::*;
   use pact_consumer::mock_server::StartMockServerAsync;
-  
+
   use pact_models::{matchingrules::{Category, MatchingRule, MatchingRules, RuleLogic}, path_exp::DocPath};
   use serde_json::json;
   use super::*;
@@ -42,13 +42,13 @@ mod tests {
     body_cat.add_rule(DocPath::new_unwrap("$.s"), MatchingRule::Type, RuleLogic::And);
     let meta_cat = expected_request_rules.add_category(Category::METADATA);
     meta_cat.add_rule(DocPath::new_unwrap("key"), MatchingRule::Type, RuleLogic::And);
-    
+
     let mut expected_response_rules = MatchingRules::default();
     let body_cat = expected_response_rules.add_category(Category::BODY);
     body_cat.add_rule(DocPath::new_unwrap("$.b"), MatchingRule::Boolean, RuleLogic::And);
     let meta_cat = expected_response_rules.add_category(Category::METADATA);
     meta_cat.add_rule(DocPath::new_unwrap("grpc-status"), MatchingRule::Equality, RuleLogic::And);
-    meta_cat.add_rule(DocPath::new_unwrap("grpc-message"), MatchingRule::Type, RuleLogic::And);  
+    meta_cat.add_rule(DocPath::new_unwrap("grpc-message"), MatchingRule::Type, RuleLogic::And);
 
     let mut pact_builder = PactBuilderAsync::new_v4("grpc-consumer-rust", "response_metadata");
     let builder_async = pact_builder
@@ -58,10 +58,10 @@ mod tests {
         i.contents_from(request_json).await;
         i
       }).await;
-    
+
     let pact = builder_async.build();
     let interactions = pact.interactions();
-    
+
     expect!(interactions.len()).to(be_equal_to(1));
     let interaction = interactions[0].as_v4_sync_message().unwrap();
     expect!(interaction.request.matching_rules.clone()).to(be_equal_to(expected_request_rules));
