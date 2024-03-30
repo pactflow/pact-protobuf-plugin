@@ -7,8 +7,12 @@ service ExampleService {
 }
 
 message ExampleRequest {
-  map<string, string> labels = 1;
+  map<string, ExampleValue> values = 1;
   bool ok = 2;
+}
+
+message ExampleValue {
+  string value = 1;
 }
 
 message ExampleResponse {
