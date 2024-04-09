@@ -2013,9 +2013,9 @@ dependencies = [
  "prost 0.12.4",
  "prost-types 0.12.4",
  "rand",
- "rand_regex",
+ "rand_regex 0.17.0",
  "regex",
- "regex-syntax 0.6.29",
+ "regex-syntax 0.8.3",
  "reqwest",
  "rocket",
  "rstest",
@@ -2163,7 +2163,7 @@ dependencies = [
  "onig",
  "parse-zoneinfo",
  "rand",
- "rand_regex",
+ "rand_regex 0.15.1",
  "regex",
  "regex-syntax 0.6.29",
  "reqwest",
@@ -2177,9 +2177,9 @@ dependencies = [
 
 [[package]]
 name = "pact_verifier"
-version = "1.0.5"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c9aaa031f550e80c9ca44666dd6ba3c7c3d38cf51b9ac4ecc8dfc91d40d9d78"
+checksum = "6471567deb7cc6ddabea2ffbea0da33b5b981624b80b2ed27cfd2bb7e504530d"
 dependencies = [
  "ansi_term",
  "anyhow",
@@ -2616,6 +2616,16 @@ checksum = "8b2a9fe2d7d9eeaf3279d1780452a5bbd26b31b27938787ef1c3e930d1e9cfbd"
 dependencies = [
  "rand",
  "regex-syntax 0.6.29",
+]
+
+[[package]]
+name = "rand_regex"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4bfbd599a8c757f89100e3ae559fb1ef9efa1cfd9276136862e3089dec627b31"
+dependencies = [
+ "rand",
+ "regex-syntax 0.8.3",
 ]
 
 [[package]]
