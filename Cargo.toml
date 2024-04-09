@@ -83,5 +83,5 @@ test-log = "0.2.11"
 trim-margin = "0.1.0"
 
 [build-dependencies]
-built = { version = "0.7.1" }
+built = { version = "0.7.1", features = [ "git2" ] }
 os_info = "3.7.0"
