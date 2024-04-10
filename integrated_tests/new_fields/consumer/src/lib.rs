@@ -33,7 +33,7 @@ mod tests {
             "id": "matching(type, '89b9475a-09d0-47a9-a4bc-2b6b9d361db6')",
             "display_name": "matching(type, 'xX5im0n-P3ggXx')",
             "first_name": "matching(type, 'Simon')",
-            "last_name": "matching(type, 'Pegg')",
+            "surname": "matching(type, 'Pegg')",
           }
         })).await;
         i

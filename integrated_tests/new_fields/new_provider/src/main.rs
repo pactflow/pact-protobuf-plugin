@@ -1,7 +1,8 @@
 use fake::Fake;
 use fake::faker::name::en::{FirstName, LastName};
+use prost::Message;
 use tonic::transport::Server;
-use tracing::info;
+use tracing::{debug, info};
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
 use crate::pb::user_service_server::UserServiceServer;
@@ -25,13 +26,19 @@ impl pb::user_service_server::UserService for UserService {
 
         let first_name: String = FirstName().fake();
         let last_name: String = LastName().fake();
-        Ok(tonic::Response::new(GetUserResponse {
+        let display_name = format!("{} {}", first_name.as_str(), last_name.as_str());
+        let email = format!("{}.{}@test.io", first_name, last_name);
+        let response = GetUserResponse {
             id: request.id.clone(),
-            display_name: format!("{} {}", first_name, last_name),
+            display_name,
             first_name,
-            surname: last_name.clone(),
-            .. GetUserResponse::default()
-        }))
+            last_name,
+            email,
+            email_verified: true,
+            ..GetUserResponse::default()
+        };
+        debug!("response bytes = {:?}", response.encode_length_delimited_to_vec());
+        Ok(tonic::Response::new(response))
     }
 }
 

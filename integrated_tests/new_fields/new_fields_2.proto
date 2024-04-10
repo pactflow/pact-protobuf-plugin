@@ -9,6 +9,9 @@ message GetUserResponse {
   string surname = 4;
   string created_at = 5;
   string updated_at = 6;
+  string last_name = 7;
+  string email = 8;
+  bool email_verified = 9;
 }
 
 message GetUserRequest {
