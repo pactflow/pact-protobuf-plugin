@@ -1,0 +1,23 @@
+[workspace]
+
+[package]
+name = "old_provider"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fake = "2.9.2"
+prost = "0.12.4"
+prost-types = "0.12.4"
+regex = "1.10.4"
+tokio = { version = "1.37.0", features = ["full"] }
+tonic = "0.11.0"
+tracing = "0.1.40"
+tracing-core = "0.1.32"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter", "local-time", "tracing-log"] }
+
+[dev-dependencies]
+test-log = "0.2.15"
+
+[build-dependencies]
+tonic-build = "0.11.0"

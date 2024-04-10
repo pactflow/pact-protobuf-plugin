@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package pactissue;
+
+message GetUserResponse {
+  string id = 1;
+  string display_name = 2;
+  string first_name = 3;
+  string last_name = 4;
+  string created_at = 5;
+  string updated_at = 6;
+}
+
+message GetUserRequest {
+  string id = 1;
+}
+
+service UserService {
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+}
