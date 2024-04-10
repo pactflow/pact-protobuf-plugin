@@ -495,7 +495,14 @@ pub fn decode_message<B>(
       Err(err) => {
         warn!("Was not able to decode field: {}", err);
         let data = match wire_type {
-          WireType::Varint => decode_varint(buffer)?.to_le_bytes().to_vec(),
+          WireType::Varint => {
+            let result = decode_varint(buffer)?;
+            debug!("Unknown varint value: {}", result);
+            // varints are never more than 10 bytes
+            let mut buf = BytesMut::with_capacity(10);
+            encode_varint(result, &mut buf);
+            buf.freeze().to_vec()
+          },
           WireType::SixtyFourBit => buffer.get_u64().to_le_bytes().to_vec(),
           WireType::LengthDelimited => {
             let data_length = decode_varint(buffer)?;
@@ -1385,5 +1392,69 @@ mod tests {
     expect!(result[2].field_num).to(be_equal_to(1));
     expect!(result[2].wire_type).to(be_equal_to(WireType::Varint));
     expect!(&result[2].data).to(be_equal_to(&ProtobufFieldData::Enum(1, enum_proto.clone())));
+  }
+
+  // Issue #53
+  #[test_log::test]
+  fn decode_message_with_unknown_fields() {
+    let descriptors = "CtYCChBuZXdfZmllbGRzLnByb3RvEglwYWN0aXNzdWUiuwEKD0dldFVzZXJSZXNwb25z\
+    ZRIOCgJpZBgBIAEoCVICaWQSIQoMZGlzcGxheV9uYW1lGAIgASgJUgtkaXNwbGF5TmFtZRIdCgpmaXJzdF9uYW1lGAMgA\
+    SgJUglmaXJzdE5hbWUSGAoHc3VybmFtZRgEIAEoCVIHc3VybmFtZRIdCgpjcmVhdGVkX2F0GAUgASgJUgljcmVhdGVkQX\
+    QSHQoKdXBkYXRlZF9hdBgGIAEoCVIJdXBkYXRlZEF0IiAKDkdldFVzZXJSZXF1ZXN0Eg4KAmlkGAEgASgJUgJpZDJPCgt\
+    Vc2VyU2VydmljZRJACgdHZXRVc2VyEhkucGFjdGlzc3VlLkdldFVzZXJSZXF1ZXN0GhoucGFjdGlzc3VlLkdldFVzZXJSZ\
+    XNwb25zZWIGcHJvdG8z";
+    let bytes = BASE64.decode(descriptors).unwrap();
+    let buffer = Bytes::from(bytes);
+    let fds: FileDescriptorSet = FileDescriptorSet::decode(buffer).unwrap();
+    let main_descriptor = fds.file.iter()
+      .find(|fd| fd.name.clone().unwrap_or_default() == "new_fields.proto")
+      .unwrap();
+    let message_descriptor = main_descriptor.message_type.iter()
+      .find(|md| md.name.clone().unwrap_or_default() == "GetUserResponse").unwrap();
+
+    // buf: b"\n\x041234\x12\x0cElla Streich\x1a\x04Ella:\x07StreichB\x14Ella.Streich@test.ioH\x01", len: 59
+    let message_bytes: &[u8] = &[10, 4, 49, 50, 51, 52, 18, 12, 69, 108, 108, 97, 32, 83, 116,
+      114, 101, 105, 99, 104, 26, 4, 69, 108, 108, 97, 58, 7, 83, 116, 114, 101, 105, 99, 104, 66,
+      20, 69, 108, 108, 97, 46, 83, 116, 114, 101, 105, 99, 104, 64, 116, 101, 115, 116, 46, 105,
+      111, 72, 1];
+    let mut buffer = Bytes::from(message_bytes);
+    let result = decode_message(&mut buffer, &message_descriptor, &fds).unwrap();
+
+    expect!(result.len()).to(be_equal_to(6));
+
+    let first_field = &result[0];
+    expect!(first_field.field_num).to(be_equal_to(1));
+    expect!(first_field.wire_type).to(be_equal_to(WireType::LengthDelimited));
+    expect!(first_field.data.clone()).to(be_equal_to(ProtobufFieldData::String("1234".to_string())));
+
+    let field = &result[1];
+    expect!(field.field_num).to(be_equal_to(2));
+    expect!(field.wire_type).to(be_equal_to(WireType::LengthDelimited));
+    expect!(field.data.clone()).to(be_equal_to(ProtobufFieldData::String("Ella Streich".to_string())));
+
+    let field = &result[2];
+    expect!(field.field_num).to(be_equal_to(3));
+    expect!(field.wire_type).to(be_equal_to(WireType::LengthDelimited));
+    expect!(field.data.clone()).to(be_equal_to(ProtobufFieldData::String("Ella".to_string())));
+
+    // 7 bytes string "Streich"
+    let field = &result[3];
+    expect!(field.field_num).to(be_equal_to(7));
+    expect!(field.wire_type).to(be_equal_to(WireType::LengthDelimited));
+    expect!(field.data.clone()).to(be_equal_to(ProtobufFieldData::Unknown(vec![7, 83, 116, 114, 101, 105, 99, 104])));
+
+    // 20 bytes string "Ella.Streich@test.io"
+    let field = &result[4];
+    expect!(field.field_num).to(be_equal_to(8));
+    expect!(field.wire_type).to(be_equal_to(WireType::LengthDelimited));
+    expect!(field.data.clone()).to(be_equal_to(ProtobufFieldData::Unknown(vec![
+      20, 69, 108, 108, 97, 46, 83, 116, 114, 101, 105, 99, 104, 64,
+      116, 101, 115, 116, 46, 105, 111])));
+
+    // 1 byte bool true
+    let field = &result[5];
+    expect!(field.field_num).to(be_equal_to(9));
+    expect!(field.wire_type).to(be_equal_to(WireType::Varint));
+    expect!(field.data.clone()).to(be_equal_to(ProtobufFieldData::Unknown(vec![1])));
   }
 }
