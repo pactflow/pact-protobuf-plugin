@@ -38,6 +38,9 @@ case "$1" in
             cargo build --release
             gzip -c target/release/pact-protobuf-plugin > target/artifacts/pact-protobuf-plugin-osx-x86_64.gz
             openssl dgst -sha256 -r target/artifacts/pact-protobuf-plugin-osx-x86_64.gz > target/artifacts/pact-protobuf-plugin-osx-x86_64.gz.sha256
+            # macos
+            gzip -c target/release/pact-protobuf-plugin > target/artifacts/pact-protobuf-plugin-macos-x86_64.gz
+            openssl dgst -sha256 -r target/artifacts/pact-protobuf-plugin-macos-x86_64.gz > target/artifacts/pact-protobuf-plugin-macos-x86_64.gz.sha256
 
             # M1
             export SDKROOT=$(xcrun -sdk macosx11.1 --show-sdk-path)
@@ -46,8 +49,12 @@ case "$1" in
 
             gzip -c target/aarch64-apple-darwin/release/pact-protobuf-plugin > target/artifacts/pact-protobuf-plugin-osx-aarch64.gz
             openssl dgst -sha256 -r target/artifacts/pact-protobuf-plugin-osx-aarch64.gz > target/artifacts/pact-protobuf-plugin-osx-aarch64.gz.sha256
+            # macos
+            gzip -c target/aarch64-apple-darwin/release/pact-protobuf-plugin > target/artifacts/pact-protobuf-plugin-macos-aarch64.gz
+            openssl dgst -sha256 -r target/artifacts/pact-protobuf-plugin-macos-aarch64.gz > target/artifacts/pact-protobuf-plugin-macos-aarch64.gz.sha256
             ;;
   *)        echo "$1 is not a recognised OS"
             exit 1
             ;;
 esac
+
