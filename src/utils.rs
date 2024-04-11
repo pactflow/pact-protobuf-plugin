@@ -38,8 +38,24 @@ pub fn last_name(entry_type_name: &str) -> &str {
   entry_type_name.split('.').last().unwrap_or(entry_type_name)
 }
 
-/// Search for a message by type name in all the descriptors
-pub fn find_message_type_by_name(message_name: &str, descriptors: &FileDescriptorSet) -> anyhow::Result<(DescriptorProto, FileDescriptorProto)> {
+/// Split a dot-seperated string into the package and name part
+pub fn split_name(name: &str) -> (&str, Option<&str>) {
+  name.rsplit_once('.')
+    .map(|(package, name)| {
+      if package.is_empty() {
+        (name, None)
+      } else {
+        (name, Some(package))
+      }
+    })
+    .unwrap_or_else(|| (name, None))
+}
+
+/// Search for a message by type name in all the file descriptors
+pub fn find_message_type_by_name(
+  message_name: &str,
+  descriptors: &FileDescriptorSet
+) -> anyhow::Result<(DescriptorProto, FileDescriptorProto)> {
   descriptors.file.iter()
     .map(|descriptor| {
       find_message_type_in_file_descriptor(message_name, descriptor).map(|ds| (ds, descriptor)).ok()
@@ -51,7 +67,10 @@ pub fn find_message_type_by_name(message_name: &str, descriptors: &FileDescripto
 }
 
 /// Search for a message by type name in the file descriptor
-pub fn find_message_type_in_file_descriptor(message_name: &str, descriptor: &FileDescriptorProto) -> anyhow::Result<DescriptorProto> {
+pub fn find_message_type_in_file_descriptor(
+  message_name: &str,
+  descriptor: &FileDescriptorProto
+) -> anyhow::Result<DescriptorProto> {
   descriptor.message_type.iter()
     .find(|message| message.name.clone().unwrap_or_default() == message_name)
     .cloned()
@@ -72,6 +91,57 @@ pub fn find_message_type_in_file_descriptors(
         .find_map(|fd| find_message_type_in_file_descriptor(message_type, fd).ok())
         .ok_or_else(|| anyhow!("Did not find a message type '{}' in any of the file descriptors", message_type))
     })
+}
+
+/// Search for a message by type name and package in the file descriptor, and if not found,
+/// search in all the descriptors. This will first check with the package name, and if nothing is
+/// found, will then fall back to just using the message name
+pub fn find_message_with_package_in_file_descriptors(
+  message_name: &str,
+  package: &str,
+  file_descriptor: &FileDescriptorProto,
+  all_descriptors: &HashMap<String, &FileDescriptorProto>
+) -> anyhow::Result<DescriptorProto> {
+  find_file_descriptor_for_package(package, file_descriptor, all_descriptors)
+    .and_then(|file_descriptor| find_message_type_in_file_descriptor(message_name, &file_descriptor))
+    .or_else(|_| find_message_type_in_file_descriptors(message_name, file_descriptor, all_descriptors))
+}
+
+fn find_file_descriptor_for_package(
+  package: &str,
+  file_descriptor: &FileDescriptorProto,
+  all_descriptors: &HashMap<String, &FileDescriptorProto>
+) -> anyhow::Result<FileDescriptorProto> {
+  let package = if package.starts_with('.') {
+    &package[1..]
+  } else {
+    package
+  };
+  let found = if let Some(descriptor_package) = &file_descriptor.package {
+    if descriptor_package == package {
+      Some(file_descriptor)
+    } else {
+      None
+    }
+  } else {
+    None
+  };
+  found
+    .or_else(|| {
+      all_descriptors.values().find_map(|descriptor| {
+        if let Some(descriptor_package) = &descriptor.package {
+          if descriptor_package == package {
+            Some(*descriptor)
+          } else {
+            None
+          }
+        } else {
+          None
+        }
+      })
+    })
+    .cloned()
+    .ok_or(anyhow!("Did not find a file descriptor with package '{}'", package))
 }
 
 /// If the field is a map field. A field will be a map field if it is a repeated field, the field
@@ -500,6 +570,9 @@ pub(crate) fn prost_string<S: Into<String>>(s: S) -> Value {
 
 #[cfg(test)]
 pub(crate) mod tests {
+  use std::collections::HashMap;
+  use base64::Engine;
+  use base64::engine::general_purpose::STANDARD as BASE64;
   use bytes::Bytes;
   use expectest::prelude::*;
   use maplit::hashmap;
@@ -515,7 +588,16 @@ pub(crate) mod tests {
   };
   use prost_types::field_descriptor_proto::{Label, Type};
 
-  use crate::utils::{as_hex, find_enum_value_by_name, find_message_type_by_name, find_nested_type, is_map_field, last_name};
+  use crate::utils::{
+    as_hex,
+    find_enum_value_by_name,
+    find_file_descriptor_for_package,
+    find_message_type_by_name,
+    find_nested_type,
+    is_map_field,
+    last_name,
+    split_name
+  };
 
   #[test]
   fn last_name_test() {
@@ -526,6 +608,17 @@ pub(crate) mod tests {
     expect!(last_name(".test")).to(be_equal_to("test"));
     expect!(last_name("1.2")).to(be_equal_to("2"));
     expect!(last_name("1.2.3.4")).to(be_equal_to("4"));
+  }
+
+  #[test]
+  fn split_name_test() {
+    expect!(split_name("")).to(be_equal_to(("", None)));
+    expect!(split_name("test")).to(be_equal_to(("test", None)));
+    expect!(split_name(".")).to(be_equal_to(("", None)));
+    expect!(split_name("test.")).to(be_equal_to(("", Some("test"))));
+    expect!(split_name(".test")).to(be_equal_to(("test", None)));
+    expect!(split_name("1.2")).to(be_equal_to(("2", Some("1"))));
+    expect!(split_name("1.2.3.4")).to(be_equal_to(("4", Some("1.2.3"))));
   }
 
   pub(crate) const DESCRIPTOR_WITH_EXT_MESSAGE: [u8; 626] = [
@@ -815,5 +908,37 @@ pub(crate) mod tests {
 
     let result4 = find_enum_value_by_name(&descriptors, ".routeguide.v3.Feature.TestEnum", "VALUE_ONE");
     expect!(result4).to(be_some().value((1, enum1.clone())));
+  }
+
+  #[test]
+  fn find_file_descriptor_for_package_test() {
+    let descriptors = "CpAEChdpbXBvcnRlZC9pbXBvcnRlZC5wcm90bxIIaW1wb3J0ZWQiOQoJUmVjdGFuZ2x\
+    lEhQKBXdpZHRoGAEgASgFUgV3aWR0aBIWCgZsZW5ndGgYAiABKAVSBmxlbmd0aCJIChhSZWN0YW5nbGVMb2NhdGlvblJ\
+    lcXVlc3QSFAoFd2lkdGgYASABKAVSBXdpZHRoEhYKBmxlbmd0aBgCIAEoBVIGbGVuZ3RoIkgKGVJlY3RhbmdsZUxvY2F0\
+    aW9uUmVzcG9uc2USKwoIbG9jYXRpb24YASABKAsyDy5pbXBvcnRlZC5Qb2ludFIIbG9jYXRpb24iQQoFUG9pbnQSGgoIb\
+    GF0aXR1ZGUYASABKAVSCGxhdGl0dWRlEhwKCWxvbmdpdHVkZRgCIAEoBVIJbG9uZ2l0dWRlMmUKCEltcG9ydGVkElkKDE\
+    dldFJlY3RhbmdsZRIiLmltcG9ydGVkLlJlY3RhbmdsZUxvY2F0aW9uUmVxdWVzdBojLmltcG9ydGVkLlJlY3RhbmdsZUxv\
+    Y2F0aW9uUmVzcG9uc2UiAEJqChlpby5ncnBjLmV4YW1wbGVzLmltcG9ydGVkQg1JbXBvcnRlZFByb3RvUAFaPGdpdGh1Y\
+    i5jb20vcGFjdC1mb3VuZGF0aW9uL3BhY3QtZ28vdjIvZXhhbXBsZXMvZ3JwYy9pbXBvcnRlZGIGcHJvdG8zCooECg1wcm\
+    ltYXJ5LnByb3RvEgdwcmltYXJ5GhdpbXBvcnRlZC9pbXBvcnRlZC5wcm90byJNCglSZWN0YW5nbGUSHwoCbG8YASABKAs\
+    yDy5pbXBvcnRlZC5Qb2ludFICbG8SHwoCaGkYAiABKAsyDy5pbXBvcnRlZC5Qb2ludFICaGkiZAoYUmVjdGFuZ2xlTG9j\
+    YXRpb25SZXF1ZXN0EgwKAXgYASABKAVSAXgSDAoBeRgCIAEoBVIBeRIUCgV3aWR0aBgDIAEoBVIFd2lkdGgSFgoGbGVuZ\
+    3RoGAQgASgFUgZsZW5ndGgiTQoZUmVjdGFuZ2xlTG9jYXRpb25SZXNwb25zZRIwCglyZWN0YW5nbGUYASABKAsyEi5wcml\
+    tYXJ5LlJlY3RhbmdsZVIJcmVjdGFuZ2xlMmIKB1ByaW1hcnkSVwoMR2V0UmVjdGFuZ2xlEiEucHJpbWFyeS5SZWN0YW5nb\
+    GVMb2NhdGlvblJlcXVlc3QaIi5wcmltYXJ5LlJlY3RhbmdsZUxvY2F0aW9uUmVzcG9uc2UiAEJnChhpby5ncnBjLmV4YW1\
+    wbGVzLnByaW1hcnlCDFByaW1hcnlQcm90b1ABWjtnaXRodWIuY29tL3BhY3QtZm91bmRhdGlvbi9wYWN0LWdvL3YyL2V4Y\
+    W1wbGVzL2dycGMvcHJpbWFyeWIGcHJvdG8z";
+    let decoded = BASE64.decode(descriptors).unwrap();
+    let bytes = Bytes::copy_from_slice(decoded.as_slice());
+    let fds = FileDescriptorSet::decode(bytes).unwrap();
+    let all: HashMap<String, &FileDescriptorProto> = fds.file
+      .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
+      .collect();
+
+    let file_descriptor = &fds.file[0];
+    let primary_descriptor = find_file_descriptor_for_package(".primary", file_descriptor, &all).unwrap();
+    expect!(primary_descriptor.name).to(be_some().value("primary.proto".to_string()));
+    let imported_descriptor = find_file_descriptor_for_package("imported", file_descriptor, &all).unwrap();
+    expect!(imported_descriptor.name).to(be_some().value("imported/imported.proto".to_string()));
   }
 }
