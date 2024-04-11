@@ -1,3 +1,28 @@
+# 0.3.14 - Bugfix Release
+
+* 9ba9b24 - chore: add macos to the release binaries (Ronald Holshausen, Fri Apr 12 09:29:16 2024 +1000)
+* d9ce8fb - fix: Take into account package names when looking for message types in the descriptors (Ronald Holshausen, Thu Apr 11 16:11:07 2024 +1000)
+* 4587ac7 - fix: Unknown varint fields were incorrectly treated as u64 values with 8 bytes #53 (Ronald Holshausen, Wed Apr 10 15:24:16 2024 +1000)
+* d31aac8 - chore: Add example provider with new fields added #53 (Ronald Holshausen, Wed Apr 10 15:18:29 2024 +1000)
+* 0b9ac92 - chore: Add example with consumer and provider #53 (Ronald Holshausen, Wed Apr 10 12:07:35 2024 +1000)
+* 7414995 - chore: Update dependencies (Ronald Holshausen, Tue Apr 9 14:44:20 2024 +1000)
+* fb3faf2 - chore: Update clap to latest (Ronald Holshausen, Tue Apr 9 14:36:32 2024 +1000)
+* 56ddeab - chore: Remove locked version of ahash (Ronald Holshausen, Tue Apr 9 13:55:43 2024 +1000)
+* f5b6ad9 - chore: Disable test that hangs in CI Windows agents (Ronald Holshausen, Tue Apr 9 13:55:07 2024 +1000)
+* b50488d - chore: Get musl build to work on latest Rust (1.77.1) (Ronald Holshausen, Tue Apr 9 13:38:19 2024 +1000)
+* 0b2cf00 - chore: Fix musl build (Ronald Holshausen, Tue Apr 9 12:42:27 2024 +1000)
+* 5aacf85 - chore: support musl build with Rust 1.77.1 (Ronald Holshausen, Tue Apr 9 11:56:36 2024 +1000)
+* bdb815c - chore: Update dependencies (Ronald Holshausen, Tue Apr 9 10:58:21 2024 +1000)
+* a88de0c - chore: Lock ahash crate as 0.8.8 requires Rust 1.72 (Ronald Holshausen, Tue Feb 13 11:20:36 2024 +1100)
+* 067394d - chore: Downgrade ahash crate as 0.8.8 requires Rust 1.72 (Ronald Holshausen, Tue Feb 13 10:03:52 2024 +1100)
+* 6751c74 - chore: Lock clap crate to 4.4 as 4.5 requires Rust 1.75 (Ronald Holshausen, Mon Feb 12 16:51:20 2024 +1100)
+* 3aee270 - chore: Updated integrated_tests/response_metadata to use the corrected version of pact_consumer (Ronald Holshausen, Mon Feb 12 15:56:45 2024 +1100)
+* 4d4aa78 - test: integrated test for response metadata (Stan, Thu Feb 8 17:12:10 2024 -0800)
+* 7dbf946 - chore: Cleanup clippy warnings (Ronald Holshausen, Wed Feb 7 23:21:05 2024 +1100)
+* 4a6772f - chore: Cleanup clippy warnings (Ronald Holshausen, Wed Feb 7 23:09:47 2024 +1100)
+* 76067b2 - fix: Support configuring primitve values for fields with native values instead of strings (Ronald Holshausen, Wed Feb 7 22:59:33 2024 +1100)
+* 1e4b8eb - bump version to 0.3.14 (Ronald Holshausen, Wed Feb 7 17:26:41 2024 +1100)
+
 # 0.3.13 - Bugfix Release
 
 * 341d4d7 - fix: do not inject a default value for repeated fields #45 (Ronald Holshausen, Wed Feb 7 16:13:59 2024 +1100)
