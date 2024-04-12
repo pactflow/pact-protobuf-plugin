@@ -68,6 +68,7 @@ tracing-log = "0.2.0"
 uuid = { version = "1.7.0", features = ["v4"] }
 zip = "0.6.6"
 
+# 0.1.29 fails on Alpine with: cannot find function `preadv2` in crate `libc`
 jobserver = "=0.1.28"
 
 [dev-dependencies]
