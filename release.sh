@@ -15,7 +15,8 @@ mkdir -p target/artifacts
 
 case "$1" in
   Linux)    echo "Building for Linux"
-            docker run --rm --user "$(id -u)":"$(id -g)" -v "$(pwd):/workspace" -w /workspace -t pactfoundation/rust-musl-build -c 'cargo build --release'
+            docker run --rm --user "$(id -u)":"$(id -g)" -v "$(pwd):/workspace" -w /workspace -t \
+              pactfoundation/rust-musl-build -c 'LIBZ_SYS_STATIC=1 cargo build --release'
             gzip -c target/release/pact-protobuf-plugin > target/artifacts/pact-protobuf-plugin-linux-x86_64.gz
             openssl dgst -sha256 -r target/artifacts/pact-protobuf-plugin-linux-x86_64.gz > target/artifacts/pact-protobuf-plugin-linux-x86_64.gz.sha256
             cp pact-plugin.json target/artifacts
