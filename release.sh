@@ -15,7 +15,8 @@ mkdir -p target/artifacts
 
 case "$1" in
   Linux)    echo "Building for Linux"
-            docker run --rm --user "$(id -u)":"$(id -g)" -v "$(pwd):/workspace" -w /workspace -t pactfoundation/rust-musl-build -c 'cargo build --release'
+            docker run --rm --user "$(id -u)":"$(id -g)" -v "$(pwd):/workspace" -w /workspace -t \
+              pactfoundation/rust-musl-build -c 'LIBZ_SYS_STATIC=1 cargo build --release'
             gzip -c target/release/pact-protobuf-plugin > target/artifacts/pact-protobuf-plugin-linux-x86_64.gz
             openssl dgst -sha256 -r target/artifacts/pact-protobuf-plugin-linux-x86_64.gz > target/artifacts/pact-protobuf-plugin-linux-x86_64.gz.sha256
             cp pact-plugin.json target/artifacts
@@ -43,8 +44,9 @@ case "$1" in
             openssl dgst -sha256 -r target/artifacts/pact-protobuf-plugin-macos-x86_64.gz > target/artifacts/pact-protobuf-plugin-macos-x86_64.gz.sha256
 
             # M1
-            export SDKROOT=$(xcrun -sdk macosx11.1 --show-sdk-path)
-            export MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx11.1 --show-sdk-platform-version)
+            # export SDKROOT=$(xcrun -sdk macosx11.1 --show-sdk-path)
+            # export MACOSX_DEPLOYMENT_TARGET=$(xcrun -sdk macosx11.1 --show-sdk-platform-version)
+            export MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-12}
             cargo build --target aarch64-apple-darwin --release
 
             gzip -c target/aarch64-apple-darwin/release/pact-protobuf-plugin > target/artifacts/pact-protobuf-plugin-osx-aarch64.gz
@@ -57,4 +59,3 @@ case "$1" in
             exit 1
             ;;
 esac
-
