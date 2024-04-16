@@ -7,7 +7,7 @@ use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
 use itertools::{Either, Itertools};
 use maplit::hashmap;
-use pact_matching::{BodyMatchResult, CoreMatchingContext, DiffConfig, MatchingContext, Mismatch};
+use pact_matching::{BodyMatchResult, CommonMismatch, CoreMatchingContext, DiffConfig, MatchingContext, Mismatch};
 use pact_matching::json::compare_json;
 use pact_matching::matchers::{match_values, Matches};
 use pact_matching::matchingrules::{compare_lists_with_matchingrule, compare_maps_with_matchingrule};
@@ -430,7 +430,7 @@ fn compare_field(
 
             match compare_json(path, &expected_json, &actual_json, matching_context) {
               Ok(_) => vec![],
-              Err(err) => err
+              Err(err) => err.iter().map(CommonMismatch::to_body_mismatch).collect()
             }
           }
           _ => {
@@ -530,7 +530,7 @@ fn compare_repeated_field(
 ) -> Vec<Mismatch> {
   trace!(">>> compare_repeated_field({}, {:?}, {:?})", path, expected_fields, actual_fields);
 
-  let mut result = vec![];
+  let mut result: Vec<Mismatch> = vec![];
 
   if matching_context.matcher_is_defined(path) {
     debug!("compare_repeated_field: Matcher defined for path '{}'", path);
@@ -542,10 +542,10 @@ fn compare_repeated_field(
           if comparison.is_empty() {
             Ok(())
           } else {
-            Err(comparison)
+            Err(comparison.iter().cloned().map(|m| m.into()).collect())
           }
         }) {
-        result.extend(comparison);
+        result.extend(comparison.iter().map(CommonMismatch::to_body_mismatch));
       }
     }
   } else if expected_fields.is_empty() && !actual_fields.is_empty() {
@@ -591,7 +591,7 @@ fn compare_map_field(
 ) -> Vec<Mismatch> {
   trace!(">> compare_map_field('{}', {:?}, {:?})", path, expected_fields, actual_fields);
 
-  let mut result = vec![];
+  let mut result: Vec<Mismatch> = vec![];
 
   let expected_map = expected_fields.iter()
     .filter_map(|f| {
@@ -617,14 +617,14 @@ fn compare_map_field(
       trace!("compare_map_field: matcher = {:?}", matcher);
       if let Err(comparison) = compare_maps_with_matchingrule(matcher, rules.cascaded, path,
         &expected_map, &actual_map, matching_context, &mut |field_path, expected, actual, context| {
-          let comparison = compare_field(field_path, &expected.value, &expected.field_descriptor, &actual.value, context, descriptors);
-          if comparison.is_empty() {
+          let field_result = compare_field(field_path, &expected.value, &expected.field_descriptor, &actual.value, context, descriptors);
+          if field_result.is_empty() {
             Ok(())
           } else {
-            Err(comparison)
+            Err(field_result.iter().cloned().map(|m| m.into()).collect())
           }
         }) {
-        result.extend(comparison);
+        result.extend(comparison.iter().map(CommonMismatch::to_body_mismatch));
       }
     }
   } else {
@@ -645,7 +645,7 @@ fn compare_map_field(
       let expected_keys = expected_map.keys().cloned().collect();
       let actual_keys = actual_map.keys().cloned().collect();
       if let Err(mismatches) = matching_context.match_keys(path, &expected_keys, &actual_keys) {
-        result.extend(mismatches);
+        result.extend(mismatches.iter().map(CommonMismatch::to_body_mismatch));
       }
       for (key, value) in &expected_map {
         let entry_path = path.join(key);

@@ -11,7 +11,6 @@ use pact_protobuf_plugin::message_decoder::ProtobufFieldData::{Boolean, Double, 
 use pact_protobuf_plugin::utils::{find_message_type_by_name, get_descriptors_for_interaction, lookup_interaction_config};
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
-#[cfg_attr(target_os = "windows", ignore)] // This test currently hangs on Windows CI
 async fn basic_values_test() {
   let mut pact_builder = PactBuilderAsync::new_v4("basic_values", "protobuf-plugin");
   pact_builder
