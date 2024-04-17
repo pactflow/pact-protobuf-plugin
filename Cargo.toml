@@ -26,20 +26,20 @@ exclude = [
 ansi_term = "0.12.1"
 anyhow = "1.0.71"
 async-trait = "0.1.68"
-base64 = "0.21.2"
-bytes = "1.4.0"
+base64 = "0.22.0"
+bytes = "1.6.0"
 clap = { version = "4.5.4", features = ["cargo", "env"] }
-chrono = { version = "0.4.26", features = ["std", "clock"], default_features = false }
-futures = "0.3.28"
+chrono = { version = "0.4.28", features = ["std", "clock"], default_features = false }
+futures = "0.3.30"
 http = "0.2.11"
 http-body = "0.4.6"
 hyper = { version = "0.14.28", features = [ "full" ] }
-itertools = "0.12.0"
+itertools = "0.12.1"
 lazy_static = "1.4.0"
 maplit = "1.0.2"
 md5 = "0.7.0"
 num = "0.4.1"
-os_info = "3.7.0"
+os_info = "3.8.2"
 pact_matching = "~1.2.1"
 pact_models = "~1.1.18"
 pact-plugin-driver = "~0.6.0"
@@ -51,39 +51,40 @@ rand_regex = "0.17.0"
 regex = "1.8.3"
 regex-syntax = "0.8.3"
 reqwest = { version = "0.12.3", default-features = false, features = ["rustls-tls", "rustls-tls-native-roots", "json", "gzip", "deflate"] }
-serde_json = "1.0.96"
+serde_json = "1.0.116"
 serde_yaml = "0.9.21"
-tempfile = "3.10.0"
+tempfile = "3.10.1"
 tonic = "0.11.0"
-tokio = { version = "1.36.0", features = ["full"] }
+tokio = { version = "1.37.0", features = ["full"] }
 tower = { version = "0.4.13", features = [ "full" ] }
 tower-http = { version = "0.4.0", features = [ "full" ] }
 tower-service = { version = "0.3.2" }
-tracing = "0.1.37"
-tracing-bunyan-formatter = "0.3.7"
-tracing-core = "0.1.31"
+tracing = "0.1.40"
+tracing-bunyan-formatter = "0.3.9"
+tracing-core = "0.1.32"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "local-time", "tracing-log"] }
 tracing-appender = "0.2.3"
 tracing-log = "0.2.0"
-uuid = { version = "1.7.0", features = ["v4"] }
+uuid = { version = "1.8.0", features = ["v4"] }
 zip = "0.6.6"
 
 # 0.1.29 fails on Alpine with: cannot find function `preadv2` in crate `libc`
 jobserver = "=0.1.28"
 
 [dev-dependencies]
-env_logger = "0.11.1"
+env_logger = "0.11.3"
 expectest = "0.12"
-home = "0.5.5"
+home = "0.5.9"
 pact_consumer = "~1.2.0"
 panic-message = "0.3.0"
-pretty_assertions = "1.3.0"
+pretty_assertions = "1.4.0"
 rocket = "0.5.0"
-rstest = "0.18.2"
-serde = "1.0.163"
-test-log = "0.2.11"
+rstest = "0.19.0"
+serde = "1.0.198"
+test-log = "0.2.15"
 trim-margin = "0.1.0"
 
 [build-dependencies]
-built = { version = "0.7.1", features = [ "git2" ] }
-os_info = "3.7.0"
+built = { version = "0.7.2", features = [ "git2" ] }
+os_info = "3.8.2"
+
