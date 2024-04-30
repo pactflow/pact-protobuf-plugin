@@ -4,6 +4,10 @@ on:
   release:
     types: [published]
 
+  pull_request:
+    branches:
+      - main
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: false
@@ -13,18 +17,43 @@ jobs:
     runs-on: ${{ matrix.operating-system }}
     strategy:
       matrix:
-        operating-system: [ubuntu-20.04, windows-2019, macos-12]
-    env:
-      pact_do_not_track: true
+        include:
+          - operating-system: ubuntu-20.04
+            targets: x86_64-unknown-linux-gnu,x86_64-unknown-linux-musl,aarch64-unknown-linux-gnu,aarch64-unknown-linux-musl
+          - operating-system: windows-2019
+            targets: aarch64-pc-windows-msvc,x86_64-pc-windows-msvc
+          - operating-system: macos-12
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+      fail-fast: false
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: Install stable Rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
           toolchain: stable
-          override: true
-          target: aarch64-apple-darwin
+          targets: ${{ matrix.targets }}
+
+      - name: Rust caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Set up QEMU
+        if: runner.os == 'Linux'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: runner.os == 'Linux'
+        uses: docker/setup-buildx-action@v3
+      - name: Cargo flags
+        id: cargo-flags
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" = "release" ]]; then
+            echo "flags=--release" >> "$GITHUB_OUTPUT"
+          else
+            echo "flags=" >> "$GITHUB_OUTPUT"
+          fi 
       - name: Install Protoc
         uses: arduino/setup-protoc@v1
         with:
@@ -32,13 +61,15 @@ jobs:
       - name: Install LLVM
         run: choco install -y llvm
         if: runner.os == 'Windows'
-      - run: ./release.sh ${{ runner.os }} ${{ github.ref }}
+      - run: ./release.sh ${{ runner.os }} ${{ github.ref }} ${{ steps.cargo-flags.outputs.flags }}
         shell: bash
       - name: Upload Release Assets
+        if: |
+          startsWith(github.ref, 'refs/tags/v')
         id: upload-release-asset
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: target/artifacts/*
+          file: release_artifacts/*
           file_glob: true
           tag: ${{ github.ref }}
