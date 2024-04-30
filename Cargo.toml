@@ -88,3 +88,8 @@ trim-margin = "0.1.0"
 built = { version = "0.7.2", features = [ "git2" ] }
 os_info = "3.8.2"
 
+[profile.release]
+strip = true
+opt-level = "z"
+codegen-units = 1
+lto = true
