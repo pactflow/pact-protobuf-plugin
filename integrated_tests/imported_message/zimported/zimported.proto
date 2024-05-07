@@ -1,39 +1,39 @@
 
 syntax = "proto3";
 
-option go_package = "github.com/pact-foundation/pact-go/v2/examples/grpc/imported";
+option go_package = "github.com/pact-foundation/pact-go/v2/examples/grpc/zimported";
 option java_multiple_files = true;
-option java_package = "io.grpc.examples.imported";
+option java_package = "io.grpc.examples.zimported";
 option java_outer_classname = "ImportedProto";
 
-package imported;
+package zimported;
 
-service Imported {
+service ZImported {
   rpc GetRectangle(RectangleLocationRequest) returns (RectangleLocationResponse) {}
 }
 
 message Rectangle {
   // The width of the rectangle.
-  int32 width = 1;
+  int32 zwidth = 1;
 
   // The length of the rectangle.
-  int32 length = 2;
+  int32 zlength = 2;
 }
 
 // Request message for GetRectangle method. This message has different fields,
 // but the same name as a message defined in primary.proto
 message RectangleLocationRequest {
-  int32 a = 1;
-  int32 b = 2;
+  int32 zx = 1;
+  int32 zb = 2;
 }
 
 // Response message for GetRectangle method. This message has different fields,
 // but the same name as a message defined in primary.proto
 message RectangleLocationResponse {
-  Point location = 1;
+  Point zlocation = 1;
 }
 
 message Point {
-  int32 latitude = 1;
-  int32 longitude = 2;
+  int32 zlatitude = 1;
+  int32 zlongitude = 2;
 }
