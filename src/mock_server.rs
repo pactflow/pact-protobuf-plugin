@@ -24,7 +24,7 @@ use pact_models::plugins::PluginData;
 use pact_models::prelude::v4::V4Pact;
 use pact_models::v4::sync_message::SynchronousMessage;
 use prost::Message;
-use prost_types::{FileDescriptorSet, MethodDescriptorProto};
+use prost_types::{FileDescriptorProto, FileDescriptorSet, MethodDescriptorProto};
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::runtime::Handle;
@@ -42,7 +42,7 @@ use crate::dynamic_message::PactCodec;
 use crate::metadata::MetadataMatchResult;
 use crate::mock_service::MockService;
 use crate::tcp::TcpIncoming;
-use crate::utils::{find_message_type_by_name, last_name};
+use crate::utils::{last_name, split_name, find_message_descriptor};
 
 lazy_static! {
   pub static ref MOCK_SERVER_STATE: Mutex<HashMap<String, (Sender<()>, HashMap<String, (usize, Vec<(BodyMatchResult, MetadataMatchResult)>)>)>> = Mutex::new(hashmap!{});
@@ -54,7 +54,7 @@ pub struct GrpcMockServer {
   pact: V4Pact,
   plugin_config: PluginData,
   descriptors: HashMap<String, FileDescriptorSet>,
-  routes: HashMap<String, (FileDescriptorSet, MethodDescriptorProto, SynchronousMessage)>,
+  routes: HashMap<String, (FileDescriptorSet, FileDescriptorProto, MethodDescriptorProto, SynchronousMessage)>,
   /// Server key for this mock server
   pub server_key: String,
   /// test context pass in from the test framework
@@ -103,14 +103,11 @@ impl GrpcMockServer
           if let Some(descriptors) = self.descriptors.get(json_to_string(key).as_str()) {
             if let Some(service) = c.get("service") {
               if let Some((service_name, method_name)) = json_to_string(service).split_once('/') {
-                descriptors.file.iter().filter_map(|d| {
-                  d.service.iter().find(|s| s.name.clone().unwrap_or_default() == service_name)
-                }).next()
-                  .and_then(|d| {
-                    d.method.iter()
-                      .find(|m| m.name.clone().unwrap_or_default() == method_name)
-                      .map(|m| (format!("{service_name}/{method_name}"), (descriptors.clone(), m.clone(), i.clone())))
-                  })
+                return descriptors.file.iter().find_map(|fd| fd.service.iter().find(|s| s.name.clone().unwrap_or_default() == service_name).map( |s| s.method.iter().
+                      find(|m| m.name.clone().unwrap_or_default() == method_name).
+                      map(|m| (format!("{service_name}/{method_name}"), (descriptors.clone(), fd.clone(), m.clone(), i.clone())))
+                    )
+                  ).unwrap();
               } else {
                 // protobuf service was not properly formed <SERViCE>/<METHOD>
                 None
@@ -244,16 +241,24 @@ impl Service<Request<hyper::Body>> for GrpcMockServer  {
             if let Some((service, method)) = request_path[1..].split_once('/') {
               let service_name = last_name(service);
               let lookup = format!("{service_name}/{method}");
-              if let Some((file, method_descriptor, message)) = routes.get(lookup.as_str()) {
+              if let Some((file, file_descriptor, method_descriptor, message)) = routes.get(lookup.as_str()) {
                 trace!(message = message.description.as_str(), "Found route for service call");
+                let file_descriptors: HashMap<String, &FileDescriptorProto> = file.file.iter().map(
+                  |des| (des.name.clone().unwrap_or_default(), des)).collect();
+                let input_name = method_descriptor.input_type.as_ref().expect(format!(
+                  "Input message name is empty for service {}/{}", service_name, method).as_str());
+                let (input_message_name, input_package_name) = split_name(input_name);
+                let input_message = find_message_descriptor(
+                  input_message_name, input_package_name, file_descriptor, &file_descriptors);
 
-                let input_message_name = method_descriptor.input_type.clone().unwrap_or_default();
-                let input_message = find_message_type_by_name(last_name(input_message_name.as_str()), file);
-                let output_message_name = method_descriptor.output_type.clone().unwrap_or_default();
-                let output_message = find_message_type_by_name(last_name(output_message_name.as_str()), file);
+                let output_name = method_descriptor.output_type.as_ref().expect(format!(
+                  "Output message name is empty for service {}/{}", service_name, method).as_str());
+                let (output_message_name, output_package_name) = split_name(output_name);
+                let output_message = find_message_descriptor(
+                  output_message_name, output_package_name, file_descriptor, &file_descriptors);
 
-                if let Ok((input_message, _)) = input_message {
-                  if let Ok((output_message, _)) = output_message {
+                if let Ok(input_message) = input_message {
+                  if let Ok(output_message) = output_message {
                     let codec = PactCodec::new(file, &input_message, &output_message, message);
                     let mock_service = MockService::new(file, service_name,
                       method_descriptor, &input_message, &output_message, message, server_key.as_str(),

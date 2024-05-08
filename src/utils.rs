@@ -45,7 +45,11 @@ pub fn split_name(name: &str) -> (&str, Option<&str>) {
       if package.is_empty() {
         (name, None)
       } else {
-        (name, Some(package))
+        if let Some(trimmed) = package.strip_prefix(".") {
+          (name, Some(trimmed))
+        } else {
+          (name, Some(package))
+        }
       }
     })
     .unwrap_or_else(|| (name, None))
@@ -91,6 +95,20 @@ pub fn find_message_type_in_file_descriptors(
         .find_map(|fd| find_message_type_in_file_descriptor(message_type, fd).ok())
         .ok_or_else(|| anyhow!("Did not find a message type '{}' in any of the file descriptors", message_type))
     })
+}
+
+// Search for a message by name, first in the current file descriptor, then in all descriptors.
+pub fn find_message_descriptor(
+  message_name: &str,
+  package: Option<&str>,
+  file_descriptor: &FileDescriptorProto,
+  all_descriptors: &HashMap<String, &FileDescriptorProto>
+) -> anyhow::Result<DescriptorProto> {
+  if let Some(package) = package {
+    find_message_with_package_in_file_descriptors(message_name, package, file_descriptor, all_descriptors)
+  } else {
+    find_message_type_in_file_descriptors(message_name, file_descriptor, all_descriptors)
+  }
 }
 
 /// Search for a message by type name and package in the file descriptor, and if not found,

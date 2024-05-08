@@ -41,12 +41,10 @@ use crate::protoc::Protoc;
 use crate::utils::{
   find_enum_value_by_name,
   find_enum_value_by_name_in_message,
-  find_message_type_in_file_descriptors,
-  find_message_with_package_in_file_descriptors,
+  find_message_descriptor,
   find_nested_type,
   is_map_field,
   is_repeated_field,
-  last_name,
   prost_string,
   split_name
 };
@@ -281,20 +279,6 @@ fn request_part(
       None => Ok(btreemap!{}),
       Some(result) => result
     }
-  }
-}
-
-// Search for a message by name, first in the current file descriptor, then in all descriptors.
-fn find_message_descriptor(
-  message_name: &str,
-  package: Option<&str>,
-  file_descriptor: &FileDescriptorProto,
-  all_descriptors: &HashMap<String, &FileDescriptorProto>
-) -> anyhow::Result<DescriptorProto> {
-  if let Some(package) = package {
-    find_message_with_package_in_file_descriptors(message_name, package, file_descriptor, all_descriptors)
-  } else {
-    find_message_type_in_file_descriptors(message_name, file_descriptor, all_descriptors)
   }
 }
 
@@ -650,9 +634,9 @@ fn build_single_embedded_field_value(
       Ok(None)
     } else if let Value::Object(config) = value {
       debug!("Configuring the message from config {:?}", config);
-      let message_name = last_name(type_name.as_str());
+      let (message_name, package_name) = split_name(type_name.as_str());
       let embedded_type = find_nested_type(&message_builder.descriptor, field_descriptor)
-        .or_else(|| find_message_type_in_file_descriptors(message_name, &message_builder.file_descriptor, all_descriptors).ok())
+        .or_else(|| find_message_descriptor(message_name, package_name, &message_builder.file_descriptor, all_descriptors).ok())
         .ok_or_else(|| anyhow!("Did not find message '{}' in the current message or in the file descriptors", type_name))?;
       let mut embedded_builder = MessageBuilder::new(&embedded_type, message_name, &message_builder.file_descriptor);
 
