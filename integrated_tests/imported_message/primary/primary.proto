@@ -9,6 +9,7 @@ option java_package = "io.grpc.examples.primary";
 option java_outer_classname = "PrimaryProto";
 
 import "imported/imported.proto";
+import "zimported/zimported.proto";
 
 package primary;
 
