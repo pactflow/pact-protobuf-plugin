@@ -1,3 +1,21 @@
+# 0.3.15 - Bugfix Release
+
+* 63b141f - Merge pull request #57 from YOU54F/feat/slim_bins (Ronald Holshausen, Fri May 10 09:58:25 2024 +1000)
+* ccf66da - Merge pull request #56 from YOU54F/feat/musl_linux_win_aarch64 (Ronald Holshausen, Fri May 10 09:57:46 2024 +1000)
+* 0f47677 - fix: package namespaces are not respected (Eric Muller, Wed May 8 15:23:02 2024 -0700)
+* d8e8b89 - demo bug with conflicting names (Stan, Tue May 7 13:12:18 2024 -0700)
+* 652fbd4 - feat: reduce executable size (Yousaf Nabi, Tue Apr 30 17:43:47 2024 +0100)
+* 99cdd58 - feat: linux musl static bins / windows aarch64 (Yousaf Nabi, Tue Apr 30 17:43:14 2024 +0100)
+* 40abddf - chore(ci): macos-12 (Yousaf Nabi, Tue Apr 30 14:51:11 2024 +0100)
+* 905967e - chore: Update dependencies (Ronald Holshausen, Wed Apr 17 10:45:56 2024 +1000)
+* 02b236e - chore: Update dependencies (Ronald Holshausen, Wed Apr 17 10:34:31 2024 +1000)
+* fb216f1 - chore: Add integrated_tests back into main project (Ronald Holshausen, Tue Apr 16 16:56:02 2024 +1000)
+* 454e89d - fix: Upgrade dependencies to fix tests hanging on Windows (Ronald Holshausen, Tue Apr 16 16:50:03 2024 +1000)
+* 821047f - Merge branch 'release/0.3.14' (Ronald Holshausen, Fri Apr 12 15:30:06 2024 +1000)
+* 713bfe5 - chore: lock jobserver to previous version as 0.1.29 fails to compile (Ronald Holshausen, Fri Apr 12 13:51:50 2024 +1000)
+* e4cbc3f - chore: lock jobserver to previous version as 0.1.29 fails to compile (Ronald Holshausen, Fri Apr 12 13:47:00 2024 +1000)
+* 6ff8372 - bump version to 0.3.15 (Ronald Holshausen, Fri Apr 12 09:54:37 2024 +1000)
+
 # 0.3.14 - Bugfix Release
 
 * 9ba9b24 - chore: add macos to the release binaries (Ronald Holshausen, Fri Apr 12 09:29:16 2024 +1000)
