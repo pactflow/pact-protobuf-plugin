@@ -10,7 +10,7 @@ members = [
 
 [package]
 name = "pact-protobuf-plugin"
-version = "0.3.15"
+version = "0.3.16"
 edition = "2021"
 authors = ["Ronald Holshausen <ronald.holshausen@gmail.com>"]
 description = "Pact plugin for Protobufs and gRPC"
