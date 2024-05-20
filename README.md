@@ -504,6 +504,25 @@ I.e., updated manifest to use 127.0.0.1 as the host to bind to
 }
 ```
 
+## Compatibility
+
+<details><summary>Supported Platforms</summary>
+
+| OS      | Architecture | Supported  | Pact Protobuf Plugin Version |
+| ------- | ------------ | ---------  | ---------------- |
+| OSX     | x86_64       | ✅         | All              |
+| Linux   | x86_64       | ✅         | All              |
+| Windows | x86_64       | ✅         | All              |
+| OSX     | arm64        | ✅         | All              |
+| Linux   | arm64        | ✅         | >=0.1.11         |
+| Windows | arm64        | ✅         | >=0.3.15         |
+| Alpine  | x86_64       | ✅         | >=0.1.9          |
+| Alpine  | arm64        | ✅         | >=0.3.15         |
+
+_Note:_ From v0.3.15, All Linux executables are statically built with `musl` and are designed to work against `glibc` (eg, Debian) and `musl` (eg, Alpine) based distos. 
+
+</details>
+
 ## Support
 
 Join us on slack [![slack](https://slack.pact.io/badge.svg)](https://slack.pact.io) in the **#protobufs** channel
