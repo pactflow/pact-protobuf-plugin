@@ -39,7 +39,7 @@ mod tests {
                     i.contents_from(json!({
                         "pact:proto": proto_file,
                         "pact:proto-service": "Primary/GetRectangle",
-                        "pact:content-type": "application/protobuf",
+                        "pact:content-type": "application/grpc",
                         "pact:protobuf-config": {
                             "additionalIncludes": [ proto_include ]
                         },

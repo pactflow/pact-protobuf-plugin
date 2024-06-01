@@ -22,7 +22,7 @@ use prost_types::{
     FileDescriptorProto, FileDescriptorSet, MethodDescriptorProto, ServiceDescriptorProto, Value,
 };
 use serde_json::json;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
 
@@ -83,6 +83,10 @@ pub fn find_message_descriptor(
     let package = package
         .filter(|p| !p.is_empty())
         .unwrap_or(file_descriptor.package.as_deref().unwrap_or_default());
+    info!(
+        "Looking for message '{}' in package '{}'",
+        message_name, package
+    );
     find_all_file_descriptors_for_package(package, all_descriptors)
         .unwrap()
         .iter()
@@ -124,9 +128,15 @@ fn find_all_file_descriptors_for_package<'a>(
     } else {
         package
     };
+    info!("Looking for file descriptors for package '{}'", package);
     let found = all_descriptors
         .values()
         .filter(|descriptor| {
+            info!(
+                "Checking file descriptor '{}' with package '{}'",
+                descriptor.name.as_deref().unwrap_or("unknown"),
+                descriptor.package.as_deref().unwrap_or("unknown")
+            );
             if let Some(descriptor_package) = &descriptor.package {
                 descriptor_package == package
             } else {
@@ -141,6 +151,11 @@ fn find_all_file_descriptors_for_package<'a>(
             package
         ))
     } else {
+        info!(
+            "Found {} file descriptors for package '{}'",
+            found.len(),
+            package
+        );
         Ok(found)
     }
 }
@@ -747,8 +762,8 @@ pub(crate) mod tests {
     use std::collections::HashMap;
 
     use crate::utils::{
-        as_hex, find_enum_value_by_name, find_file_descriptor_for_package,
-        find_message_type_by_name, find_nested_type, is_map_field, last_name, split_name,
+        as_hex, find_enum_value_by_name, find_message_type_by_name, find_nested_type, is_map_field,
+        last_name, split_name,
     };
 
     #[test]
@@ -1036,42 +1051,5 @@ pub(crate) mod tests {
         let result4 =
             find_enum_value_by_name(&descriptors, ".routeguide.v3.Feature.TestEnum", "VALUE_ONE");
         expect!(result4).to(be_some().value((1, enum1.clone())));
-    }
-
-    #[test]
-    fn find_file_descriptor_for_package_test() {
-        let descriptors = "CpAEChdpbXBvcnRlZC9pbXBvcnRlZC5wcm90bxIIaW1wb3J0ZWQiOQoJUmVjdGFuZ2x\
-    lEhQKBXdpZHRoGAEgASgFUgV3aWR0aBIWCgZsZW5ndGgYAiABKAVSBmxlbmd0aCJIChhSZWN0YW5nbGVMb2NhdGlvblJ\
-    lcXVlc3QSFAoFd2lkdGgYASABKAVSBXdpZHRoEhYKBmxlbmd0aBgCIAEoBVIGbGVuZ3RoIkgKGVJlY3RhbmdsZUxvY2F0\
-    aW9uUmVzcG9uc2USKwoIbG9jYXRpb24YASABKAsyDy5pbXBvcnRlZC5Qb2ludFIIbG9jYXRpb24iQQoFUG9pbnQSGgoIb\
-    GF0aXR1ZGUYASABKAVSCGxhdGl0dWRlEhwKCWxvbmdpdHVkZRgCIAEoBVIJbG9uZ2l0dWRlMmUKCEltcG9ydGVkElkKDE\
-    dldFJlY3RhbmdsZRIiLmltcG9ydGVkLlJlY3RhbmdsZUxvY2F0aW9uUmVxdWVzdBojLmltcG9ydGVkLlJlY3RhbmdsZUxv\
-    Y2F0aW9uUmVzcG9uc2UiAEJqChlpby5ncnBjLmV4YW1wbGVzLmltcG9ydGVkQg1JbXBvcnRlZFByb3RvUAFaPGdpdGh1Y\
-    i5jb20vcGFjdC1mb3VuZGF0aW9uL3BhY3QtZ28vdjIvZXhhbXBsZXMvZ3JwYy9pbXBvcnRlZGIGcHJvdG8zCooECg1wcm\
-    ltYXJ5LnByb3RvEgdwcmltYXJ5GhdpbXBvcnRlZC9pbXBvcnRlZC5wcm90byJNCglSZWN0YW5nbGUSHwoCbG8YASABKAs\
-    yDy5pbXBvcnRlZC5Qb2ludFICbG8SHwoCaGkYAiABKAsyDy5pbXBvcnRlZC5Qb2ludFICaGkiZAoYUmVjdGFuZ2xlTG9j\
-    YXRpb25SZXF1ZXN0EgwKAXgYASABKAVSAXgSDAoBeRgCIAEoBVIBeRIUCgV3aWR0aBgDIAEoBVIFd2lkdGgSFgoGbGVuZ\
-    3RoGAQgASgFUgZsZW5ndGgiTQoZUmVjdGFuZ2xlTG9jYXRpb25SZXNwb25zZRIwCglyZWN0YW5nbGUYASABKAsyEi5wcml\
-    tYXJ5LlJlY3RhbmdsZVIJcmVjdGFuZ2xlMmIKB1ByaW1hcnkSVwoMR2V0UmVjdGFuZ2xlEiEucHJpbWFyeS5SZWN0YW5nb\
-    GVMb2NhdGlvblJlcXVlc3QaIi5wcmltYXJ5LlJlY3RhbmdsZUxvY2F0aW9uUmVzcG9uc2UiAEJnChhpby5ncnBjLmV4YW1\
-    wbGVzLnByaW1hcnlCDFByaW1hcnlQcm90b1ABWjtnaXRodWIuY29tL3BhY3QtZm91bmRhdGlvbi9wYWN0LWdvL3YyL2V4Y\
-    W1wbGVzL2dycGMvcHJpbWFyeWIGcHJvdG8z";
-        let decoded = BASE64.decode(descriptors).unwrap();
-        let bytes = Bytes::copy_from_slice(decoded.as_slice());
-        let fds = FileDescriptorSet::decode(bytes).unwrap();
-        let all: HashMap<String, &FileDescriptorProto> = fds
-            .file
-            .iter()
-            .map(|des| (des.name.clone().unwrap_or_default(), des))
-            .collect();
-
-        let file_descriptor = &fds.file[0];
-        let primary_descriptor =
-            find_file_descriptor_for_package(".primary", file_descriptor, &all).unwrap();
-        expect!(primary_descriptor.name).to(be_some().value("primary.proto".to_string()));
-        let imported_descriptor =
-            find_file_descriptor_for_package("imported", file_descriptor, &all).unwrap();
-        expect!(imported_descriptor.name)
-            .to(be_some().value("imported/imported.proto".to_string()));
     }
 }

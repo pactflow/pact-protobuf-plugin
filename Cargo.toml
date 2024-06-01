@@ -6,6 +6,7 @@ members = [
     "integrated_tests/repeated_enums",
     "integrated_tests/default_values",
     "integrated_tests/matching_maps",
+    "integrated_tests/imported_message",
 ]
 
 [package]

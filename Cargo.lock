@@ -1400,6 +1400,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "imported_message"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "env_logger 0.10.2",
+ "expectest",
+ "maplit",
+ "pact-plugin-driver 0.4.6",
+ "pact_consumer",
+ "prost 0.11.9",
+ "prost-types 0.11.9",
+ "serde_json",
+ "tokio",
+ "tonic 0.8.3",
+ "tonic-build 0.8.4",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
