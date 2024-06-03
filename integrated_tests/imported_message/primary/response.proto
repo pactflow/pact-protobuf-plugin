@@ -1,0 +1,19 @@
+
+// Copyright 2015 gRPC authors.
+//
+syntax = "proto3";
+
+option go_package = "github.com/pact-foundation/pact-go/v2/examples/grpc/primary";
+option java_multiple_files = true;
+option java_package = "io.grpc.examples.primary";
+option java_outer_classname = "PrimaryProto";
+
+import "primary/rectangle.proto";
+
+package primary;
+
+// A response payload containing a Rectangle.
+message RectangleLocationResponse {
+  // The location of the rectangle.
+  Rectangle rectangle = 1;
+}

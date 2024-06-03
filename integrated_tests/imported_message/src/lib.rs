@@ -17,14 +17,14 @@ mod tests {
     async fn test_proto_client() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let mut pact_builder = PactBuilderAsync::new_v4("grpc-consumer-rust", "imported_message");
+        let mut pact_builder: PactBuilderAsync = PactBuilderAsync::new_v4("grpc-consumer-rust", "imported_message");
         let mock_server = pact_builder
             .using_plugin("protobuf", None)
             .await
             .synchronous_message_interaction(
                 "package namespace not respected",
                 |mut i| async move {
-                    let proto_file = Path::new("primary/primary.proto")
+                    let proto_file = Path::new("primary/service.proto")
                         .canonicalize()
                         .unwrap()
                         .to_string_lossy()

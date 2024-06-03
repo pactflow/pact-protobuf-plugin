@@ -1,0 +1,18 @@
+
+// Copyright 2015 gRPC authors.
+//
+syntax = "proto3";
+
+option go_package = "github.com/pact-foundation/pact-go/v2/examples/grpc/primary";
+option java_multiple_files = true;
+option java_package = "io.grpc.examples.primary";
+option java_outer_classname = "PrimaryProto";
+
+import "primary/request.proto";
+import "primary/response.proto";
+
+package primary;
+
+service Primary {
+  rpc GetRectangle(RectangleLocationRequest) returns (RectangleLocationResponse) {}
+}
