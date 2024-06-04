@@ -97,8 +97,7 @@ pub fn find_message_descriptor(
         "Looking for message '{}' in package '{}'",
         message_name, package
     );
-    find_all_file_descriptors_for_package(package, all_descriptors)
-        .unwrap()
+    find_all_file_descriptors_for_package(package, all_descriptors)?
         .iter()
         .find_map(|fd| find_message_type_in_file_descriptor(message_name, fd).ok())
         .ok_or_else(|| {
@@ -123,11 +122,7 @@ fn find_all_file_descriptors_for_package<'a>(
     let found = all_descriptors
         .values()
         .filter(|descriptor| {
-            debug!(
-                "Checking file descriptor '{}' with package '{}'",
-                descriptor.name.as_deref().unwrap_or("unknown"),
-                descriptor.package.as_deref().unwrap_or("unknown")
-            );
+            debug!("Checking file descriptor '{:?}' with package '{:?}'", descriptor.name, descriptor.package);
             if let Some(descriptor_package) = &descriptor.package {
                 descriptor_package == package
             } else {
@@ -137,16 +132,9 @@ fn find_all_file_descriptors_for_package<'a>(
         .cloned()
         .collect::<Vec<_>>();
     if found.is_empty() {
-        Err(anyhow!(
-            "Did not find a file descriptor with package '{}'",
-            package
-        ))
+        Err(anyhow!("Did not find a file descriptor with package '{}'", package))
     } else {
-        debug!(
-            "Found {} file descriptors for package '{}'",
-            found.len(),
-            package
-        );
+        debug!("Found {} file descriptors for package '{}'", found.len(), package);
         Ok(found)
     }
 }
@@ -999,9 +987,9 @@ pub(crate) mod tests {
 
     // message not found error
     let result_err: Result<DescriptorProto, anyhow::Error> = find_message_descriptor("Response", Some("diff"), &service, all_descriptors);
-    match result_err {
-        Err(e) => expect!(e.to_string()).to(be_equal_to("Did not find a message type 'Response' in any of the file descriptors for package 'diff'")),
-        _ => panic!("Expected an error"),
-    };
+    expect!(result_err.as_ref()).to(be_err());
+    expect!(result_err.unwrap_err().to_string()).to(
+      be_equal_to("Did not find a message type 'Response' in any of the file descriptors for package 'diff'")
+    );
   }
 }
