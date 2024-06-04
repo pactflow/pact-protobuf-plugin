@@ -1633,9 +1633,9 @@ pub(crate) mod tests {
       reserved_range: vec![],
       reserved_name: vec![]
     };
-    let file_descriptor = FileDescriptorProto {
-      name: None,
-      package: None,
+    let file_descriptor: FileDescriptorProto = FileDescriptorProto {
+      name: Some("test_file.proto".to_string()),
+      package: Some("test_package".to_string()),
       dependency: vec![],
       public_dependency: vec![],
       weak_dependency: vec![],
@@ -1652,7 +1652,7 @@ pub(crate) mod tests {
       method: vec![
         MethodDescriptorProto {
           name: Some("call".to_string()),
-          input_type: Some(".google.protobuf.StringValue".to_string()),
+          input_type: Some("StringValue".to_string()),
           output_type: Some("test_message".to_string()),
           options: None,
           client_streaming: None,
@@ -1729,8 +1729,8 @@ pub(crate) mod tests {
       reserved_name: vec![]
     };
     let file_descriptor = FileDescriptorProto {
-      name: None,
-      package: None,
+      name: Some("test_file.proto".to_string()),
+      package: Some("test_package".to_string()),
       dependency: vec![],
       public_dependency: vec![],
       weak_dependency: vec![],
@@ -1747,7 +1747,7 @@ pub(crate) mod tests {
       method: vec![
         MethodDescriptorProto {
           name: Some("call".to_string()),
-          input_type: Some(".google.protobuf.StringValue".to_string()),
+          input_type: Some("StringValue".to_string()),
           output_type: Some("test_message".to_string()),
           options: None,
           client_streaming: None,
@@ -2057,8 +2057,12 @@ pub(crate) mod tests {
       "pact:match": "eachValue(matching($'area'))"
     });
 
+    let all_descriptors = hashmap!{
+      "area_calculator.proto".to_string() => &FILE_DESCRIPTOR as &FileDescriptorProto
+    };
+
     let result = build_embedded_message_field_value(&mut message_builder, &path, &field_descriptor,
-      "value", &config, &mut matching_rules, &mut generators, &hashmap!{}
+      "value", &config, &mut matching_rules, &mut generators, &all_descriptors
     );
 
     let expected_rules = matchingrules! {
@@ -2125,9 +2129,11 @@ pub(crate) mod tests {
       "shape": "matching(type, 'rectangle')",
       "value": "matching(number, 12)"
     });
-
+    let all_descriptors = hashmap!{
+      "area_calculator.proto".to_string() => &FILE_DESCRIPTOR as &FileDescriptorProto
+    };
     let result = build_embedded_message_field_value(&mut message_builder, &path, &field_descriptor,
-      "value", &config, &mut matching_rules, &mut generators, &hashmap!{}
+      "value", &config, &mut matching_rules, &mut generators, &all_descriptors
     );
 
     let expected_rules = matchingrules! {
