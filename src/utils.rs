@@ -577,9 +577,6 @@ pub(crate) fn prost_string<S: Into<String>>(s: S) -> Value {
 
 #[cfg(test)]
 pub(crate) mod tests {
-  use std::collections::HashMap;
-  use base64::Engine;
-  use base64::engine::general_purpose::STANDARD as BASE64;
   use bytes::Bytes;
   use expectest::prelude::*;
   use maplit::hashmap;
@@ -591,7 +588,7 @@ pub(crate) mod tests {
     FieldDescriptorProto,
     FileDescriptorProto,
     FileDescriptorSet,
-    MessageOptions
+    MessageOptions, MethodDescriptorProto, ServiceDescriptorProto
   };
   use prost_types::field_descriptor_proto::{Label, Type};
 
@@ -604,6 +601,8 @@ pub(crate) mod tests {
     last_name,
     split_name
   };
+
+use super::find_message_descriptor;
 
   #[test]
   fn last_name_test() {
@@ -834,7 +833,7 @@ pub(crate) mod tests {
       ],
       .. FileDescriptorProto::default()
     };
-    let fds2 = FileDescriptorProto {
+    let fds2: FileDescriptorProto = FileDescriptorProto {
       name: Some("test_enum2.proto".to_string()),
       package: Some("routeguide".to_string()),
       message_type: vec![
@@ -912,7 +911,98 @@ pub(crate) mod tests {
     let result3 = find_enum_value_by_name(&descriptors, ".TestEnum", "VALUE_TWO");
     expect!(result3).to(be_some().value((2, enum1.clone())));
 
-    let result4 = find_enum_value_by_name(&descriptors, ".routeguide.v3.Feature.TestEnum", "VALUE_ONE");
+    let result4: Option<(i32, EnumDescriptorProto)> = find_enum_value_by_name(&descriptors, ".routeguide.v3.Feature.TestEnum", "VALUE_ONE");
     expect!(result4).to(be_some().value((1, enum1.clone())));
+  }
+
+  #[test]
+  fn find_message_descriptor_test() {
+    let service = FileDescriptorProto {
+      name: Some("service.proto".to_string()),
+      package: Some("service".to_string()),
+      service: vec![
+        ServiceDescriptorProto {
+          name: Some("Service".to_string()),
+          method: vec![
+            MethodDescriptorProto {
+              name: Some("Method".to_string()),
+              input_type: Some(".service.Request".to_string()),
+              output_type: Some(".service.Response".to_string()),
+              .. MethodDescriptorProto::default()
+            }
+          ],
+          .. ServiceDescriptorProto::default()
+        }
+      ],
+      .. FileDescriptorProto::default()
+    };
+    let request = FileDescriptorProto {
+      name: Some("request.proto".to_string()),
+      package: Some("service".to_string()),
+      message_type: vec![
+        DescriptorProto {
+          name: Some("Request".to_string()),
+          field: vec![
+            FieldDescriptorProto {
+              name: Some("field".to_string()),
+              number: Some(1),
+              type_name: Some("string".to_string()),
+              .. FieldDescriptorProto::default()
+            },
+          ],
+          .. DescriptorProto::default()
+        }
+      ],
+      .. FileDescriptorProto::default()
+    };
+    let response = FileDescriptorProto {
+      name: Some("response.proto".to_string()),
+      package: Some("service".to_string()),
+      message_type: vec![
+        DescriptorProto {
+          name: Some("Response".to_string()),
+          .. DescriptorProto::default()
+        }
+      ],
+      .. FileDescriptorProto::default()
+    };
+    let request_diff_package = FileDescriptorProto {
+      name: Some("request_diff_package.proto".to_string()),
+      package: Some("diff".to_string()),
+      message_type: vec![
+        DescriptorProto {
+          name: Some("Request".to_string()),
+          field: vec![
+            FieldDescriptorProto {
+              name: Some("bool_field".to_string()),
+              number: Some(1),
+              type_name: Some("bool".to_string()),
+              .. FieldDescriptorProto::default()
+            },
+          ],
+          .. DescriptorProto::default()
+        }
+      ],
+        .. FileDescriptorProto::default()
+    };
+    let all_descriptors = &hashmap!{
+        "request.proto".to_string() => &request,
+        "response.proto".to_string() => &response,
+        "request_diff_package.proto".to_string() => &request_diff_package
+    };
+    // use default package name from the service descriptor
+    let result = find_message_descriptor("Request", None, &service, all_descriptors);
+    expect!(result.as_ref().unwrap().field[0].name.as_ref()).to(be_some().value(&"field"));
+    
+    // explicitly provide package name
+    let result_explicit_pkg: Result<DescriptorProto, anyhow::Error> = find_message_descriptor("Request", Some("diff"), &service, all_descriptors);
+    expect!(result_explicit_pkg.as_ref().unwrap().field[0].name.as_ref()).to(be_some().value(&"bool_field"));
+
+    // message not found error
+    let result_err: Result<DescriptorProto, anyhow::Error> = find_message_descriptor("Response", Some("diff"), &service, all_descriptors);
+    match result_err {
+        Err(e) => expect!(e.to_string()).to(be_equal_to("Did not find a message type 'Response' in any of the file descriptors for package 'diff'")),
+        _ => panic!("Expected an error"),
+    };
   }
 }
