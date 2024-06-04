@@ -832,7 +832,7 @@ pub(crate) mod tests {
       ],
       .. FileDescriptorProto::default()
     };
-    let fds2: FileDescriptorProto = FileDescriptorProto {
+    let fds2 = FileDescriptorProto {
       name: Some("test_enum2.proto".to_string()),
       package: Some("routeguide".to_string()),
       message_type: vec![
@@ -910,7 +910,7 @@ pub(crate) mod tests {
     let result3 = find_enum_value_by_name(&descriptors, ".TestEnum", "VALUE_TWO");
     expect!(result3).to(be_some().value((2, enum1.clone())));
 
-    let result4: Option<(i32, EnumDescriptorProto)> = find_enum_value_by_name(&descriptors, ".routeguide.v3.Feature.TestEnum", "VALUE_ONE");
+    let result4 = find_enum_value_by_name(&descriptors, ".routeguide.v3.Feature.TestEnum", "VALUE_ONE");
     expect!(result4).to(be_some().value((1, enum1.clone())));
   }
 
