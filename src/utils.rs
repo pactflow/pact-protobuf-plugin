@@ -594,6 +594,7 @@ pub(crate) mod tests {
 
   use crate::utils::{
     as_hex,
+    find_message_descriptor,
     find_enum_value_by_name,
     find_message_type_by_name,
     find_nested_type,
@@ -601,8 +602,6 @@ pub(crate) mod tests {
     last_name,
     split_name
   };
-
-use super::find_message_descriptor;
 
   #[test]
   fn last_name_test() {
