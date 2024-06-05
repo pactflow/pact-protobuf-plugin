@@ -241,7 +241,7 @@ impl Service<Request<hyper::Body>> for GrpcMockServer  {
             if let Some((service, method)) = request_path[1..].split_once('/') {
               let service_name = last_name(service);
               let lookup = format!("{service_name}/{method}");
-              if let Some((file, file_descriptor, method_descriptor, message)) = routes.get(lookup.as_str()) {
+              if let Some((file, _file_descriptor, method_descriptor, message)) = routes.get(lookup.as_str()) {
                 trace!(message = message.description.as_str(), "Found route for service call");
                 let file_descriptors: HashMap<String, &FileDescriptorProto> = file.file.iter().map(
                   |des| (des.name.clone().unwrap_or_default(), des)).collect();
@@ -249,13 +249,13 @@ impl Service<Request<hyper::Body>> for GrpcMockServer  {
                   "Input message name is empty for service {}/{}", service_name, method).as_str());
                 let (input_message_name, input_package_name) = split_name(input_name);
                 let input_message = find_message_descriptor(
-                  input_message_name, input_package_name, file_descriptor, &file_descriptors);
+                  input_message_name, input_package_name, &file_descriptors);
 
                 let output_name = method_descriptor.output_type.as_ref().expect(format!(
                   "Output message name is empty for service {}/{}", service_name, method).as_str());
                 let (output_message_name, output_package_name) = split_name(output_name);
                 let output_message = find_message_descriptor(
-                  output_message_name, output_package_name, file_descriptor, &file_descriptors);
+                  output_message_name, output_package_name, &file_descriptors);
 
                 if let Ok(input_message) = input_message {
                   if let Ok(output_message) = output_message {

@@ -189,8 +189,8 @@ fn construct_protobuf_interaction_for_service(
   trace!(%input_name, ?input_package, input_message_name, "Input message");
   trace!(%output_name, ?output_package, output_message_name, "Output message");
 
-  let request_descriptor = find_message_descriptor(input_message_name, input_package, file_descriptor, all_descriptors)?;
-  let response_descriptor = find_message_descriptor(output_message_name, output_package, file_descriptor, all_descriptors)?;
+  let request_descriptor = find_message_descriptor(input_message_name, input_package, all_descriptors)?;
+  let response_descriptor = find_message_descriptor(output_message_name, output_package, all_descriptors)?;
 
   trace!("request_descriptor = {:?}", request_descriptor);
   trace!("response_descriptor = {:?}", response_descriptor);
@@ -636,7 +636,7 @@ fn build_single_embedded_field_value(
       debug!("Configuring the message from config {:?}", config);
       let (message_name, package_name) = split_name(type_name.as_str());
       let embedded_type = find_nested_type(&message_builder.descriptor, field_descriptor)
-        .or_else(|| find_message_descriptor(message_name, package_name, &message_builder.file_descriptor, all_descriptors).ok())
+        .or_else(|| find_message_descriptor(message_name, package_name, all_descriptors).ok())
         .ok_or_else(|| anyhow!("Did not find message '{}' in the current message or in the file descriptors", type_name))?;
       let mut embedded_builder = MessageBuilder::new(&embedded_type, message_name, &message_builder.file_descriptor);
 
@@ -2734,15 +2734,14 @@ pub(crate) mod tests {
     let all: HashMap<String, &FileDescriptorProto> = fds.file
       .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
       .collect();
-    let file_descriptor = &fds.file[0];
 
-    let result = super::find_message_descriptor("RectangleLocationRequest", None, file_descriptor, &all).unwrap();
+    let result = super::find_message_descriptor("RectangleLocationRequest", None, &all).unwrap();
     expect!(result.field.len()).to(be_equal_to(2));
-    let result = super::find_message_descriptor("RectangleLocationRequest", Some("primary"), file_descriptor, &all).unwrap();
+    let result = super::find_message_descriptor("RectangleLocationRequest", Some("primary"), &all).unwrap();
     expect!(result.field.len()).to(be_equal_to(4));
-    let result = super::find_message_descriptor("RectangleLocationRequest", Some(".primary"), file_descriptor, &all).unwrap();
+    let result = super::find_message_descriptor("RectangleLocationRequest", Some(".primary"), &all).unwrap();
     expect!(result.field.len()).to(be_equal_to(4));
-    let result = super::find_message_descriptor("RectangleLocationRequest", Some("imported"), file_descriptor, &all).unwrap();
+    let result = super::find_message_descriptor("RectangleLocationRequest", Some("imported"), &all).unwrap();
     expect!(result.field.len()).to(be_equal_to(2));
   }
 }
