@@ -391,7 +391,6 @@ pub fn decode_message<B>(
     match find_field_descriptor(field_num as i32, descriptor) {
       Ok(field_descriptor) => {
         let field_name = field_descriptor.name.clone().unwrap_or_default();
-        trace!("Looking at field name '{}'", field_name);
         let data = match wire_type {
           WireType::Varint => {
             let varint = decode_varint(buffer)?;
@@ -437,7 +436,6 @@ pub fn decode_message<B>(
               return Err(anyhow!("Insufficient data remaining ({} bytes) to read {} bytes for field {}", buffer.remaining(), data_length, field_num));
             };
             let t: Type = field_descriptor.r#type();
-            trace!("matches length delimited wire type, with r#type: {:?}", t);
             match t {
               Type::String => vec![ (ProtobufFieldData::String(from_utf8(&data_buffer)?.to_string()), wire_type) ],
               Type::Message => {
