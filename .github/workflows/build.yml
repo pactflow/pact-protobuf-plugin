@@ -91,7 +91,9 @@ jobs:
           pushd integrated_tests/imported_message_same_package_multiple_files && cargo test && popd
           pushd integrated_tests/imported_without_package && cargo test && popd
           pushd integrated_tests/matching_maps && cargo test && popd
-          pushd integrated_tests/new_fields && cargo test && popd
+          pushd integrated_tests/new_fields/consumer && cargo test && popd
+          pushd integrated_tests/new_fields/old_provider && cargo test && popd
+          pushd integrated_tests/new_fields/new_provider && cargo test && popd
           pushd integrated_tests/repeated_enums && cargo test && popd
           pushd integrated_tests/response_metadata && cargo test && popd
         env:
