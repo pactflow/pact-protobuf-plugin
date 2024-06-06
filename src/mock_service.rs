@@ -224,6 +224,8 @@ impl Service<Request<DynamicMessage>> for MockService {
     let message_descriptor = self.input_message.clone();
     let response_descriptor = self.output_message.clone();
     let service = self.clone();
+    trace!("Inside call for MockService; with message_descriptor = {:?}, response_descriptor = {:?}, request_metadata = {:?}",
+      message_descriptor, response_descriptor, request_metadata);
     Box::pin(async move {
       service.handle_message(request, message_descriptor, response_descriptor, request_metadata).await
     })

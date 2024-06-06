@@ -42,7 +42,7 @@ use crate::dynamic_message::PactCodec;
 use crate::metadata::MetadataMatchResult;
 use crate::mock_service::MockService;
 use crate::tcp::TcpIncoming;
-use crate::utils::{last_name, split_name, find_message_descriptor};
+use crate::utils::{find_message_descriptor, last_name, split_name};
 
 lazy_static! {
   pub static ref MOCK_SERVER_STATE: Mutex<HashMap<String, (Sender<()>, HashMap<String, (usize, Vec<(BodyMatchResult, MetadataMatchResult)>)>)>> = Mutex::new(hashmap!{});
@@ -243,19 +243,17 @@ impl Service<Request<hyper::Body>> for GrpcMockServer  {
               let lookup = format!("{service_name}/{method}");
               if let Some((file, _file_descriptor, method_descriptor, message)) = routes.get(lookup.as_str()) {
                 trace!(message = message.description.as_str(), "Found route for service call");
-                let file_descriptors: HashMap<String, &FileDescriptorProto> = file.file.iter().map(
-                  |des| (des.name.clone().unwrap_or_default(), des)).collect();
                 let input_name = method_descriptor.input_type.as_ref().expect(format!(
                   "Input message name is empty for service {}/{}", service_name, method).as_str());
                 let (input_message_name, input_package_name) = split_name(input_name);
                 let input_message = find_message_descriptor(
-                  input_message_name, input_package_name, &file_descriptors);
+                  input_message_name, input_package_name, file.file.clone());
 
                 let output_name = method_descriptor.output_type.as_ref().expect(format!(
                   "Output message name is empty for service {}/{}", service_name, method).as_str());
                 let (output_message_name, output_package_name) = split_name(output_name);
                 let output_message = find_message_descriptor(
-                  output_message_name, output_package_name, &file_descriptors);
+                  output_message_name, output_package_name, file.file.clone());
 
                 if let Ok(input_message) = input_message {
                   if let Ok(output_message) = output_message {

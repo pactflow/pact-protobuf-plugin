@@ -108,6 +108,7 @@ pub(crate) fn compare(
   expected_message_bytes: &Bytes,
   descriptors: &FileDescriptorSet
 ) -> anyhow::Result<BodyMatchResult> {
+  trace!("compare({:?}, {:?}, {:?})", message_descriptor.name.clone(), expected_message, actual_message);
   let actual_fields = populate_default_values(actual_message, message_descriptor, descriptors);
   if expected_message.is_empty() {
     Ok(BodyMatchResult::Ok)
@@ -172,6 +173,7 @@ pub fn compare_message(
   message_descriptor: &DescriptorProto,
   descriptors: &FileDescriptorSet,
 ) -> anyhow::Result<BodyMatchResult> {
+  trace!("compare message path {} with expected fields {:?} and actual fields {:?}", path, expected_message_fields, actual_message_fields);
   let mut results = hashmap!{};
 
   let fields = message_descriptor.field.iter()

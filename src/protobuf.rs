@@ -39,14 +39,7 @@ use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValu
 use crate::metadata::{MessageMetadata, process_metadata};
 use crate::protoc::Protoc;
 use crate::utils::{
-  find_enum_value_by_name,
-  find_enum_value_by_name_in_message,
-  find_message_descriptor,
-  find_nested_type,
-  is_map_field,
-  is_repeated_field,
-  prost_string,
-  split_name
+  find_enum_value_by_name, find_enum_value_by_name_in_message, find_message_descriptor_from_hash_map, find_nested_type, is_map_field, is_repeated_field, prost_string, split_name
 };
 
 /// Process the provided protobuf file and configure the interaction
@@ -189,8 +182,8 @@ fn construct_protobuf_interaction_for_service(
   trace!(%input_name, ?input_package, input_message_name, "Input message");
   trace!(%output_name, ?output_package, output_message_name, "Output message");
 
-  let request_descriptor = find_message_descriptor(input_message_name, input_package, all_descriptors)?;
-  let response_descriptor = find_message_descriptor(output_message_name, output_package, all_descriptors)?;
+  let request_descriptor = find_message_descriptor_from_hash_map(input_message_name, input_package, all_descriptors)?;
+  let response_descriptor = find_message_descriptor_from_hash_map(output_message_name, output_package, all_descriptors)?;
 
   trace!("request_descriptor = {:?}", request_descriptor);
   trace!("response_descriptor = {:?}", response_descriptor);
@@ -636,7 +629,7 @@ fn build_single_embedded_field_value(
       debug!("Configuring the message from config {:?}", config);
       let (message_name, package_name) = split_name(type_name.as_str());
       let embedded_type = find_nested_type(&message_builder.descriptor, field_descriptor)
-        .or_else(|| find_message_descriptor(message_name, package_name, all_descriptors).ok())
+        .or_else(|| find_message_descriptor_from_hash_map(message_name, package_name, all_descriptors).ok())
         .ok_or_else(|| anyhow!("Did not find message '{}' in the current message or in the file descriptors", type_name))?;
       let mut embedded_builder = MessageBuilder::new(&embedded_type, message_name, &message_builder.file_descriptor);
 
