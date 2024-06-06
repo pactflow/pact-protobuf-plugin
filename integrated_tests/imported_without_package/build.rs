@@ -3,7 +3,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[
             "primary/service.proto",
         ],
-        &[".", "./primary", "./imported", "./zimported"],
+        &[".", "./primary", "./imported", "./no_package"],
     )?;
     Ok(())
 }

@@ -7,6 +7,8 @@ members = [
     "integrated_tests/default_values",
     "integrated_tests/matching_maps",
     "integrated_tests/imported_message",
+    "integrated_tests/imported_message_same_package_multiple_files",
+    "integrated_tests/imported_without_package",
 ]
 
 [package]

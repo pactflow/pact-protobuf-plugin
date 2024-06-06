@@ -9,16 +9,12 @@ option java_package = "io.grpc.examples.primary";
 option java_outer_classname = "PrimaryProto";
 
 import "imported/imported.proto";
+import "zimported/zimported.proto";
+import "primary/request.proto";
+import "primary/response.proto";
 
 package primary;
 
-
-// A latitude-longitude rectangle, represented as two diagonally opposite
-// points "lo" and "hi".
-message Rectangle {
-  // One corner of the rectangle.
-  imported.Point lo = 1;
-
-  // The other corner of the rectangle.
-  imported.Point hi = 2;
+service Primary {
+  rpc GetRectangle(RectangleLocationRequest) returns (RectangleLocationResponse) {}
 }

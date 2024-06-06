@@ -8,7 +8,9 @@ option java_multiple_files = true;
 option java_package = "io.grpc.examples.primary";
 option java_outer_classname = "PrimaryProto";
 
+
 package primary;
+
 
 // A request payload to get a Rectangle.
 message RectangleLocationRequest {

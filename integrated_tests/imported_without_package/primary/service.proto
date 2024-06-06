@@ -9,7 +9,7 @@ option java_package = "io.grpc.examples.primary";
 option java_outer_classname = "PrimaryProto";
 
 import "imported/imported.proto";
-import "zimported/zimported.proto";
+import "no_package/tag.proto";
 
 package primary;
 
@@ -24,6 +24,7 @@ message RectangleLocationRequest {
   int32 y = 2;
   int32 width = 3;
   int32 length = 4;
+  Tag tag = 5;
 }
 
 // A response payload containing a Rectangle.

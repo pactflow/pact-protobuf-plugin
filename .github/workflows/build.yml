@@ -87,8 +87,13 @@ jobs:
       - name: Run integrated test examples
         run: |
           pushd integrated_tests/default_values && cargo test && popd
+          pushd integrated_tests/imported_message && cargo test && popd
+          pushd integrated_tests/imported_message_same_package_multiple_files && cargo test && popd
+          pushd integrated_tests/imported_without_package && cargo test && popd
           pushd integrated_tests/matching_maps && cargo test && popd
+          pushd integrated_tests/new_fields && cargo test && popd
           pushd integrated_tests/repeated_enums && cargo test && popd
+          pushd integrated_tests/response_metadata && cargo test && popd
         env:
           RUST_LOG: debug
           RUST_BACKTRACE: 1

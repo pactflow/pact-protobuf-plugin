@@ -13,24 +13,6 @@ import "zimported/zimported.proto";
 
 package primary;
 
-service Primary {
-  rpc GetRectangle(RectangleLocationRequest) returns (RectangleLocationResponse) {}
-}
-
-// A request payload to get a Rectangle.
-message RectangleLocationRequest {
-  // The width of the rectangle.
-  int32 x = 1;
-  int32 y = 2;
-  int32 width = 3;
-  int32 length = 4;
-}
-
-// A response payload containing a Rectangle.
-message RectangleLocationResponse {
-  // The location of the rectangle.
-  Rectangle rectangle = 1;
-}
 
 // A latitude-longitude rectangle, represented as two diagonally opposite
 // points "lo" and "hi".
@@ -42,3 +24,7 @@ message Rectangle {
   imported.Point hi = 2;
 }
 
+message Point {
+  int32 some_int = 1;
+  int32 another_int = 2;
+}

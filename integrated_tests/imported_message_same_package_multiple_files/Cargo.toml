@@ -1,5 +1,5 @@
 [package]
-name = "imported_message"
+name = "imported_message_same_package_multiple_files"
 version = "0.1.0"
 edition = "2021"
 

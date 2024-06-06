@@ -1,0 +1,22 @@
+
+syntax = "proto3";
+
+option go_package = "github.com/pact-foundation/pact-go/v2/examples/grpc/zimported";
+option java_multiple_files = true;
+option java_package = "io.grpc.examples.zimported";
+option java_outer_classname = "ImportedProto";
+
+package zimported;
+
+message Rectangle {
+  // The width of the rectangle.
+  int32 zwidth = 1;
+
+  // The length of the rectangle.
+  int32 zlength = 2;
+}
+
+message Point {
+  int32 zlatitude = 1;
+  int32 zlongitude = 2;
+}

@@ -1,0 +1,35 @@
+
+syntax = "proto3";
+
+option go_package = "github.com/pact-foundation/pact-go/v2/examples/grpc/imported";
+option java_multiple_files = true;
+option java_package = "io.grpc.examples.imported";
+option java_outer_classname = "ImportedProto";
+
+package imported;
+
+message Rectangle {
+  // The width of the rectangle.
+  int32 width = 1;
+
+  // The length of the rectangle.
+  int32 length = 2;
+}
+
+// Request message for GetRectangle method. This message has different fields,
+// but the same name as a message defined in primary.proto
+message RectangleLocationRequest {
+  int32 a = 1;
+  int32 b = 2;
+}
+
+// Response message for GetRectangle method. This message has different fields,
+// but the same name as a message defined in primary.proto
+message RectangleLocationResponse {
+  Point location = 1;
+}
+
+message Point {
+  int32 latitude = 1;
+  int32 longitude = 2;
+}
