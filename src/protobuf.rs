@@ -1652,8 +1652,8 @@ pub(crate) mod tests {
       method: vec![
         MethodDescriptorProto {
           name: Some("call".to_string()),
-          input_type: Some("StringValue".to_string()),
-          output_type: Some("test_message".to_string()),
+          input_type: Some("test_package.StringValue".to_string()),
+          output_type: Some("test_package.test_message".to_string()),
           options: None,
           client_streaming: None,
           server_streaming: None
@@ -1747,8 +1747,8 @@ pub(crate) mod tests {
       method: vec![
         MethodDescriptorProto {
           name: Some("call".to_string()),
-          input_type: Some("StringValue".to_string()),
-          output_type: Some("test_message".to_string()),
+          input_type: Some("test_package.StringValue".to_string()),
+          output_type: Some("test_package.test_message".to_string()),
           options: None,
           client_streaming: None,
           server_streaming: None
@@ -2708,40 +2708,5 @@ pub(crate) mod tests {
         MessageFieldValue { name: "value".to_string(), raw_value: Some("Skip_holiday".to_string()), rtype: RType::String("Skip_holiday".to_string()) }
       ]
     ));
-  }
-
-  #[test]
-  fn find_message_descriptor_test() {
-    let descriptors = "CpAEChdpbXBvcnRlZC9pbXBvcnRlZC5wcm90bxIIaW1wb3J0ZWQiOQoJUmVjdGFuZ2x\
-    lEhQKBXdpZHRoGAEgASgFUgV3aWR0aBIWCgZsZW5ndGgYAiABKAVSBmxlbmd0aCJIChhSZWN0YW5nbGVMb2NhdGlvblJ\
-    lcXVlc3QSFAoFd2lkdGgYASABKAVSBXdpZHRoEhYKBmxlbmd0aBgCIAEoBVIGbGVuZ3RoIkgKGVJlY3RhbmdsZUxvY2F0\
-    aW9uUmVzcG9uc2USKwoIbG9jYXRpb24YASABKAsyDy5pbXBvcnRlZC5Qb2ludFIIbG9jYXRpb24iQQoFUG9pbnQSGgoIb\
-    GF0aXR1ZGUYASABKAVSCGxhdGl0dWRlEhwKCWxvbmdpdHVkZRgCIAEoBVIJbG9uZ2l0dWRlMmUKCEltcG9ydGVkElkKDE\
-    dldFJlY3RhbmdsZRIiLmltcG9ydGVkLlJlY3RhbmdsZUxvY2F0aW9uUmVxdWVzdBojLmltcG9ydGVkLlJlY3RhbmdsZUxv\
-    Y2F0aW9uUmVzcG9uc2UiAEJqChlpby5ncnBjLmV4YW1wbGVzLmltcG9ydGVkQg1JbXBvcnRlZFByb3RvUAFaPGdpdGh1Y\
-    i5jb20vcGFjdC1mb3VuZGF0aW9uL3BhY3QtZ28vdjIvZXhhbXBsZXMvZ3JwYy9pbXBvcnRlZGIGcHJvdG8zCooECg1wcm\
-    ltYXJ5LnByb3RvEgdwcmltYXJ5GhdpbXBvcnRlZC9pbXBvcnRlZC5wcm90byJNCglSZWN0YW5nbGUSHwoCbG8YASABKAs\
-    yDy5pbXBvcnRlZC5Qb2ludFICbG8SHwoCaGkYAiABKAsyDy5pbXBvcnRlZC5Qb2ludFICaGkiZAoYUmVjdGFuZ2xlTG9j\
-    YXRpb25SZXF1ZXN0EgwKAXgYASABKAVSAXgSDAoBeRgCIAEoBVIBeRIUCgV3aWR0aBgDIAEoBVIFd2lkdGgSFgoGbGVuZ\
-    3RoGAQgASgFUgZsZW5ndGgiTQoZUmVjdGFuZ2xlTG9jYXRpb25SZXNwb25zZRIwCglyZWN0YW5nbGUYASABKAsyEi5wcml\
-    tYXJ5LlJlY3RhbmdsZVIJcmVjdGFuZ2xlMmIKB1ByaW1hcnkSVwoMR2V0UmVjdGFuZ2xlEiEucHJpbWFyeS5SZWN0YW5nb\
-    GVMb2NhdGlvblJlcXVlc3QaIi5wcmltYXJ5LlJlY3RhbmdsZUxvY2F0aW9uUmVzcG9uc2UiAEJnChhpby5ncnBjLmV4YW1\
-    wbGVzLnByaW1hcnlCDFByaW1hcnlQcm90b1ABWjtnaXRodWIuY29tL3BhY3QtZm91bmRhdGlvbi9wYWN0LWdvL3YyL2V4Y\
-    W1wbGVzL2dycGMvcHJpbWFyeWIGcHJvdG8z";
-    let decoded = BASE64.decode(descriptors).unwrap();
-    let bytes = Bytes::copy_from_slice(decoded.as_slice());
-    let fds = FileDescriptorSet::decode(bytes).unwrap();
-    let all: HashMap<String, &FileDescriptorProto> = fds.file
-      .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
-      .collect();
-
-    let result = super::find_message_descriptor("RectangleLocationRequest", None, &all).unwrap();
-    expect!(result.field.len()).to(be_equal_to(2));
-    let result = super::find_message_descriptor("RectangleLocationRequest", Some("primary"), &all).unwrap();
-    expect!(result.field.len()).to(be_equal_to(4));
-    let result = super::find_message_descriptor("RectangleLocationRequest", Some(".primary"), &all).unwrap();
-    expect!(result.field.len()).to(be_equal_to(4));
-    let result = super::find_message_descriptor("RectangleLocationRequest", Some("imported"), &all).unwrap();
-    expect!(result.field.len()).to(be_equal_to(2));
   }
 }

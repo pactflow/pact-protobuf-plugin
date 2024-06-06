@@ -110,10 +110,10 @@ pub fn find_message_descriptor(
       })
 }
 
-fn find_all_file_descriptors_for_package<'a>(
+fn find_all_file_descriptors_for_package(
     package: &str,
-    all_descriptors: &'a HashMap<String, &FileDescriptorProto>,
-) -> anyhow::Result<Vec<&'a FileDescriptorProto>> {
+    all_descriptors: &HashMap<String, &FileDescriptorProto>,
+) -> anyhow::Result<Vec<FileDescriptorProto>> {
     let package = if package.starts_with('.') {
         &package[1..]
     } else {
@@ -135,9 +135,9 @@ fn find_all_file_descriptors_for_package<'a>(
     }
 }
 
-fn find_all_file_descriptors_with_no_package<'a>(
-  all_descriptors: &'a HashMap<String, &FileDescriptorProto>
-) -> anyhow::Result<Vec<&'a FileDescriptorProto>> {
+fn find_all_file_descriptors_with_no_package(
+  all_descriptors: &HashMap<String, &FileDescriptorProto>
+) -> anyhow::Result<Vec<FileDescriptorProto>> {
   let found = filter_file_descriptors(all_descriptors, |d| d.package.is_none());
   if found.is_empty() {
       Err(anyhow!("Did not find any file descriptors with no package specified"))
@@ -147,15 +147,18 @@ fn find_all_file_descriptors_with_no_package<'a>(
   }
 }
 
-fn filter_file_descriptors<'a, F>(all_descriptors: &'a HashMap<String, &FileDescriptorProto>, filter: F
-) -> Vec<&'a FileDescriptorProto>
+fn filter_file_descriptors<F>(
+  all_descriptors: &HashMap<String, &FileDescriptorProto>,
+  filter: F
+) -> Vec<FileDescriptorProto>
 where
-    F: FnMut(&&&FileDescriptorProto) -> bool,
+  F: FnMut(&&FileDescriptorProto) -> bool
 {
-    all_descriptors.values()
-        .filter(filter)
-        .cloned()
-        .collect::<Vec<_>>()
+  all_descriptors.values()
+      .map(|fd| *fd) // Convert &&FileDescriptorProto -> &FileDescriptorProto
+      .filter(filter)
+      .cloned()
+      .collect()
 }
 
 /// If the field is a map field. A field will be a map field if it is a repeated field, the field
@@ -584,8 +587,7 @@ pub(crate) fn prost_string<S: Into<String>>(s: S) -> Value {
 
 #[cfg(test)]
 pub(crate) mod tests {
-  use anyhow::anyhow;
-use bytes::Bytes;
+  use bytes::Bytes;
   use expectest::prelude::*;
   use maplit::hashmap;
   use prost::Message;
@@ -974,7 +976,7 @@ use bytes::Bytes;
       .. FileDescriptorProto::default()
     };
     let request_no_package = FileDescriptorProto {
-      name: Some("request_diff_package.proto".to_string()),
+      name: Some("request_no_package.proto".to_string()),
       message_type: vec![
         DescriptorProto {
           name: Some("Request".to_string()),
@@ -998,29 +1000,32 @@ use bytes::Bytes;
         "request_no_package.proto".to_string() => &request_no_package
     };
     // explicitly provide package name
-    let result_explicit_pkg: Result<DescriptorProto, anyhow::Error> = find_message_descriptor("Request", Some("service"), all_descriptors);
+    let result_explicit_pkg = find_message_descriptor("Request", Some("service"), all_descriptors);
     expect!(result_explicit_pkg.as_ref().unwrap().field[0].name.as_ref()).to(be_some().value(&"field"));
+    // same but with a dot
+    let result_explicit_pkg_dot = find_message_descriptor("Request", Some(".service"), all_descriptors);
+    expect!(result_explicit_pkg_dot.as_ref().unwrap().field[0].name.as_ref()).to(be_some().value(&"field"));
 
     // no package provided means search descriptors without packages only
-    let result_no_pkg: Result<DescriptorProto, anyhow::Error> = find_message_descriptor("Request", None, all_descriptors);
+    let result_no_pkg = find_message_descriptor("Request", None, all_descriptors);
     expect!(result_no_pkg.as_ref().unwrap().field[0].name.as_ref()).to(be_some().value(&"bool_field"));
 
     // message not found error
-    let result_err: Result<DescriptorProto, anyhow::Error> = find_message_descriptor("Missing", Some("service"), all_descriptors);
+    let result_err = find_message_descriptor("Missing", Some("service"), all_descriptors);
     expect!(result_err.as_ref()).to(be_err());
     expect!(result_err.unwrap_err().to_string()
       .starts_with("Did not find a message type 'Missing' in any of the file descriptors"))
       .to(be_true());
 
     // file descriptor not found for package
-    let result_err_no_pkg: Result<DescriptorProto, anyhow::Error> = find_message_descriptor("Request", Some("missing"), all_descriptors);
+    let result_err_no_pkg = find_message_descriptor("Request", Some("missing"), all_descriptors);
     expect!(result_err_no_pkg.as_ref()).to(be_err());
     // "Did not find a file descriptor for package 'missing'"
     expect!(result_err_no_pkg.unwrap_err().to_string())
       .to(be_equal_to("Did not find a file descriptor for a package 'missing'"));
 
     // no descriptors found without a package
-    let result_err_no_pkg: Result<DescriptorProto, anyhow::Error> = find_message_descriptor("Request", None, &hashmap!{});
+    let result_err_no_pkg = find_message_descriptor("Request", None, &hashmap!{});
     expect!(result_err_no_pkg.as_ref()).to(be_err());
     expect!(result_err_no_pkg.unwrap_err().to_string())
       .to(be_equal_to("Did not find any file descriptors with no package specified"));
