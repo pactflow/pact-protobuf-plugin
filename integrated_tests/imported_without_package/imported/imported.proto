@@ -1,0 +1,19 @@
+
+syntax = "proto3";
+
+option go_package = "github.com/pact-foundation/pact-go/v2/examples/grpc/imported";
+option java_multiple_files = true;
+option java_package = "io.grpc.examples.imported";
+option java_outer_classname = "ImportedProto";
+
+package imported;
+
+message Point {
+  int32 latitude = 1;
+  int32 longitude = 2;
+}
+
+message Tag {
+  string some_value = 1;
+  bool some_bool = 2;
+}

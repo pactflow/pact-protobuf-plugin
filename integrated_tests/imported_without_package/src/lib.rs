@@ -47,7 +47,11 @@ mod tests {
                             "x": "matching(number, 180)",
                             "y": "matching(number, 200)",
                             "width": "matching(number, 10)",
-                            "length": "matching(number, 20)"
+                            "length": "matching(number, 20)",
+                            "tag": {
+                                "name": "matching(type, 'name')",
+                                "value": "matching(type, 'value')"
+                            }
                         },
                         "response": {
                             "rectangle": {
@@ -78,8 +82,11 @@ mod tests {
             y: 200,
             width: 10,
             length: 20,
+            tag: Some(Tag{
+                name: "name".to_string(),
+                value: "value".to_string()
+            })
         };
-
         let response = client.get_rectangle(request_message.into_request()).await;
         let _response_message = response.unwrap();
     }

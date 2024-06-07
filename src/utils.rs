@@ -33,6 +33,11 @@ use tracing::{debug, error, trace, warn};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
 
+pub fn fds_to_map(fds: &FileDescriptorSet) -> HashMap<String, &FileDescriptorProto> {
+  fds.file.iter().map(
+    |des| (des.name.clone().unwrap_or_default(), des)).collect()
+}
+
 /// Return the last name in a dot separated string
 pub fn last_name(entry_type_name: &str) -> &str {
   entry_type_name.split('.').last().unwrap_or(entry_type_name)
@@ -82,84 +87,81 @@ pub fn find_message_type_in_file_descriptor(
       message_name, descriptor.name.as_deref().unwrap_or("unknown")))
 }
 
-/// Search for a message by type name in the file descriptor, and if not found, search in all the
-/// descriptors
-pub fn find_message_type_in_file_descriptors(
-  message_type: &str,
-  file_descriptor: &FileDescriptorProto,
-  all_descriptors: &HashMap<String, &FileDescriptorProto>
+/// Finds message descriptor in a map of file descriptors.
+pub fn find_message_descriptor_from_hash_map(
+  message_name: &str,
+  package: Option<&str>,
+  descriptors: &HashMap<String, &FileDescriptorProto>,
 ) -> anyhow::Result<DescriptorProto> {
-  find_message_type_in_file_descriptor(message_type, file_descriptor)
-    .or_else(|_| {
-      all_descriptors.values()
-        .find_map(|fd| find_message_type_in_file_descriptor(message_type, fd).ok())
-        .ok_or_else(|| anyhow!("Did not find a message type '{}' in any of the file descriptors", message_type))
-    })
+  let values = descriptors.values().map(|d| *d).cloned().collect();
+  find_message_descriptor(message_name, package, values)
 }
 
-// Search for a message by name, first in the current file descriptor, then in all descriptors.
+/// Finds message descriptor in a vector of file descriptors. If the package is provided, it will
+/// search only the descriptors matching the package. If not, it will search all descriptors with no package specified.
+/// (because package is an optional field in proto3)
 pub fn find_message_descriptor(
   message_name: &str,
   package: Option<&str>,
-  file_descriptor: &FileDescriptorProto,
-  all_descriptors: &HashMap<String, &FileDescriptorProto>
+  all_descriptors: Vec<FileDescriptorProto>,
 ) -> anyhow::Result<DescriptorProto> {
+  let descriptors;
   if let Some(package) = package {
-    find_message_with_package_in_file_descriptors(message_name, package, file_descriptor, all_descriptors)
+    debug!(
+        "Looking for message '{}' in package '{}'",
+        message_name, package
+    );
+    descriptors = find_all_file_descriptors_for_package(package, all_descriptors)?;
   } else {
-    find_message_type_in_file_descriptors(message_name, file_descriptor, all_descriptors)
+    descriptors = find_all_file_descriptors_with_no_package(all_descriptors)?;
+  }
+  descriptors.iter()
+    .find_map(|fd| find_message_type_in_file_descriptor(message_name, fd).ok())
+    .ok_or_else(|| {
+        anyhow!(
+            "Did not find a message type '{}' in any of the file descriptors '{:?}'", 
+            message_name, 
+            descriptors.iter().map(|d| d.name.clone().unwrap_or_default()).collect::<Vec<_>>())
+    })
+}
+
+fn find_all_file_descriptors_for_package(
+  package: &str,
+  all_descriptors: Vec<FileDescriptorProto>,
+) -> anyhow::Result<Vec<FileDescriptorProto>> {
+  let package = if package.starts_with('.') {
+      &package[1..]
+  } else {
+      package
+  };
+  let found: Vec<_> = all_descriptors.iter().filter(|descriptor| {
+      trace!("Checking file descriptor '{:?}' with package '{:?}' while looking for package '{}'", 
+        descriptor.name, descriptor.package, package);
+      if let Some(descriptor_package) = &descriptor.package {
+          debug!("Found file descriptor '{:?}' with package '{:?}'", descriptor.name, descriptor_package);
+          descriptor_package == package
+      } else {
+          false
+      }
+  }).cloned().collect();
+  if found.is_empty() {
+      Err(anyhow!("Did not find a file descriptor for a package '{}'", package))
+  } else {
+      debug!("Found {} file descriptors for package '{}'", found.len(), package);
+      Ok(found)
   }
 }
 
-/// Search for a message by type name and package in the file descriptor, and if not found,
-/// search in all the descriptors. This will first check with the package name, and if nothing is
-/// found, will then fall back to just using the message name
-pub fn find_message_with_package_in_file_descriptors(
-  message_name: &str,
-  package: &str,
-  file_descriptor: &FileDescriptorProto,
-  all_descriptors: &HashMap<String, &FileDescriptorProto>
-) -> anyhow::Result<DescriptorProto> {
-  find_file_descriptor_for_package(package, file_descriptor, all_descriptors)
-    .and_then(|file_descriptor| find_message_type_in_file_descriptor(message_name, &file_descriptor))
-    .or_else(|_| find_message_type_in_file_descriptors(message_name, file_descriptor, all_descriptors))
-}
-
-fn find_file_descriptor_for_package(
-  package: &str,
-  file_descriptor: &FileDescriptorProto,
-  all_descriptors: &HashMap<String, &FileDescriptorProto>
-) -> anyhow::Result<FileDescriptorProto> {
-  let package = if package.starts_with('.') {
-    &package[1..]
+fn find_all_file_descriptors_with_no_package(
+  all_descriptors: Vec<FileDescriptorProto>
+  ) -> anyhow::Result<Vec<FileDescriptorProto>> {
+  let found: Vec<_> = all_descriptors.iter().filter(|d| d.package.is_none()).cloned().collect();
+  if found.is_empty() {
+      Err(anyhow!("Did not find any file descriptors with no package specified"))
   } else {
-    package
-  };
-  let found = if let Some(descriptor_package) = &file_descriptor.package {
-    if descriptor_package == package {
-      Some(file_descriptor)
-    } else {
-      None
-    }
-  } else {
-    None
-  };
-  found
-    .or_else(|| {
-      all_descriptors.values().find_map(|descriptor| {
-        if let Some(descriptor_package) = &descriptor.package {
-          if descriptor_package == package {
-            Some(*descriptor)
-          } else {
-            None
-          }
-        } else {
-          None
-        }
-      })
-    })
-    .cloned()
-    .ok_or(anyhow!("Did not find a file descriptor with package '{}'", package))
+      debug!("Found {} file descriptors with no package", found.len());
+      Ok(found)
+  }
 }
 
 /// If the field is a map field. A field will be a map field if it is a repeated field, the field
@@ -588,10 +590,9 @@ pub(crate) fn prost_string<S: Into<String>>(s: S) -> Value {
 
 #[cfg(test)]
 pub(crate) mod tests {
-  use std::collections::HashMap;
-  use base64::Engine;
-  use base64::engine::general_purpose::STANDARD as BASE64;
-  use bytes::Bytes;
+  use std::vec;
+
+use bytes::Bytes;
   use expectest::prelude::*;
   use maplit::hashmap;
   use prost::Message;
@@ -602,14 +603,14 @@ pub(crate) mod tests {
     FieldDescriptorProto,
     FileDescriptorProto,
     FileDescriptorSet,
-    MessageOptions
+    MessageOptions, MethodDescriptorProto, ServiceDescriptorProto
   };
   use prost_types::field_descriptor_proto::{Label, Type};
 
   use crate::utils::{
     as_hex,
+    find_message_descriptor,
     find_enum_value_by_name,
-    find_file_descriptor_for_package,
     find_message_type_by_name,
     find_nested_type,
     is_map_field,
@@ -929,34 +930,104 @@ pub(crate) mod tests {
   }
 
   #[test]
-  fn find_file_descriptor_for_package_test() {
-    let descriptors = "CpAEChdpbXBvcnRlZC9pbXBvcnRlZC5wcm90bxIIaW1wb3J0ZWQiOQoJUmVjdGFuZ2x\
-    lEhQKBXdpZHRoGAEgASgFUgV3aWR0aBIWCgZsZW5ndGgYAiABKAVSBmxlbmd0aCJIChhSZWN0YW5nbGVMb2NhdGlvblJ\
-    lcXVlc3QSFAoFd2lkdGgYASABKAVSBXdpZHRoEhYKBmxlbmd0aBgCIAEoBVIGbGVuZ3RoIkgKGVJlY3RhbmdsZUxvY2F0\
-    aW9uUmVzcG9uc2USKwoIbG9jYXRpb24YASABKAsyDy5pbXBvcnRlZC5Qb2ludFIIbG9jYXRpb24iQQoFUG9pbnQSGgoIb\
-    GF0aXR1ZGUYASABKAVSCGxhdGl0dWRlEhwKCWxvbmdpdHVkZRgCIAEoBVIJbG9uZ2l0dWRlMmUKCEltcG9ydGVkElkKDE\
-    dldFJlY3RhbmdsZRIiLmltcG9ydGVkLlJlY3RhbmdsZUxvY2F0aW9uUmVxdWVzdBojLmltcG9ydGVkLlJlY3RhbmdsZUxv\
-    Y2F0aW9uUmVzcG9uc2UiAEJqChlpby5ncnBjLmV4YW1wbGVzLmltcG9ydGVkQg1JbXBvcnRlZFByb3RvUAFaPGdpdGh1Y\
-    i5jb20vcGFjdC1mb3VuZGF0aW9uL3BhY3QtZ28vdjIvZXhhbXBsZXMvZ3JwYy9pbXBvcnRlZGIGcHJvdG8zCooECg1wcm\
-    ltYXJ5LnByb3RvEgdwcmltYXJ5GhdpbXBvcnRlZC9pbXBvcnRlZC5wcm90byJNCglSZWN0YW5nbGUSHwoCbG8YASABKAs\
-    yDy5pbXBvcnRlZC5Qb2ludFICbG8SHwoCaGkYAiABKAsyDy5pbXBvcnRlZC5Qb2ludFICaGkiZAoYUmVjdGFuZ2xlTG9j\
-    YXRpb25SZXF1ZXN0EgwKAXgYASABKAVSAXgSDAoBeRgCIAEoBVIBeRIUCgV3aWR0aBgDIAEoBVIFd2lkdGgSFgoGbGVuZ\
-    3RoGAQgASgFUgZsZW5ndGgiTQoZUmVjdGFuZ2xlTG9jYXRpb25SZXNwb25zZRIwCglyZWN0YW5nbGUYASABKAsyEi5wcml\
-    tYXJ5LlJlY3RhbmdsZVIJcmVjdGFuZ2xlMmIKB1ByaW1hcnkSVwoMR2V0UmVjdGFuZ2xlEiEucHJpbWFyeS5SZWN0YW5nb\
-    GVMb2NhdGlvblJlcXVlc3QaIi5wcmltYXJ5LlJlY3RhbmdsZUxvY2F0aW9uUmVzcG9uc2UiAEJnChhpby5ncnBjLmV4YW1\
-    wbGVzLnByaW1hcnlCDFByaW1hcnlQcm90b1ABWjtnaXRodWIuY29tL3BhY3QtZm91bmRhdGlvbi9wYWN0LWdvL3YyL2V4Y\
-    W1wbGVzL2dycGMvcHJpbWFyeWIGcHJvdG8z";
-    let decoded = BASE64.decode(descriptors).unwrap();
-    let bytes = Bytes::copy_from_slice(decoded.as_slice());
-    let fds = FileDescriptorSet::decode(bytes).unwrap();
-    let all: HashMap<String, &FileDescriptorProto> = fds.file
-      .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
-      .collect();
+  fn find_message_descriptor_test() {
+    let service = FileDescriptorProto {
+      name: Some("service.proto".to_string()),
+      package: Some("service".to_string()),
+      service: vec![
+        ServiceDescriptorProto {
+          name: Some("Service".to_string()),
+          method: vec![
+            MethodDescriptorProto {
+              name: Some("Method".to_string()),
+              input_type: Some(".service.Request".to_string()),
+              output_type: Some(".service.Response".to_string()),
+              .. MethodDescriptorProto::default()
+            }
+          ],
+          .. ServiceDescriptorProto::default()
+        }
+      ],
+      .. FileDescriptorProto::default()
+    };
+    let request: FileDescriptorProto = FileDescriptorProto {
+      name: Some("request.proto".to_string()),
+      package: Some("service".to_string()),
+      message_type: vec![
+        DescriptorProto {
+          name: Some("Request".to_string()),
+          field: vec![
+            FieldDescriptorProto {
+              name: Some("field".to_string()),
+              number: Some(1),
+              type_name: Some("string".to_string()),
+              .. FieldDescriptorProto::default()
+            },
+          ],
+          .. DescriptorProto::default()
+        }
+      ],
+      .. FileDescriptorProto::default()
+    };
+    let response = FileDescriptorProto {
+      name: Some("response.proto".to_string()),
+      package: Some("service".to_string()),
+      message_type: vec![
+        DescriptorProto {
+          name: Some("Response".to_string()),
+          .. DescriptorProto::default()
+        }
+      ],
+      .. FileDescriptorProto::default()
+    };
+    let request_no_package = FileDescriptorProto {
+      name: Some("request_no_package.proto".to_string()),
+      message_type: vec![
+        DescriptorProto {
+          name: Some("Request".to_string()),
+          field: vec![
+            FieldDescriptorProto {
+              name: Some("bool_field".to_string()),
+              number: Some(1),
+              type_name: Some("bool".to_string()),
+              .. FieldDescriptorProto::default()
+            },
+          ],
+          .. DescriptorProto::default()
+        }
+      ],
+        .. FileDescriptorProto::default()
+    };
+    let all_descriptors = vec!{service, request, response, request_no_package};
+    // explicitly provide package name
+    let result_explicit_pkg = find_message_descriptor("Request", Some("service"), all_descriptors.clone());
+    expect!(result_explicit_pkg.as_ref().unwrap().field[0].name.as_ref()).to(be_some().value(&"field"));
+    // same but with a dot
+    let result_explicit_pkg_dot = find_message_descriptor("Request", Some(".service"), all_descriptors.clone());
+    expect!(result_explicit_pkg_dot.as_ref().unwrap().field[0].name.as_ref()).to(be_some().value(&"field"));
 
-    let file_descriptor = &fds.file[0];
-    let primary_descriptor = find_file_descriptor_for_package(".primary", file_descriptor, &all).unwrap();
-    expect!(primary_descriptor.name).to(be_some().value("primary.proto".to_string()));
-    let imported_descriptor = find_file_descriptor_for_package("imported", file_descriptor, &all).unwrap();
-    expect!(imported_descriptor.name).to(be_some().value("imported/imported.proto".to_string()));
+    // no package provided means search descriptors without packages only
+    let result_no_pkg = find_message_descriptor("Request", None, all_descriptors.clone());
+    expect!(result_no_pkg.as_ref().unwrap().field[0].name.as_ref()).to(be_some().value(&"bool_field"));
+
+    // message not found error
+    let result_err = find_message_descriptor("Missing", Some("service"), all_descriptors.clone());
+    expect!(result_err.as_ref()).to(be_err());
+    expect!(result_err.unwrap_err().to_string()
+      .starts_with("Did not find a message type 'Missing' in any of the file descriptors"))
+      .to(be_true());
+
+    // file descriptor not found for package
+    let result_err_no_pkg = find_message_descriptor("Request", Some("missing"), all_descriptors.clone());
+    expect!(result_err_no_pkg.as_ref()).to(be_err());
+    // "Did not find a file descriptor for package 'missing'"
+    expect!(result_err_no_pkg.unwrap_err().to_string())
+      .to(be_equal_to("Did not find a file descriptor for a package 'missing'"));
+
+    // no descriptors found without a package
+    let result_err_no_pkg = find_message_descriptor("Request", None, vec!{});
+    expect!(result_err_no_pkg.as_ref()).to(be_err());
+    expect!(result_err_no_pkg.unwrap_err().to_string())
+      .to(be_equal_to("Did not find any file descriptors with no package specified"));
   }
 }

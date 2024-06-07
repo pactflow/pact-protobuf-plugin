@@ -1,5 +1,5 @@
 [package]
-name = "imported_message"
+name = "imported_without_package"
 version = "0.1.0"
 edition = "2021"
 

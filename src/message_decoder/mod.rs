@@ -13,13 +13,7 @@ use prost_types::field_descriptor_proto::Type;
 use tracing::{debug, error, trace, warn};
 
 use crate::utils::{
-  as_hex,
-  find_enum_by_name,
-  find_enum_by_name_in_message,
-  find_message_type_by_name,
-  is_repeated_field,
-  last_name,
-  should_be_packed_type
+  as_hex, find_enum_by_name, find_enum_by_name_in_message, find_message_descriptor, is_repeated_field, should_be_packed_type, split_name
 };
 
 mod generators;
@@ -445,11 +439,11 @@ pub fn decode_message<B>(
             match t {
               Type::String => vec![ (ProtobufFieldData::String(from_utf8(&data_buffer)?.to_string()), wire_type) ],
               Type::Message => {
-                let type_name = field_descriptor.type_name.as_ref().map(|v| last_name(v.as_str()).to_string());
+                let (type_name, type_package) = split_name(field_descriptor.type_name.as_deref().unwrap_or_default());
                 let message_proto = descriptor.nested_type.iter()
-                  .find(|message_descriptor| message_descriptor.name == type_name)
+                  .find(|message_descriptor| message_descriptor.name.as_deref() == Some(type_name))
                   .cloned()
-                  .or_else(|| find_message_type_by_name(&type_name.unwrap_or_default(), descriptors).map(|(m, _)| m).ok())
+                  .or_else(|| find_message_descriptor(type_name, type_package, descriptors.file.clone()).ok())
                   .ok_or_else(|| anyhow!("Did not find the embedded message {:?} for the field {} in the Protobuf descriptor", field_descriptor.type_name, field_num))?;
                 vec![ (ProtobufFieldData::Message(data_buffer.to_vec(), message_proto), wire_type) ]
               }

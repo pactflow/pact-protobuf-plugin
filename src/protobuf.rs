@@ -39,14 +39,7 @@ use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValu
 use crate::metadata::{MessageMetadata, process_metadata};
 use crate::protoc::Protoc;
 use crate::utils::{
-  find_enum_value_by_name,
-  find_enum_value_by_name_in_message,
-  find_message_descriptor,
-  find_nested_type,
-  is_map_field,
-  is_repeated_field,
-  prost_string,
-  split_name
+  find_enum_value_by_name, find_enum_value_by_name_in_message, find_message_descriptor_from_hash_map, find_nested_type, is_map_field, is_repeated_field, prost_string, split_name
 };
 
 /// Process the provided protobuf file and configure the interaction
@@ -189,8 +182,8 @@ fn construct_protobuf_interaction_for_service(
   trace!(%input_name, ?input_package, input_message_name, "Input message");
   trace!(%output_name, ?output_package, output_message_name, "Output message");
 
-  let request_descriptor = find_message_descriptor(input_message_name, input_package, file_descriptor, all_descriptors)?;
-  let response_descriptor = find_message_descriptor(output_message_name, output_package, file_descriptor, all_descriptors)?;
+  let request_descriptor = find_message_descriptor_from_hash_map(input_message_name, input_package, all_descriptors)?;
+  let response_descriptor = find_message_descriptor_from_hash_map(output_message_name, output_package, all_descriptors)?;
 
   trace!("request_descriptor = {:?}", request_descriptor);
   trace!("response_descriptor = {:?}", response_descriptor);
@@ -636,7 +629,7 @@ fn build_single_embedded_field_value(
       debug!("Configuring the message from config {:?}", config);
       let (message_name, package_name) = split_name(type_name.as_str());
       let embedded_type = find_nested_type(&message_builder.descriptor, field_descriptor)
-        .or_else(|| find_message_descriptor(message_name, package_name, &message_builder.file_descriptor, all_descriptors).ok())
+        .or_else(|| find_message_descriptor_from_hash_map(message_name, package_name, all_descriptors).ok())
         .ok_or_else(|| anyhow!("Did not find message '{}' in the current message or in the file descriptors", type_name))?;
       let mut embedded_builder = MessageBuilder::new(&embedded_type, message_name, &message_builder.file_descriptor);
 
@@ -1633,9 +1626,9 @@ pub(crate) mod tests {
       reserved_range: vec![],
       reserved_name: vec![]
     };
-    let file_descriptor = FileDescriptorProto {
-      name: None,
-      package: None,
+    let file_descriptor: FileDescriptorProto = FileDescriptorProto {
+      name: Some("test_file.proto".to_string()),
+      package: Some("test_package".to_string()),
       dependency: vec![],
       public_dependency: vec![],
       weak_dependency: vec![],
@@ -1652,8 +1645,8 @@ pub(crate) mod tests {
       method: vec![
         MethodDescriptorProto {
           name: Some("call".to_string()),
-          input_type: Some(".google.protobuf.StringValue".to_string()),
-          output_type: Some("test_message".to_string()),
+          input_type: Some("test_package.StringValue".to_string()),
+          output_type: Some("test_package.test_message".to_string()),
           options: None,
           client_streaming: None,
           server_streaming: None
@@ -1729,8 +1722,8 @@ pub(crate) mod tests {
       reserved_name: vec![]
     };
     let file_descriptor = FileDescriptorProto {
-      name: None,
-      package: None,
+      name: Some("test_file.proto".to_string()),
+      package: Some("test_package".to_string()),
       dependency: vec![],
       public_dependency: vec![],
       weak_dependency: vec![],
@@ -1747,8 +1740,8 @@ pub(crate) mod tests {
       method: vec![
         MethodDescriptorProto {
           name: Some("call".to_string()),
-          input_type: Some(".google.protobuf.StringValue".to_string()),
-          output_type: Some("test_message".to_string()),
+          input_type: Some("test_package.StringValue".to_string()),
+          output_type: Some("test_package.test_message".to_string()),
           options: None,
           client_streaming: None,
           server_streaming: None
@@ -2057,8 +2050,12 @@ pub(crate) mod tests {
       "pact:match": "eachValue(matching($'area'))"
     });
 
+    let all_descriptors = hashmap!{
+      "area_calculator.proto".to_string() => &FILE_DESCRIPTOR as &FileDescriptorProto
+    };
+
     let result = build_embedded_message_field_value(&mut message_builder, &path, &field_descriptor,
-      "value", &config, &mut matching_rules, &mut generators, &hashmap!{}
+      "value", &config, &mut matching_rules, &mut generators, &all_descriptors
     );
 
     let expected_rules = matchingrules! {
@@ -2125,9 +2122,11 @@ pub(crate) mod tests {
       "shape": "matching(type, 'rectangle')",
       "value": "matching(number, 12)"
     });
-
+    let all_descriptors = hashmap!{
+      "area_calculator.proto".to_string() => &FILE_DESCRIPTOR as &FileDescriptorProto
+    };
     let result = build_embedded_message_field_value(&mut message_builder, &path, &field_descriptor,
-      "value", &config, &mut matching_rules, &mut generators, &hashmap!{}
+      "value", &config, &mut matching_rules, &mut generators, &all_descriptors
     );
 
     let expected_rules = matchingrules! {
@@ -2702,41 +2701,5 @@ pub(crate) mod tests {
         MessageFieldValue { name: "value".to_string(), raw_value: Some("Skip_holiday".to_string()), rtype: RType::String("Skip_holiday".to_string()) }
       ]
     ));
-  }
-
-  #[test]
-  fn find_message_descriptor_test() {
-    let descriptors = "CpAEChdpbXBvcnRlZC9pbXBvcnRlZC5wcm90bxIIaW1wb3J0ZWQiOQoJUmVjdGFuZ2x\
-    lEhQKBXdpZHRoGAEgASgFUgV3aWR0aBIWCgZsZW5ndGgYAiABKAVSBmxlbmd0aCJIChhSZWN0YW5nbGVMb2NhdGlvblJ\
-    lcXVlc3QSFAoFd2lkdGgYASABKAVSBXdpZHRoEhYKBmxlbmd0aBgCIAEoBVIGbGVuZ3RoIkgKGVJlY3RhbmdsZUxvY2F0\
-    aW9uUmVzcG9uc2USKwoIbG9jYXRpb24YASABKAsyDy5pbXBvcnRlZC5Qb2ludFIIbG9jYXRpb24iQQoFUG9pbnQSGgoIb\
-    GF0aXR1ZGUYASABKAVSCGxhdGl0dWRlEhwKCWxvbmdpdHVkZRgCIAEoBVIJbG9uZ2l0dWRlMmUKCEltcG9ydGVkElkKDE\
-    dldFJlY3RhbmdsZRIiLmltcG9ydGVkLlJlY3RhbmdsZUxvY2F0aW9uUmVxdWVzdBojLmltcG9ydGVkLlJlY3RhbmdsZUxv\
-    Y2F0aW9uUmVzcG9uc2UiAEJqChlpby5ncnBjLmV4YW1wbGVzLmltcG9ydGVkQg1JbXBvcnRlZFByb3RvUAFaPGdpdGh1Y\
-    i5jb20vcGFjdC1mb3VuZGF0aW9uL3BhY3QtZ28vdjIvZXhhbXBsZXMvZ3JwYy9pbXBvcnRlZGIGcHJvdG8zCooECg1wcm\
-    ltYXJ5LnByb3RvEgdwcmltYXJ5GhdpbXBvcnRlZC9pbXBvcnRlZC5wcm90byJNCglSZWN0YW5nbGUSHwoCbG8YASABKAs\
-    yDy5pbXBvcnRlZC5Qb2ludFICbG8SHwoCaGkYAiABKAsyDy5pbXBvcnRlZC5Qb2ludFICaGkiZAoYUmVjdGFuZ2xlTG9j\
-    YXRpb25SZXF1ZXN0EgwKAXgYASABKAVSAXgSDAoBeRgCIAEoBVIBeRIUCgV3aWR0aBgDIAEoBVIFd2lkdGgSFgoGbGVuZ\
-    3RoGAQgASgFUgZsZW5ndGgiTQoZUmVjdGFuZ2xlTG9jYXRpb25SZXNwb25zZRIwCglyZWN0YW5nbGUYASABKAsyEi5wcml\
-    tYXJ5LlJlY3RhbmdsZVIJcmVjdGFuZ2xlMmIKB1ByaW1hcnkSVwoMR2V0UmVjdGFuZ2xlEiEucHJpbWFyeS5SZWN0YW5nb\
-    GVMb2NhdGlvblJlcXVlc3QaIi5wcmltYXJ5LlJlY3RhbmdsZUxvY2F0aW9uUmVzcG9uc2UiAEJnChhpby5ncnBjLmV4YW1\
-    wbGVzLnByaW1hcnlCDFByaW1hcnlQcm90b1ABWjtnaXRodWIuY29tL3BhY3QtZm91bmRhdGlvbi9wYWN0LWdvL3YyL2V4Y\
-    W1wbGVzL2dycGMvcHJpbWFyeWIGcHJvdG8z";
-    let decoded = BASE64.decode(descriptors).unwrap();
-    let bytes = Bytes::copy_from_slice(decoded.as_slice());
-    let fds = FileDescriptorSet::decode(bytes).unwrap();
-    let all: HashMap<String, &FileDescriptorProto> = fds.file
-      .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
-      .collect();
-    let file_descriptor = &fds.file[0];
-
-    let result = super::find_message_descriptor("RectangleLocationRequest", None, file_descriptor, &all).unwrap();
-    expect!(result.field.len()).to(be_equal_to(2));
-    let result = super::find_message_descriptor("RectangleLocationRequest", Some("primary"), file_descriptor, &all).unwrap();
-    expect!(result.field.len()).to(be_equal_to(4));
-    let result = super::find_message_descriptor("RectangleLocationRequest", Some(".primary"), file_descriptor, &all).unwrap();
-    expect!(result.field.len()).to(be_equal_to(4));
-    let result = super::find_message_descriptor("RectangleLocationRequest", Some("imported"), file_descriptor, &all).unwrap();
-    expect!(result.field.len()).to(be_equal_to(2));
   }
 }

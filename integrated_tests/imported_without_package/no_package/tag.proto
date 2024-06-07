@@ -1,0 +1,7 @@
+
+syntax = "proto3";
+
+message Tag {
+    string name = 1;
+    string value = 2;
+}

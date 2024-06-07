@@ -1,0 +1,22 @@
+
+// Copyright 2015 gRPC authors.
+//
+syntax = "proto3";
+
+option go_package = "github.com/pact-foundation/pact-go/v2/examples/grpc/primary";
+option java_multiple_files = true;
+option java_package = "io.grpc.examples.primary";
+option java_outer_classname = "PrimaryProto";
+
+
+package primary;
+
+
+// A request payload to get a Rectangle.
+message RectangleLocationRequest {
+  // The width of the rectangle.
+  int32 x = 1;
+  int32 y = 2;
+  int32 width = 3;
+  int32 length = 4;
+}
