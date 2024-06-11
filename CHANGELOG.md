@@ -1,3 +1,26 @@
+# 0.4.0 - Fixes message name resolving to correctly use package names
+
+* a1fad28 - chore: Update default protoc compiler to next major version (21.12) (Ronald Holshausen, Tue Jun 11 10:20:14 2024 +1000)
+* f219a61 - chore: Bump minor version (Ronald Holshausen, Tue Jun 11 10:12:56 2024 +1000)
+* d181915 - remove additional trace logs (Stan, Thu Jun 6 16:28:18 2024 -0700)
+* 07652c9 - correct paths in integrated_tests workflows (Stan, Thu Jun 6 16:25:46 2024 -0700)
+* a3c41b4 - update mod.rs to also use package (Stan, Thu Jun 6 16:15:55 2024 -0700)
+* 8742072 - remove lifetime qualifiers; refactor; remove unnecessary test (Stan, Thu Jun 6 11:42:17 2024 -0700)
+* cf9f08b - couple more integrated tests just to be sure (Stan, Wed Jun 5 18:21:23 2024 -0700)
+* a8c9f46 - Search descritors with no package when no package was specified. (Stan, Tue Jun 4 23:51:27 2024 -0700)
+* ce61d8f - no unwrap (Stan, Tue Jun 4 14:00:16 2024 -0700)
+* f4a43d4 - fix tests (Stan, Tue Jun 4 13:17:09 2024 -0700)
+* c3278c6 - remove unnecessary changes (Stan, Mon Jun 3 17:20:48 2024 -0700)
+* ebe3203 - use crate vs use super (Stan, Mon Jun 3 17:19:16 2024 -0700)
+* d13474e - a basic unit test (Stan, Mon Jun 3 17:10:29 2024 -0700)
+* c4ac8d7 - remove reference to a deleted method (Stan, Mon Jun 3 16:37:53 2024 -0700)
+* 66b97ca - more cases covered in the test (Stan, Mon Jun 3 16:25:56 2024 -0700)
+* 2e00c56 - revert formatting and logging changes (Stan, Mon Jun 3 16:19:58 2024 -0700)
+* bd1fdc8 - hacky fix cont (Stan, Fri May 31 18:26:34 2024 -0700)
+* 18f2e43 - hacky fix (Stan, Fri May 31 16:16:28 2024 -0700)
+* 0fc95d2 - conflicting names when package is implicit (Stan, Fri May 31 15:13:35 2024 -0700)
+* 0cb87dc - bump version to 0.3.16 (Ronald Holshausen, Fri May 10 10:17:56 2024 +1000)
+
 # 0.3.15 - Bugfix Release
 
 * 63b141f - Merge pull request #57 from YOU54F/feat/slim_bins (Ronald Holshausen, Fri May 10 09:58:25 2024 +1000)
