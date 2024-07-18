@@ -6,19 +6,21 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Mutex;
 use std::task::{Context, Poll};
-use std::thread;
 
 use anyhow::anyhow;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use bytes::Bytes;
-use http::Method;
-use hyper::{http, Request, Response};
-use hyper::server::accept;
+use http::{Method, Request, Response};
+use hyper::body::Incoming;
+use hyper::server::conn::http2::Builder;
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::service::TowerToHyperService;
 use lazy_static::lazy_static;
 use maplit::hashmap;
 use pact_matching::BodyMatchResult;
 use pact_models::content_types::ContentType;
+use pact_models::generators::generate_hexadecimal;
 use pact_models::json_utils::json_to_string;
 use pact_models::plugins::PluginData;
 use pact_models::prelude::v4::V4Pact;
@@ -27,21 +29,18 @@ use prost::Message;
 use prost_types::{FileDescriptorProto, FileDescriptorSet, MethodDescriptorProto};
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
-use tokio::runtime::Handle;
+use tokio::select;
 use tokio::sync::oneshot::{channel, Sender};
 use tonic::body::{BoxBody, empty_body};
 use tonic::metadata::MetadataMap;
-use tower::make::Shared;
 use tower::ServiceBuilder;
 use tower_http::ServiceBuilderExt;
 use tower_service::Service;
 use tracing::{debug, error, Instrument, instrument, trace, trace_span};
-use uuid::Uuid;
 
 use crate::dynamic_message::PactCodec;
 use crate::metadata::MetadataMatchResult;
 use crate::mock_service::MockService;
-use crate::tcp::TcpIncoming;
 use crate::utils::{find_message_descriptor, last_name, split_name};
 
 lazy_static! {
@@ -70,7 +69,7 @@ impl GrpcMockServer
       plugin_config: plugin_config.clone(),
       descriptors: Default::default(),
       routes: Default::default(),
-      server_key: Uuid::new_v4().to_string(),
+      server_key: generate_hexadecimal(8),
       test_context
     }
   }
@@ -135,14 +134,14 @@ impl GrpcMockServer
     let addr: SocketAddr = format!("{interface}:{port}").parse()?;
     trace!("setting up mock server {addr}");
 
-    let (snd, rcr) = channel::<()>();
+    let (shutdown_snd, mut shutdown_recv) = channel::<()>();
     {
       let mut guard = MOCK_SERVER_STATE.lock().unwrap();
       // Initialise all the routes with an initial state of not received
       let initial_state = self.routes.keys()
         .map(|k| (k.clone(), (0, vec![])))
         .collect();
-      guard.insert(self.server_key.clone(), (snd, initial_state));
+      guard.insert(self.server_key.clone(), (shutdown_snd, initial_state));
     }
 
     let listener = TcpListener::bind(addr).await?;
@@ -150,13 +149,10 @@ impl GrpcMockServer
 
     self.update_mock_server_address(&address);
 
-    let handle = Handle::current();
-    // because Rust
-    let key = self.server_key.clone();
-    let key2 = self.server_key.clone();
-    let result = thread::spawn(move || {
-      let incoming_stream = TcpIncoming { inner: listener };
-      let incoming = accept::from_stream(incoming_stream);
+    let server_key = self.server_key.clone();
+    let graceful = hyper_util::server::graceful::GracefulShutdown::new();
+    tokio::spawn(async move {
+      trace!("Mock server main loop starting");
 
       trace!("setting up middleware");
       let service = ServiceBuilder::new()
@@ -164,34 +160,47 @@ impl GrpcMockServer
         .trace_for_grpc()
         // Wrap a `Service` in our middleware stack
         .service(self);
+      let http_service = TowerToHyperService::new(service);
 
-      trace!("setting up HTTP server");
-      let server = hyper::Server::builder(incoming)
-        .http2_only(true)
-        //   //   // .http2_initial_connection_window_size(init_connection_window_size)
-        //   //   // .http2_initial_stream_window_size(init_stream_window_size)
-        //   //   // .http2_max_concurrent_streams(max_concurrent_streams)
-        //   //   // .http2_keep_alive_interval(http2_keepalive_interval)
-        //   //   // .http2_keep_alive_timeout(http2_keepalive_timeout)
-        //   //   // .http2_max_frame_size(max_frame_size)
-        .serve(Shared::new(service))
-        .with_graceful_shutdown(async move {
-          let _ = rcr.await;
-          trace!("Received shutdown signal for server {}", key);
-        })
-        .instrument(tracing::trace_span!("mock server", key = key2.as_str(), port = address.port()));
+      loop {
+        let http_service = http_service.clone();
 
-      trace!("spawning server onto runtime");
-      handle.spawn(server);
-      trace!("spawning server onto runtime - done");
-    }).join();
+        select! {
+          connection = listener.accept() => {
+            match connection {
+              Ok((stream, remote_address)) => {
+                debug!("Received connection from remote {}", remote_address);
+                let io = TokioIo::new(stream);
+                let conn = Builder::new(TokioExecutor::new())
+                  .serve_connection(io, http_service);
 
-    if result.is_err() {
-      Err(anyhow!("Failed to start mock server thread"))
-    } else {
-      trace!("Mock server setup OK");
-      Ok(address)
-    }
+                let conn = graceful.watch(conn);
+                tokio::spawn(async move {
+                  if let Err(err) = conn.await {
+                      error!("Failed to serve connection: {err}");
+                  }
+                  trace!("Connection dropped: {}", remote_address);
+                });
+              },
+              Err(e) => {
+                error!("Failed to accept connection: {e}");
+              }
+            }
+          }
+
+          _ = &mut shutdown_recv => {
+            trace!("Received shutdown signal, signalling server shutdown");
+            graceful.shutdown().await;
+            trace!("Exiting main loop");
+            break;
+          }
+        }
+      }
+
+      trace!("Mock server main loop done");
+    }.instrument(trace_span!("mock server", key = %server_key, port = address.port())));
+
+    Ok(address)
   }
 
   fn update_mock_server_address(&mut self, address: &SocketAddr) {
@@ -202,7 +211,7 @@ impl GrpcMockServer
   }
 }
 
-impl Service<Request<hyper::Body>> for GrpcMockServer  {
+impl Service<Request<Incoming>> for GrpcMockServer  {
   type Response = Response<BoxBody>;
   type Error = hyper::Error;
   type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
@@ -212,7 +221,7 @@ impl Service<Request<hyper::Body>> for GrpcMockServer  {
   }
 
   #[instrument(skip(self), level = "trace")]
-  fn call(&mut self, req: Request<hyper::Body>) -> Self::Future {
+  fn call(&mut self, req: Request<Incoming>) -> Self::Future {
     let routes = self.routes.clone();
     let server_key = self.server_key.clone();
     let pact = self.pact.clone();
