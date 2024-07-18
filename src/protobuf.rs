@@ -703,19 +703,7 @@ fn build_struct_field(
     message_builder, matching_rules, generators);
 
   match field_value {
-    Value::Object(map) => if let Some(matching_def) = map.get("pact:match") {
-      //       if (fieldsMap.containsKey("pact:match")) {
-      //         val expression = fieldsMap["pact:match"]!!.stringValue
-      //         when (val ruleDefinition = MatchingRuleDefinition.parseMatchingRuleDefinition(expression)) {
-      //           is Ok -> TODO()
-      //           is Err -> {
-      //             logger.error { "'$expression' is not a valid matching rule definition - ${ruleDefinition.error}" }
-      //             throw RuntimeException("'$expression' is not a valid matching rule definition - ${ruleDefinition.error}")
-      //           }
-      //         }
-      //       }
-      todo!()
-    } else {
+    Value::Object(map) => {
       let mut fields = btreemap!{};
       for (key, value) in map {
         let field_path = path.join(key);
@@ -844,7 +832,9 @@ fn build_map_field(
             Either::Left(rule) => {
               matching_rules.add_rule(path.clone(), rule.clone(), RuleLogic::And)
             },
-            Either::Right(mr) => todo!()
+            Either::Right(mr) => {
+              return Err(anyhow!("Was expecting a matching rule definition, but got a reference: {}", mr.name));
+            }
           }
         }
       }
