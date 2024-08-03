@@ -10,7 +10,7 @@ use prost::encoding::WireType;
 use serde_json::json;
 use pact_protobuf_plugin::matching::compare_message;
 use pact_protobuf_plugin::message_decoder::{ProtobufField, ProtobufFieldData};
-use pact_protobuf_plugin::utils::{find_message_type_by_name, get_descriptors_for_interaction, lookup_interaction_config};
+use pact_protobuf_plugin::utils::{find_message_descriptor_for_type, get_descriptors_for_interaction, lookup_interaction_config};
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn repeated_enum_test() {
@@ -54,7 +54,8 @@ async fn repeated_enum_test() {
     let path = DocPath::root();
     let context = CoreMatchingContext::new(DiffConfig::NoUnexpectedKeys,
       &message.contents.matching_rules.rules_for_category("body").unwrap(), &hashmap!{});
-    let (message_descriptor, fs) = find_message_type_by_name("MessageIn", &fds).unwrap();
+    let (message_descriptor, fs) = find_message_descriptor_for_type(
+      ".example.enum.package.MessageIn", &fds).unwrap();
     let enum_descriptor = fs.enum_type.first().unwrap();
     let expected = vec![
       ProtobufField {

@@ -40,10 +40,39 @@ use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValu
 use crate::metadata::{MessageMetadata, process_metadata};
 use crate::protoc::Protoc;
 use crate::utils::{
-  find_enum_value_by_name, find_enum_value_by_name_in_message, find_message_descriptor_from_hash_map, find_nested_type, is_map_field, is_repeated_field, prost_string, split_name
+  to_fully_qualified_name, find_enum_value_by_name, find_enum_value_by_name_in_message, find_message_descriptor_for_type_in_map, find_nested_type, is_map_field, is_repeated_field, last_name, prost_string, split_service_and_method
 };
 
-/// Process the provided protobuf file and configure the interaction
+/// Converts user-provided configuration and .proto files into a pact interaction.
+/// 
+/// # Arguments
+/// 
+/// - `proto_file` - Path to the protobuf file
+/// - `protoc` - Encapsulates protoc functionality; can parse protos into descriptors
+/// - `config` - Test configuration as provided by the test author, e.g.
+/// ```json
+/// {
+///   "pact:proto": "/path/to/protos/route/route_guide.proto",
+///   "pact:proto-service": "RouteGuide/GetFeature",
+///   "pact:content-type": "application/protobuf",
+///   "pact:protobuf-config": {
+///       "additionalIncludes": ["/path/to/protos/"]
+///   },
+///   "request": {
+///       "latitude": "matching(number, 180)",
+///       "longitude": "matching(number, 200)"
+///   },
+///   "response": {
+///       "name": "notEmpty('Big Tree')",
+///   }
+/// }
+/// ```
+/// 
+/// # Returns
+/// 
+/// A tuple of values to construct the pact file:
+/// - Vector of interactions - single for a message interaction, or a request/response pair for a grpc interaction
+/// - Plugin configuration, which can be used to store the protobuf file and descriptors
 pub(crate) async fn process_proto(
   proto_file: String,
   protoc: &Protoc,
@@ -72,7 +101,6 @@ pub(crate) async fn process_proto(
       trace!("  {:?}", message_type.name);
     }
   }
-
   let descriptor_encoded = BASE64.encode(&descriptor_bytes);
   let descriptor_hash = format!("{:x}", md5::compute(&descriptor_bytes));
   let mut interactions = vec![];
@@ -114,33 +142,40 @@ pub(crate) async fn process_proto(
   Ok((interactions, plugin_config))
 }
 
-/// Configure the interaction for a Protobuf service method, which has an input and output message
+/// Configure the interaction for a gRPC service method, which has an input and output message.
+/// Main work is done in `construct_protobuf_interaction_for_service`;
+/// this function does two things:
+/// - locates the correct service descriptor in the provided file descriptor
+/// - adds interaction_configuration to the output of `construct_protobuf_interaction_for_service`, which contains:
+///   - service: the fully qualified service name; allows to locate this service when verifying this interaction
+///   - descriptorKey: a hash of the protobuf file descriptor, which allows to locate the file descriptor 
+/// in the plugin configuration when verifying this interaction
 fn configure_protobuf_service(
-  service_name: &str,
+  service_with_method: &str,
   config: &BTreeMap<String, prost_types::Value>,
   descriptor: &FileDescriptorProto,
   all_descriptors: &HashMap<String, &FileDescriptorProto>,
   descriptor_hash: &str
 ) -> anyhow::Result<(Option<InteractionResponse>, Vec<InteractionResponse>)> {
-  trace!(">> configure_protobuf_service({service_name}, {config:?}, {descriptor_hash})");
+  trace!(">> configure_protobuf_service({service_with_method}, {config:?}, {descriptor_hash})");
 
-  debug!("Looking for service and method with name '{}'", service_name);
-  let (service, proc_name) = service_name.split_once('/')
-    .ok_or_else(|| anyhow!("Service name '{}' is not valid, it should be of the form <SERVICE>/<METHOD>", service_name))?;
+  debug!("Looking for service and method with name '{}'", service_with_method);
+  let (service, method_name) = split_service_and_method(service_with_method)?;
+  // Lookup service inside the descriptor, but don't search all file descriptors to avoid similarly named services
   let service_descriptor = descriptor.service
-    .iter().find(|p| p.name.clone().unwrap_or_default() == service)
-    .ok_or_else(|| anyhow!("Did not find a descriptor for service '{}'", service_name))?;
+    .iter().find(|p| p.name() == service)
+    .ok_or_else(|| anyhow!("Did not find a descriptor for service '{}'", service_with_method))?;
   trace!("service_descriptor = {:?}", service_descriptor);
-  construct_protobuf_interaction_for_service(service_descriptor, config, service,
-    proc_name, all_descriptors, descriptor)
+  
+  let service_with_method = service_with_method.split_once(':').map(|(s, _)| s).unwrap_or(service_with_method);
+  let service_full_name = to_fully_qualified_name(service_with_method, descriptor.package())?;
+  construct_protobuf_interaction_for_service(service_descriptor, config, method_name, all_descriptors)
     .map(|(request, response)| {
       let plugin_configuration = Some(PluginConfiguration {
         interaction_configuration: Some(to_proto_struct(&hashmap! {
-            "service".to_string() => Value::String(
-              service_name.split_once(':').map(|(s, _)| s).unwrap_or(service_name).to_string()
-            ),
+            "service".to_string() => Value::String(service_full_name),
             "descriptorKey".to_string() => Value::String(descriptor_hash.to_string())
-          })),
+        })),
         pact_configuration: None
       });
       trace!("request = {request:?}");
@@ -152,15 +187,18 @@ fn configure_protobuf_service(
     })
 }
 
-/// Constructs an interaction for the given Protobuf service descriptor
+/// Constructs an interaction for the given gRPC service descriptor
+/// Interaction consists of request intraction and possibly multiple response interactions,
+/// each is constructed by calling `construct_protobuf_interaction_for_message`.
+/// Request and response types are looked up in all of the provided file descriptors using their
+/// fully qualified names.
 fn construct_protobuf_interaction_for_service(
-  descriptor: &ServiceDescriptorProto,
+  service_descriptor: &ServiceDescriptorProto,
   config: &BTreeMap<String, prost_types::Value>,
-  service_name: &str,
   method_name: &str,
-  all_descriptors: &HashMap<String, &FileDescriptorProto>,
-  file_descriptor: &FileDescriptorProto
+  all_descriptors: &HashMap<String, &FileDescriptorProto>
 ) -> anyhow::Result<(Option<InteractionResponse>, Vec<InteractionResponse>)> {
+  let service_name = service_descriptor.name.as_deref().expect("Service descriptor name cannot be empty");
   trace!(">> construct_protobuf_interaction_for_service({config:?}, {service_name}, {method_name})");
 
   let (method_name, service_part) = if method_name.contains(':') {
@@ -169,33 +207,29 @@ fn construct_protobuf_interaction_for_service(
     (method_name, "")
   };
   trace!(method_name, service_part, "looking up method descriptor");
-  let method_descriptor = descriptor.method.iter()
+  let method_descriptor = service_descriptor.method.iter()
     .find(|m| m.name.clone().unwrap_or_default() == method_name)
     .ok_or_else(|| anyhow!("Did not find a method descriptor for method '{}' in service '{}'", method_name, service_name))?;
 
   let input_name = method_descriptor.input_type.as_ref()
     .ok_or_else(|| anyhow!("Input message name is empty for service {}/{}", service_name, method_name))?;
   let output_name = method_descriptor.output_type.as_ref()
-    .ok_or_else(|| anyhow!("Input message name is empty for service {}/{}", service_name, method_name))?;
-  let (input_message_name, input_package) = split_name(input_name.as_str());
-  let (output_message_name, output_package) = split_name(output_name.as_str());
-
-  trace!(%input_name, ?input_package, input_message_name, "Input message");
-  trace!(%output_name, ?output_package, output_message_name, "Output message");
-
-  let request_descriptor = find_message_descriptor_from_hash_map(input_message_name, input_package, all_descriptors)?;
-  let response_descriptor = find_message_descriptor_from_hash_map(output_message_name, output_package, all_descriptors)?;
-
-  trace!("request_descriptor = {:?}", request_descriptor);
-  trace!("response_descriptor = {:?}", response_descriptor);
-
+    .ok_or_else(|| anyhow!("Output message name is empty for service {}/{}", service_name, method_name))?;
+  
+  let (request_descriptor, request_file_descriptor) = 
+    find_message_descriptor_for_type_in_map(input_name, all_descriptors)?;
+  let (response_descriptor, response_file_descriptor) = 
+    find_message_descriptor_for_type_in_map(output_name, all_descriptors)?;
+  
+  trace!(%input_name, ?request_descriptor, ?request_file_descriptor, "Input message descriptor");
+  trace!(%output_name, ?response_descriptor, ?response_file_descriptor, "Output message descriptor");
+  
   let request_part_config = request_part(config, service_part)?;
   trace!(config = ?request_part_config, service_part, "Processing request part config");
   let request_metadata = process_metadata(config.get("requestMetadata"))?;
+
   let interaction = construct_protobuf_interaction_for_message(&request_descriptor,
-    &request_part_config, input_message_name, "", file_descriptor, all_descriptors,
-    request_metadata.as_ref()
-  )?;
+    &request_part_config, "", &request_file_descriptor, all_descriptors, request_metadata.as_ref())?;
   let request_part = Some(InteractionResponse {
     part_name: "request".into(),
     .. interaction
@@ -207,9 +241,7 @@ fn construct_protobuf_interaction_for_service(
   for (config, md_config) in response_part_config {
     let response_metadata = process_metadata(md_config)?;
     let interaction = construct_protobuf_interaction_for_message(
-      &response_descriptor, &config, output_message_name, "",
-      file_descriptor, all_descriptors, response_metadata.as_ref()
-    )?;
+      &response_descriptor, &config, "", &response_file_descriptor, all_descriptors, response_metadata.as_ref())?;
     response_part.push(InteractionResponse { part_name: "response".into(), .. interaction });
   }
 
@@ -285,16 +317,17 @@ fn configure_protobuf_message(
   all_descriptors: &HashMap<String, &FileDescriptorProto>
 ) -> anyhow::Result<InteractionResponse> {
   trace!(">> configure_protobuf_message({}, {:?})", message_name, descriptor_hash);
-  debug!("Looking for message of type '{}'", message_name);
+  debug!("Looking for message '{}' in '{}'", message_name, descriptor.name());
   let message_descriptor = descriptor.message_type
-    .iter().find(|p| p.name.clone().unwrap_or_default() == message_name)
-    .ok_or_else(|| anyhow!("Did not find a descriptor for message '{}'", message_name))?;
-  construct_protobuf_interaction_for_message(message_descriptor, config, message_name, "", descriptor, all_descriptors, None)
+    .iter().find(|p| p.name() == message_name)
+    .ok_or_else(|| anyhow!("Did not find a descriptor for message '{}' in '{}'", message_name, descriptor.name()))?;
+  let message_full_name = to_fully_qualified_name(message_name, descriptor.package())?;
+  construct_protobuf_interaction_for_message(message_descriptor, config, "", descriptor, all_descriptors, None)
     .map(|interaction| {
       InteractionResponse {
         plugin_configuration: Some(PluginConfiguration {
           interaction_configuration: Some(to_proto_struct(&hashmap!{
-            "message".to_string() => Value::String(message_name.to_string()),
+            "message".to_string() => Value::String(message_full_name),
             "descriptorKey".to_string() => Value::String(descriptor_hash.to_string())
           })),
           pact_configuration: None
@@ -304,21 +337,37 @@ fn configure_protobuf_message(
     })
 }
 
-/// Constructs an interaction for the given Protobuf message descriptor
+/// Constructs an interaction for the given Protobuf message descriptor.
+/// Used in both message pacts and gRPC service pacts.
+/// 
+/// # Arguments
+/// 
+/// - `message_descriptor` - Descriptor of the message to construct the interaction for
+/// - `config` - Test configuration as provided by the test author. For request and response messages in gRPC
+/// interaction, this will only contain the value of `request` or `response` fields in the original configuration.
+/// For message pacts, this is a full configuration object (like in `process_proto` example)
+/// - `message_part` - always empty string for now
+/// - `file_descriptor` - Descriptor of the file containing the message
+/// - `all_descriptors` - All file descriptors provided to the plugin
+/// - `metadata` - Optional metadata for the message; for request and response messages in gRPC interaction
+/// it's the values of `requestMetadata` and `responseMetadata` fields; not currently supported for message pacts.
+/// 
+/// # Returns
+/// - InteractionResponse - the constructed interaction
 #[instrument(ret, skip(message_descriptor, file_descriptor, all_descriptors))]
 fn construct_protobuf_interaction_for_message(
   message_descriptor: &DescriptorProto,
   config: &BTreeMap<String, prost_types::Value>,
-  message_name: &str,
   message_part: &str,
   file_descriptor: &FileDescriptorProto,
   all_descriptors: &HashMap<String, &FileDescriptorProto>,
   metadata: Option<&MessageMetadata>
 ) -> anyhow::Result<InteractionResponse> {
-  trace!(">> construct_protobuf_interaction_for_message({}, {}, {:?}, {:?}, {:?})", message_name,
+  trace!(">> construct_protobuf_interaction_for_message({}, {:?}, {:?}, {:?})",
     message_part, file_descriptor.name, config.keys(), metadata);
   trace!("message_descriptor = {:?}", message_descriptor);
-
+  
+  let message_name = message_descriptor.name.as_ref().expect("Message descriptor name cannot be empty");
   let mut message_builder = MessageBuilder::new(message_descriptor, message_name, file_descriptor);
   let mut matching_rules = MatchingRuleCategory::empty("body");
   let mut generators = hashmap!{};
@@ -346,7 +395,12 @@ fn construct_protobuf_interaction_for_message(
   let rules = extract_rules(&matching_rules);
   let generators = extract_generators(&generators);
 
-  let content_type = format!("application/protobuf;message={}", message_name);
+  // Add a package to the message name. This value is read in:
+  // - server::generate_contents_impl()
+  // - matching::match_service() - as part of compare_contents flow
+  // it is not passed on to the provider under test
+  let message_with_package = to_fully_qualified_name(message_name, file_descriptor.package())?;
+  let content_type = format!("application/protobuf;message={}", message_with_package);
   let mut metadata_fields = btreemap! {
     "contentType".to_string() => prost_string(&content_type)
   };
@@ -640,11 +694,11 @@ fn build_single_embedded_field_value(
       Ok(None)
     } else if let Value::Object(config) = value {
       debug!("Configuring the message from config {:?}", config);
-      let (message_name, package_name) = split_name(type_name.as_str());
       let embedded_type = find_nested_type(&message_builder.descriptor, field_descriptor)
-        .or_else(|| find_message_descriptor_from_hash_map(message_name, package_name, all_descriptors).ok())
+        .or_else(|| find_message_descriptor_for_type_in_map(type_name.as_str(), all_descriptors).ok().map(|(m, _)| m))
         .ok_or_else(|| anyhow!("Did not find message '{}' in the current message or in the file descriptors", type_name))?;
-      let mut embedded_builder = MessageBuilder::new(&embedded_type, message_name, &message_builder.file_descriptor);
+      let mut embedded_builder = MessageBuilder::new(
+        &embedded_type, last_name(type_name.as_str()), &message_builder.file_descriptor);
 
       let field_value = if let Some(definition) = config.get("pact:match") {
         let mut field_value = None;
@@ -1269,7 +1323,7 @@ pub(crate) mod tests {
     response_part,
     value_for_type
   };
-  use crate::utils::find_message_type_by_name;
+  use crate::utils::find_message_descriptor_for_type;
 
   #[test]
   fn value_for_type_test() {
@@ -1324,9 +1378,14 @@ pub(crate) mod tests {
 
   #[test]
   fn construct_protobuf_interaction_for_message_test() {
+    // construct_protobuf_interaction_for_message doesn't actually verify 
+    // that the message descriptor is part of a file descriptor
+    // so it doesn't have to be here as well
+    // It will still assume that the message came from this file descriptor and will use the package field from
+    // the file descriptor as the message package too.
     let file_descriptor = FileDescriptorProto {
-      name: None,
-      package: None,
+      name: Some("test_file.proto".to_string()),
+      package: Some("test_package".to_string()),
       dependency: vec![],
       public_dependency: vec![],
       weak_dependency: vec![],
@@ -1410,10 +1469,10 @@ pub(crate) mod tests {
     };
 
     let result = construct_protobuf_interaction_for_message(&message_descriptor, &config,
-      "test_message", "", &file_descriptor, &hashmap!{}, None).unwrap();
+      "", &file_descriptor, &hashmap!{}, None).unwrap();
 
     let body = result.contents.as_ref().unwrap();
-    expect!(body.content_type.as_str()).to(be_equal_to("application/protobuf;message=test_message"));
+    expect!(body.content_type.as_str()).to(be_equal_to("application/protobuf;message=.test_package.test_message"));
     expect!(body.content_type_hint).to(be_equal_to(2));
     expect!(body.content.as_ref()).to(be_some().value(&vec![
       10, // field 1 length encoded (1 << 3 + 2 == 10)
@@ -1469,12 +1528,11 @@ pub(crate) mod tests {
     let config = btreemap! {
       "value".to_string() => prost_types::Value { kind: Some(prost_types::value::Kind::StringValue("eachValue(matching(type, '00000000000000000000000000000000'))".to_string())) }
     };
-    let (message_descriptor, _) = find_message_type_by_name("ValuesMessageIn", &fds).unwrap();
+    let (message_descriptor, _) = find_message_descriptor_for_type(".ValuesMessageIn", &fds).unwrap();
 
     let result = construct_protobuf_interaction_for_message(
       &message_descriptor,
       &config,
-      "ValuesMessageIn",
       "",
       fs,
       &all_descriptors,
@@ -1482,7 +1540,7 @@ pub(crate) mod tests {
     ).unwrap();
 
     let body = result.contents.as_ref().unwrap();
-    expect!(body.content_type.as_str()).to(be_equal_to("application/protobuf;message=ValuesMessageIn"));
+    expect!(body.content_type.as_str()).to(be_equal_to("application/protobuf;message=.ValuesMessageIn"));
     expect!(body.content.as_ref()).to(be_some().value(&vec![
       10, // field 1 length encoded (1 << 3 + 2 == 10)
       32, // 32 bytes
@@ -1503,7 +1561,7 @@ pub(crate) mod tests {
   fn construct_message_field_with_message_with_each_value_matcher() {
     let fds = FileDescriptorSet::decode(DESCRIPTORS_FOR_EACH_VALUE_TEST.as_slice()).unwrap();
     let fs = fds.file.first().unwrap();
-    let (message_descriptor, _) = find_message_type_by_name("ValuesMessageIn", &fds).unwrap();
+    let (message_descriptor, _) = find_message_descriptor_for_type(".ValuesMessageIn", &fds).unwrap();
     let mut message_builder = MessageBuilder::new(&message_descriptor, "ValuesMessageIn", fs);
     let path = DocPath::new("$.value").unwrap();
     let mut matching_rules = MatchingRuleCategory::empty("body");
@@ -1543,7 +1601,7 @@ pub(crate) mod tests {
   fn build_field_value_with_message_with_each_value_matcher() {
     let fds = FileDescriptorSet::decode(DESCRIPTORS_FOR_EACH_VALUE_TEST.as_slice()).unwrap();
     let fs = fds.file.first().unwrap();
-    let (message_descriptor, _) = find_message_type_by_name("ValuesMessageIn", &fds).unwrap();
+    let (message_descriptor, _) = find_message_descriptor_for_type(".ValuesMessageIn", &fds).unwrap();
     let field_descriptor = message_descriptor.field.first().unwrap();
     let mut message_builder = MessageBuilder::new(&message_descriptor, "ValuesMessageIn", fs);
     let path = DocPath::new("$.value").unwrap();
@@ -1649,8 +1707,8 @@ pub(crate) mod tests {
       method: vec![
         MethodDescriptorProto {
           name: Some("call".to_string()),
-          input_type: Some("test_package.StringValue".to_string()),
-          output_type: Some("test_package.test_message".to_string()),
+          input_type: Some(".test_package.StringValue".to_string()),
+          output_type: Some(".test_package.test_message".to_string()),
           options: None,
           client_streaming: None,
           server_streaming: None
@@ -1663,8 +1721,8 @@ pub(crate) mod tests {
       "request".to_string() => prost_types::Value { kind: Some(prost_types::value::Kind::BoolValue(true)) }
     };
 
-    let result = construct_protobuf_interaction_for_service(&service_descriptor, &config,
-      "test_service", "call", &hashmap!{ "file".to_string() => &file_descriptor }, &file_descriptor);
+    let result = construct_protobuf_interaction_for_service(
+      &service_descriptor, &config, "call", &hashmap!{ "file".to_string() => &file_descriptor });
     expect!(result.as_ref()).to(be_err());
     expect!(result.unwrap_err().to_string()).to(
       be_equal_to("Request contents is of an un-processable type: BoolValue(true), it should be either a Struct or a StringValue")
@@ -1744,8 +1802,8 @@ pub(crate) mod tests {
       method: vec![
         MethodDescriptorProto {
           name: Some("call".to_string()),
-          input_type: Some("test_package.StringValue".to_string()),
-          output_type: Some("test_package.test_message".to_string()),
+          input_type: Some(".test_package.StringValue".to_string()),
+          output_type: Some(".test_package.test_message".to_string()),
           options: None,
           client_streaming: None,
           server_streaming: None
@@ -1758,8 +1816,8 @@ pub(crate) mod tests {
       "request".to_string() => prost_types::Value { kind: Some(prost_types::value::Kind::StringValue("true".to_string())) }
     };
 
-    let result = construct_protobuf_interaction_for_service(&service_descriptor, &config,
-      "test_service", "call", &hashmap!{ "file".to_string() => &file_descriptor }, &file_descriptor);
+    let result = construct_protobuf_interaction_for_service(
+      &service_descriptor, &config, "call", &hashmap!{ "file".to_string() => &file_descriptor });
     expect!(result).to(be_ok());
   }
 
@@ -2709,7 +2767,11 @@ pub(crate) mod tests {
 
   #[test]
   fn construct_protobuf_interaction_with_provider_state_generator() {
-    let file_descriptor = FileDescriptorProto::default();
+    let file_descriptor = FileDescriptorProto {
+      name: Some("test_file".to_string()),
+      package: Some("test_package".to_string()),
+      .. FileDescriptorProto::default()
+    };
     let message_descriptor = DescriptorProto {
       name: Some("test_message".to_string()),
       field: vec![
@@ -2730,10 +2792,10 @@ pub(crate) mod tests {
     };
 
     let result = construct_protobuf_interaction_for_message(&message_descriptor, &config,
-      "test_message", "", &file_descriptor, &hashmap!{}, None).unwrap();
+      "", &file_descriptor, &hashmap!{}, None).unwrap();
 
     let body = result.contents.as_ref().unwrap();
-    expect!(body.content_type.as_str()).to(be_equal_to("application/protobuf;message=test_message"));
+    expect!(body.content_type.as_str()).to(be_equal_to("application/protobuf;message=.test_package.test_message"));
     expect!(body.content_type_hint).to(be_equal_to(2));
     expect!(body.content.as_ref()).to(be_some().value(&vec![
       10, // field 1 length encoded (1 << 3 + 2 == 10)

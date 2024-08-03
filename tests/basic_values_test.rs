@@ -8,7 +8,7 @@ use serde_json::json;
 
 use pact_protobuf_plugin::message_decoder::{decode_message, ProtobufField};
 use pact_protobuf_plugin::message_decoder::ProtobufFieldData::{Boolean, Double, Integer32, String, UInteger32};
-use pact_protobuf_plugin::utils::{find_message_type_by_name, get_descriptors_for_interaction, lookup_interaction_config};
+use pact_protobuf_plugin::utils::{find_message_descriptor_for_type, get_descriptors_for_interaction, lookup_interaction_config};
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn basic_values_test() {
@@ -53,7 +53,8 @@ async fn basic_values_test() {
   let interaction_config = lookup_interaction_config(&interaction).unwrap();
   let descriptor_key = interaction_config.get("descriptorKey").map(json_to_string).unwrap();
   let fds = get_descriptors_for_interaction(descriptor_key.as_str(), &plugin_config).unwrap();
-  let (message_descriptor, _) = find_message_type_by_name("MessageIn", &fds).unwrap();
+  let (message_descriptor, _) = find_message_descriptor_for_type(
+    ".com.pact.protobuf.example.MessageIn", &fds).unwrap();
   let mut buffer = request.contents.value().unwrap();
 
   let fields = decode_message(&mut buffer, &message_descriptor, &fds).unwrap();

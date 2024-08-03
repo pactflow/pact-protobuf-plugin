@@ -13,13 +13,13 @@
       "pluginConfiguration": {
         "protobuf": {
           "descriptorKey": "628d9de1211ee7ee1d167e3e12b170bf",
-          "service": "Test/GetTest"
+          "service": ".pactissue.Test/GetTest"
         }
       },
       "request": {
         "contents": {
           "content": "CgA=",
-          "contentType": "application/protobuf;message=MessageIn",
+          "contentType": "application/protobuf;message=.pactissue.MessageIn",
           "contentTypeHint": "BINARY",
           "encoded": "base64"
         },
@@ -46,7 +46,7 @@
           }
         },
         "metadata": {
-          "contentType": "application/protobuf;message=MessageIn",
+          "contentType": "application/protobuf;message=.pactissue.MessageIn",
           "key": "value"
         }
       },
@@ -54,7 +54,7 @@
         {
           "contents": {
             "content": "EAE=",
-            "contentType": "application/protobuf;message=MessageOut",
+            "contentType": "application/protobuf;message=.pactissue.MessageOut",
             "contentTypeHint": "BINARY",
             "encoded": "base64"
           },
@@ -89,7 +89,7 @@
             }
           },
           "metadata": {
-            "contentType": "application/protobuf;message=MessageOut",
+            "contentType": "application/protobuf;message=.pactissue.MessageOut",
             "grpc-message": "not found",
             "grpc-status": "NOT_FOUND"
           }
@@ -101,13 +101,23 @@
   ],
   "metadata": {
     "pactRust": {
-      "consumer": "1.1.2",
-      "models": "1.1.18"
+      "consumer": "1.2.3",
+      "models": "1.2.3"
     },
     "pactSpecification": {
       "version": "4.0"
     },
     "plugins": [
+      {
+        "configuration": {
+          "628d9de1211ee7ee1d167e3e12b170bf": {
+            "protoDescriptors": "CqUBChdyZXNwb25zZV9tZXRhZGF0YS5wcm90bxIJcGFjdGlzc3VlIhkKCU1lc3NhZ2VJbhIMCgFzGAEgASgJUgFzIhoKCk1lc3NhZ2VPdXQSDAoBYhgCIAEoCFIBYjJACgRUZXN0EjgKB0dldFRlc3QSFC5wYWN0aXNzdWUuTWVzc2FnZUluGhUucGFjdGlzc3VlLk1lc3NhZ2VPdXQiAGIGcHJvdG8z",
+            "protoFile": "syntax = \"proto3\";\n\npackage pactissue;\n\nmessage MessageIn {\n  string s = 1;\n}\n\nmessage MessageOut {\n  bool b = 2;\n}\n\nservice Test {\n  rpc GetTest(MessageIn) returns (MessageOut) {}\n}\n"
+          }
+        },
+        "name": "protobuf",
+        "version": "0.4.0"
+      },
       {
         "configuration": {
           "628d9de1211ee7ee1d167e3e12b170bf": {

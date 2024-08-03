@@ -38,41 +38,85 @@ pub fn fds_to_map(fds: &FileDescriptorSet) -> HashMap<String, &FileDescriptorPro
     |des| (des.name.clone().unwrap_or_default(), des)).collect()
 }
 
+fn fds_map_to_vec(descriptors: &HashMap<String, &FileDescriptorProto>) -> Vec<FileDescriptorProto> {
+  descriptors.values().map(|d| *d).cloned().collect()
+}
+
 /// Return the last name in a dot separated string
 pub fn last_name(entry_type_name: &str) -> &str {
   entry_type_name.split('.').last().unwrap_or(entry_type_name)
 }
 
 /// Split a dot-seperated string into the package and name part
-pub fn split_name(name: &str) -> (&str, Option<&str>) {
-  name.rsplit_once('.')
+pub fn parse_name(name: &str) -> (&str, Option<&str>) {
+  // if name starts with the '.' it's a fully-qualified name that can contain a package
+  if name.starts_with('.') {
+    name.rsplit_once('.')
     .map(|(package, name)| {
-      if package.is_empty() {
-        (name, None)
+      if let Some(trimmed) = package.strip_prefix(".") {
+        (name, Some(trimmed))
       } else {
-        if let Some(trimmed) = package.strip_prefix(".") {
-          (name, Some(trimmed))
-        } else {
-          (name, Some(package))
-        }
+        (name, Some(package))
       }
     })
     .unwrap_or_else(|| (name, None))
+  } else {
+    // otherwise it's a relative name, so if it contains dots, this means embedded types, not packages?
+    (name, None)
+  }
 }
 
-/// Search for a message by type name in all the file descriptors
-pub fn find_message_type_by_name(
-  message_name: &str,
-  descriptors: &FileDescriptorSet
-) -> anyhow::Result<(DescriptorProto, FileDescriptorProto)> {
-  descriptors.file.iter()
-    .map(|descriptor| {
-      find_message_type_in_file_descriptor(message_name, descriptor).map(|ds| (ds, descriptor)).ok()
+/// Converts a relative protobuf type name to a fully qualified one by appending a `.<package>.` prefix,
+/// or if the package is empty, just a `.` prefix.
+/// E.g. `MyType` with package `example` becomes `.example.MyType`
+/// and `MyType` with empty package becomes `.MyType`
+pub fn to_fully_qualified_name(name: &str, package: &str) -> anyhow::Result<String> {
+  match name {
+    "" => Err(anyhow!("type name cannot be empty when constructing a fully qualified name")),
+    _ => Ok(match package {
+      "" => format!(".{}", name),
+      _ => format!(".{}.{}", package, name)
     })
-    .find(|result| result.is_some())
-    .flatten()
-    .map(|(m, f)| (m, f.clone()))
-    .ok_or_else(|| anyhow!("Did not find a message type '{}' in the descriptors", message_name))
+  }
+}
+
+/// Split a service/method definition into two seprate parts.
+/// E.g. MyService/MyMethod becomes ("MyService", "MyMethod")
+pub fn split_service_and_method(service_name: &str) -> anyhow::Result<(&str, &str)> {
+  match service_name.split_once('/') {
+    Some(result) => Ok(result),
+    None => Err(anyhow!("Service name '{}' is not valid, it should be of the form <SERVICE>/<METHOD>", service_name))
+  }
+}
+
+
+/// Converts from `.package.Service` (fully-qualified name) and `Method` to `/package.Service/Method`
+pub fn build_grpc_route(service_full_name: &str, method_name: &str) -> anyhow::Result<String> {
+  if service_full_name.is_empty() {
+    return Err(anyhow!("Service name cannot be empty"));
+  }
+  if method_name.is_empty() {
+    return Err(anyhow!("Method name cannot be empty"));
+  }
+  let service_no_dot = if service_full_name.starts_with('.') {
+    &service_full_name[1..] // remove the leading dot
+  } else {
+    service_full_name
+  };
+  Ok(format!("/{service_no_dot}/{method_name}"))
+}
+
+/// Parses `/package.Service/Method` into `.package.Service` (fully-qualified name) and `Method`
+pub fn parse_grpc_route(route_key: &str) -> Option<(String, String)> {
+  if !route_key.starts_with("/") {
+    return None;  // invalid grpc route
+  }
+  // remove all trailing slashes
+  let route_key = route_key.trim_end_matches('/');
+  match route_key[1..].split_once('/') { // remove the leading slash
+    Some((service, method)) => Some((format!(".{service}"), method.to_string())),
+    None => None
+  }
 }
 
 /// Search for a message by type name in the file descriptor
@@ -81,53 +125,171 @@ pub fn find_message_type_in_file_descriptor(
   descriptor: &FileDescriptorProto
 ) -> anyhow::Result<DescriptorProto> {
   descriptor.message_type.iter()
-    .find(|message| message.name.clone().unwrap_or_default() == message_name)
+    .find(|message| message.name() == message_name)
     .cloned()
     .ok_or_else(|| anyhow!("Did not find a message type '{}' in the file descriptor '{}'",
       message_name, descriptor.name.as_deref().unwrap_or("unknown")))
 }
 
-/// Finds message descriptor in a map of file descriptors.
-pub fn find_message_descriptor_from_hash_map(
-  message_name: &str,
-  package: Option<&str>,
-  descriptors: &HashMap<String, &FileDescriptorProto>,
-) -> anyhow::Result<DescriptorProto> {
-  let values = descriptors.values().map(|d| *d).cloned().collect();
-  find_message_descriptor(message_name, package, values)
+// TODO: handle nested types properly
+// current name resolution is dumb - just splits package and message name by a dot
+// but if you have .package.Message.NestedMessage.NestedMessageDeeperLevel this whole structure breaks down
+// because we'll be looking for packages with the name `.package.Message.NestedMessage`
+// while here the package is `.package` and then we need to find message called `Message` and go over it's nested types.
+// To be fair, I don't think this ever worked properly - it was looking across all file descriptors instead of narrowing them down by packages,
+// but it still wasn't looking for nested types.
+
+/// Helper to select a method descriptor by name from a service descriptor.
+pub fn find_method_descriptor_for_service(
+  method_name: &str,
+  service_descriptor: &ServiceDescriptorProto
+) -> anyhow::Result<MethodDescriptorProto> {
+  let method_descriptor = service_descriptor.method.iter().find(|method_desc| {
+    method_desc.name() == method_name
+  }).cloned().ok_or_else(|| anyhow!("Did not find the method {} in the Protobuf descriptor for service '{}'", 
+    method_name, service_descriptor.name()))?;
+  trace!("Found method descriptor {:?} for method {}", method_descriptor, method_name);
+  Ok(method_descriptor)
 }
 
-/// Finds message descriptor in a vector of file descriptors. If the package is provided, it will
-/// search only the descriptors matching the package. If not, it will search all descriptors with no package specified.
-/// (because package is an optional field in proto3)
-pub fn find_message_descriptor(
+/// Find a descriptor for a given type name, fully qualified or relative.
+/// Type name format is the same as in `type_name` field in field descriptor
+/// or the `input_type`/`output_type` fields in method descriptor.
+/// 
+/// If type name contains a dot ('.') it is a fully qualified name, so it is split into package name and message name; 
+/// if the package is empty, will only lookup messages which have no package.
+/// 
+/// If type name does not contain a dot, it is a relative type. We'll search all file descriptors then.
+/// This isn't techically correct, since we're supposed to start from the current file, and then search
+/// level by level, but it's good enough for now (and this is how the plugin used to work for all messages anyway)
+pub fn find_message_descriptor_for_type_in_vec(
+  type_name: &str,
+  all_descriptors: &Vec<FileDescriptorProto>
+) -> anyhow::Result<(DescriptorProto, FileDescriptorProto)> {
+  let (message_name, package) = parse_name(type_name);
+  find_message_descriptor(message_name, package, &all_descriptors)
+}
+
+/// Find a descriptor for a given type name, fully qualified or relative.
+/// Type name format is the same as in `type_name` field in field descriptor
+/// or the `input_type`/`output_type` fields in method descriptor.
+/// 
+/// If type name contains a dot ('.') it is a fully qualified name, so it is split into package name and message name; 
+/// if the package is empty, will only lookup messages which have no package.
+/// 
+/// If type name does not contain a dot, it is a relative type. We'll search all file descriptors then.
+/// This isn't techically correct, since we're supposed to start from the current file, and then search
+/// level by level, but it's good enough for now (and this is how the plugin used to work for all messages anyway)
+pub fn find_message_descriptor_for_type_in_map(
+  type_name: &str,
+  descriptors: &HashMap<String, &FileDescriptorProto>,
+) -> anyhow::Result<(DescriptorProto, FileDescriptorProto)> {
+  let values = fds_map_to_vec(descriptors);
+  find_message_descriptor_for_type_in_vec(type_name, &values)
+}
+
+/// Find a descriptor for a given type name, fully qualified or relative.
+/// Type name format is the same as in `type_name` field in field descriptor
+/// or the `input_type`/`output_type` fields in method descriptor.
+/// 
+/// If type name contains a dot ('.') it is a fully qualified name, so it is split into package name and message name; 
+/// if the package is empty, will only lookup messages which have no package.
+/// 
+/// If type name does not contain a dot, it is a relative type. We'll search all file descriptors then.
+/// This isn't techically correct, since we're supposed to start from the current file, and then search
+/// level by level, but it's good enough for now (and this is how the plugin used to work for all messages anyway)
+pub fn find_message_descriptor_for_type(
+  type_name: &str,
+  descriptors: &FileDescriptorSet,
+) -> anyhow::Result<(DescriptorProto, FileDescriptorProto)> {
+  find_message_descriptor_for_type_in_vec(type_name, &descriptors.file)
+}
+
+/// Finds message descriptor in a vector of file descriptors. If the package is not none, it will
+/// search only the descriptors matching the package 
+/// (empty string means descriptors without package, because package is an optional field in proto3). 
+/// If it is none, it will search all descriptors, to support cases where pact was generated by the older
+/// plugin version which didn't record the message package in the interaction config.
+pub(crate) fn find_message_descriptor(
   message_name: &str,
   package: Option<&str>,
-  all_descriptors: Vec<FileDescriptorProto>,
-) -> anyhow::Result<DescriptorProto> {
-  let descriptors;
-  if let Some(package) = package {
-    debug!(
-        "Looking for message '{}' in package '{}'",
-        message_name, package
-    );
-    descriptors = find_all_file_descriptors_for_package(package, all_descriptors)?;
+  all_descriptors: &Vec<FileDescriptorProto>,
+) -> anyhow::Result<(DescriptorProto, FileDescriptorProto)> {
+  if package.is_some() {
+    trace!("Looking for message descriptor for message '{}' in package '{:?}'", message_name, package);
   } else {
-    descriptors = find_all_file_descriptors_with_no_package(all_descriptors)?;
+    trace!("Looking for message descriptor for message '{}'", message_name);
   }
+  let descriptors = find_file_descriptors(package, &all_descriptors)?;
   descriptors.iter()
-    .find_map(|fd| find_message_type_in_file_descriptor(message_name, fd).ok())
+    .find_map(|fd| find_message_type_in_file_descriptor(message_name, fd).ok().map(|msg| (msg, fd.clone())))
     .ok_or_else(|| {
         anyhow!(
             "Did not find a message type '{}' in any of the file descriptors '{:?}'", 
             message_name, 
-            descriptors.iter().map(|d| d.name.clone().unwrap_or_default()).collect::<Vec<_>>())
+            descriptors.iter().map(|d| d.name()).collect::<Vec<_>>())
     })
+}
+
+/// Find a service descriptor for a given service type name, fully qualified or relative.
+/// 
+/// If type name contains a dot ('.') it is a fully qualified name, so it is split into package name and service name; 
+/// if the package is empty, will only lookup services which have no package.
+/// 
+/// If type name does not contain a dot, it is a relative type. We'll search all file descriptors then.
+/// This isn't techically correct, since we're supposed to start from the current file, and then search
+/// level by level, but it's good enough for now (and this is how the plugin used to work for all services anyway)
+pub(crate) fn find_service_descriptor_for_type(
+  type_name: &str,
+  all_descriptors: &FileDescriptorSet
+) -> anyhow::Result<(FileDescriptorProto, ServiceDescriptorProto)> {
+  let (message_name, package) = parse_name(type_name);
+  find_service_descriptor(message_name, package, all_descriptors)
+}
+
+pub(crate) fn find_service_descriptor(
+  service_name: &str,
+  package: Option<&str>,
+  descriptors: &FileDescriptorSet
+) -> anyhow::Result<(FileDescriptorProto, ServiceDescriptorProto)> {
+  if package.is_some() {
+    debug!("Looking for service '{}' with package '{:?}'", service_name, package);
+  } else {
+    debug!("Looking for service '{}'", service_name);
+  }
+  let file_descriptors = find_file_descriptors(package, &descriptors.file)?;
+  file_descriptors.iter().filter_map(|descriptor| {
+    descriptor.service.iter()
+      .find(|p| p.name() == service_name)
+      .map(|p| {
+        trace!("Found service descriptor with name {:?}", p.name);
+        (descriptor.clone(), p.clone())
+      })
+  })
+    .next()
+    .ok_or_else(|| anyhow!("Did not find a descriptor for service '{}'", service_name))
+}
+
+pub fn find_file_descriptors(
+  package: Option<&str>,
+  all_descriptors: &Vec<FileDescriptorProto>,
+) -> anyhow::Result<Vec<FileDescriptorProto>> {
+  match package {
+    Some(pkg) if pkg.is_empty() => {
+      debug!("Looking for file descriptors with no package");
+      find_all_file_descriptors_with_no_package(all_descriptors)
+    }
+    Some(pkg) => {
+      debug!("Looking for file descriptors with package '{}'", pkg);
+      find_all_file_descriptors_for_package(pkg, all_descriptors)
+    }
+    None => Ok(all_descriptors.clone())
+  }
 }
 
 fn find_all_file_descriptors_for_package(
   package: &str,
-  all_descriptors: Vec<FileDescriptorProto>,
+  all_descriptors: &Vec<FileDescriptorProto>,
 ) -> anyhow::Result<Vec<FileDescriptorProto>> {
   let package = if package.starts_with('.') {
       &package[1..]
@@ -145,7 +307,7 @@ fn find_all_file_descriptors_for_package(
       }
   }).cloned().collect();
   if found.is_empty() {
-      Err(anyhow!("Did not find a file descriptor for a package '{}'", package))
+      Err(anyhow!("Did not find any file descriptors for a package '{}'", package))
   } else {
       debug!("Found {} file descriptors for package '{}'", found.len(), package);
       Ok(found)
@@ -153,7 +315,7 @@ fn find_all_file_descriptors_for_package(
 }
 
 fn find_all_file_descriptors_with_no_package(
-  all_descriptors: Vec<FileDescriptorProto>
+  all_descriptors: &Vec<FileDescriptorProto>
   ) -> anyhow::Result<Vec<FileDescriptorProto>> {
   let found: Vec<_> = all_descriptors.iter().filter(|d| d.package.is_none()).cloned().collect();
   if found.is_empty() {
@@ -184,8 +346,7 @@ pub fn is_map_field(message_descriptor: &DescriptorProto, field: &FieldDescripto
 pub fn find_nested_type(message_descriptor: &DescriptorProto, field: &FieldDescriptorProto) -> Option<DescriptorProto> {
   trace!(">> find_nested_type({:?}, {:?}, {:?}, {:?})", message_descriptor.name, field.name, field.r#type(), field.type_name);
   if field.r#type() == Type::Message {
-    let type_name = field.type_name.clone().unwrap_or_default();
-    let message_type = last_name(type_name.as_str());
+    let message_type = last_name(field.type_name());
     trace!("find_nested_type: Looking for nested type '{}'", message_type);
     message_descriptor.nested_type.iter().find(|nested| {
       trace!("find_nested_type: type = '{:?}'", nested.name);
@@ -219,7 +380,7 @@ pub(crate) fn display_bytes(data: &[u8]) -> String {
 /// Look for the message field data with the given name
 pub fn find_message_field_by_name(descriptor: &DescriptorProto, field_data: Vec<ProtobufField>, field_name: &str) -> Option<ProtobufField> {
   let field_num = match descriptor.field.iter()
-    .find(|f| f.name.clone().unwrap_or_default() == field_name)
+    .find(|f| f.name() == field_name)
     .map(|f| f.number.unwrap_or(-1)) {
     Some(n) => n,
     None => return None
@@ -306,9 +467,9 @@ pub fn find_enum_value_by_name(
   let enum_name_full = enum_name.split('.').filter(|v| !v.is_empty()).collect::<Vec<_>>().join(".");
   let result = descriptors.values()
         .find_map(|fd| {
-          let package = fd.package.clone().unwrap_or_default();
-          if enum_name_full.starts_with(&package) {
-            let enum_name_short = enum_name_full.replace(&package, "");
+          let package = fd.package();
+          if enum_name_full.starts_with(package) {
+            let enum_name_short = enum_name_full.replace(package, "");
             let enum_name_parts = enum_name_short.split('.').filter(|v| !v.is_empty()).collect::<Vec<_>>();
             if let Some((_name, message_name)) = enum_name_parts.split_last() {
               if message_name.is_empty() {
@@ -342,12 +503,17 @@ pub fn find_enum_by_name(
   enum_name: &str
 ) -> Option<EnumDescriptorProto> {
   trace!(">> find_enum_by_name({})", enum_name);
+  // TODO: unify this name split logic with the one in split_name
   let enum_name_full = enum_name.split('.').filter(|v| !v.is_empty()).collect::<Vec<_>>().join(".");
   let result = descriptors.file.iter()
         .find_map(|fd| {
-          let package = fd.package.clone().unwrap_or_default();
-          if enum_name_full.starts_with(&package) {
-            let enum_name_short = enum_name_full.replace(&package, "");
+          // TODO: combine this with the rest of the package search logic;
+          // this one actually supports nested enum types,
+          // but starts_with check is not always correct (need to split by dots)
+          // and I don't think it recurses inside message-in-message
+          let package = fd.package();
+          if enum_name_full.starts_with(package) {
+            let enum_name_short = enum_name_full.replace(package, "");
             let enum_name_parts = enum_name_short.split('.').filter(|v| !v.is_empty()).collect::<Vec<_>>();
             if let Some((_name, message_name)) = enum_name_parts.split_last() {
               if message_name.is_empty() {
@@ -466,11 +632,38 @@ pub fn lookup_interaction_config(interaction: &dyn V4Interaction) -> Option<Hash
     })
 }
 
-/// Returns the service descriptors for the given interaction
+pub fn lookup_plugin_config(pact: &V4Pact) -> anyhow::Result<BTreeMap<String, serde_json::Value>>{
+  let plugin_config = pact.plugin_data.iter()
+    .find(|data| data.name == "protobuf")
+    .map(|data| &data.configuration)
+    .ok_or_else(|| anyhow!("Did not find any Protobuf configuration in the Pact file"))?
+    .iter()
+    .map(|(k, v)| (k.clone(), v.clone()))
+    .collect();
+  Ok(plugin_config)
+}
+
+/// Returns the service descriptors for the given interaction.
+/// Will load all descriptors from the pact file using `descriptorKey` from interaction config,
+/// and then find the correct file, service and method descriptors using `service` value from
+/// the interaction config.
+/// 
+/// # Arguments
+/// - `interaction` - A specific interaction from the pact
+/// - `pact` - Pact (contains this interaction too)
+/// 
+/// # Returns
+/// A tuple of:
+/// - FileDescriptorSet - all available file descriptors
+/// - ServiceDescriptorProto - the service descriptor for this gRPC service
+/// - MethodDescriptorProto - the method descriptor for this gRPC service
+/// - FileDescriptorProto - the file descriptor containing this gRPC service
 pub(crate) fn lookup_service_descriptors_for_interaction(
   interaction: &dyn V4Interaction,
   pact: &V4Pact
-) -> anyhow::Result<(FileDescriptorSet, ServiceDescriptorProto, MethodDescriptorProto, String)> {
+) -> anyhow::Result<(FileDescriptorSet, ServiceDescriptorProto, MethodDescriptorProto, FileDescriptorProto)> {
+  // TODO: a similar flow happens in server::compare_contents, can it be refactored to a common function?
+  // compare_contents works with both service and message, while this one only works with the service.
   let interaction_config = lookup_interaction_config(interaction)
     .ok_or_else(|| anyhow!("Interaction does not have any Protobuf configuration"))?;
   let descriptor_key = interaction_config.get("descriptorKey")
@@ -479,25 +672,27 @@ pub(crate) fn lookup_service_descriptors_for_interaction(
   let service = interaction_config.get("service")
     .map(json_to_string)
     .ok_or_else(|| anyhow!("Interaction gRPC service was missing in Pact file"))?;
-  let (service_name, method_name) = service.split_once('/')
-    .ok_or_else(|| anyhow!("Service name '{}' is not valid, it should be of the form <SERVICE>/<METHOD>", service))?;
+  
+  let (service_with_package, method_name) = split_service_and_method(service.as_str())?;
+  trace!("gRPC service for interaction: {}", service_with_package);
+  
+  let plugin_config = lookup_plugin_config(pact)?;
+  let descriptors = get_descriptors_for_interaction(descriptor_key.as_str(), &plugin_config)?;
+  trace!("file descriptors for interaction {:?}", descriptors);
+  
+  let (file_descriptor, service_descriptor) = find_service_descriptor_for_type(service_with_package, &descriptors)?;
+  let method_descriptor = find_method_descriptor_for_service( method_name, &service_descriptor)?;
+  Ok((descriptors.clone(), service_descriptor.clone(), method_descriptor.clone(), file_descriptor.clone()))
+}
 
-  let plugin_config = pact.plugin_data.iter()
-    .find(|data| data.name == "protobuf")
-    .map(|data| &data.configuration)
-    .ok_or_else(|| anyhow!("Did not find any Protobuf configuration in the Pact file"))?
-    .iter()
-    .map(|(k, v)| (k.clone(), v.clone()))
-    .collect();
-  let descriptors = get_descriptors_for_interaction(descriptor_key.as_str(),
-    &plugin_config)?;
-  let (file_descriptor, service_descriptor) = find_service_descriptor(&descriptors, service_name)?;
-  let method_descriptor = service_descriptor.method.iter().find(|method_desc| {
-    method_desc.name.clone().unwrap_or_default() == method_name
-  }).ok_or_else(|| anyhow!("Did not find the method {} in the Protobuf file descriptor for service '{}'", method_name, service))?;
-
-  let package = file_descriptor.package.clone();
-  Ok((descriptors.clone(), service_descriptor.clone(), method_descriptor.clone(), package.unwrap_or_default()))
+fn get_descriptor_config<'a>(
+  message_key: &str,
+  plugin_config: &'a BTreeMap<String, serde_json::Value>
+) -> anyhow::Result<&'a serde_json::Map<String, serde_json::Value>> {
+  plugin_config.get(message_key)
+    .ok_or_else(|| anyhow!("Plugin configuration item with key '{}' is required. Received config {:?}", message_key, plugin_config.keys()))?
+    .as_object()
+    .ok_or_else(|| anyhow!("Plugin configuration item with key '{}' has an invalid format", message_key))
 }
 
 /// Get the encoded Protobuf descriptors from the Pact level configuration for the message key
@@ -505,10 +700,7 @@ pub fn get_descriptors_for_interaction(
   message_key: &str,
   plugin_config: &BTreeMap<String, serde_json::Value>
 ) -> anyhow::Result<FileDescriptorSet> {
-  let descriptor_config = plugin_config.get(message_key)
-    .ok_or_else(|| anyhow!("Plugin configuration item with key '{}' is required. Received config {:?}", message_key, plugin_config.keys()))?
-    .as_object()
-    .ok_or_else(|| anyhow!("Plugin configuration item with key '{}' has an invalid format", message_key))?;
+  let descriptor_config = get_descriptor_config(message_key, plugin_config)?;
   let descriptor_bytes_encoded = descriptor_config.get("protoDescriptors")
     .map(json_to_string)
     .unwrap_or_default();
@@ -535,19 +727,6 @@ pub fn get_descriptors_for_interaction(
   // Decode the Protobuf descriptors
   FileDescriptorSet::decode(descriptor_bytes)
     .map_err(|err| anyhow!(err))
-}
-
-pub(crate) fn find_service_descriptor<'a>(
-  descriptors: &'a FileDescriptorSet,
-  service_name: &str
-) -> anyhow::Result<(&'a FileDescriptorProto, &'a ServiceDescriptorProto)> {
-  descriptors.file.iter().filter_map(|descriptor| {
-    descriptor.service.iter()
-      .find(|p| p.name.clone().unwrap_or_default() == service_name)
-      .map(|p| (descriptor, p))
-  })
-    .next()
-    .ok_or_else(|| anyhow!("Did not find a descriptor for service '{}'", service_name))
 }
 
 /// If a field type should be packed. These are repeated fields of primitive numeric types
@@ -590,11 +769,12 @@ pub(crate) fn prost_string<S: Into<String>>(s: S) -> Value {
 
 #[cfg(test)]
 pub(crate) mod tests {
+  use std::collections::HashSet;
   use std::vec;
 
 use bytes::Bytes;
   use expectest::prelude::*;
-  use maplit::hashmap;
+  use maplit::{hashmap, hashset};
   use prost::Message;
   use prost_types::{
     DescriptorProto,
@@ -608,15 +788,10 @@ use bytes::Bytes;
   use prost_types::field_descriptor_proto::{Label, Type};
 
   use crate::utils::{
-    as_hex,
-    find_message_descriptor,
-    find_enum_value_by_name,
-    find_message_type_by_name,
-    find_nested_type,
-    is_map_field,
-    last_name,
-    split_name
+    to_fully_qualified_name, as_hex, find_enum_value_by_name, find_nested_type, is_map_field, last_name, parse_name
   };
+
+use super::{build_grpc_route, find_file_descriptors, find_message_descriptor_for_type, find_method_descriptor_for_service, find_service_descriptor_for_type, parse_grpc_route, split_service_and_method};
 
   #[test]
   fn last_name_test() {
@@ -630,14 +805,61 @@ use bytes::Bytes;
   }
 
   #[test]
-  fn split_name_test() {
-    expect!(split_name("")).to(be_equal_to(("", None)));
-    expect!(split_name("test")).to(be_equal_to(("test", None)));
-    expect!(split_name(".")).to(be_equal_to(("", None)));
-    expect!(split_name("test.")).to(be_equal_to(("", Some("test"))));
-    expect!(split_name(".test")).to(be_equal_to(("test", None)));
-    expect!(split_name("1.2")).to(be_equal_to(("2", Some("1"))));
-    expect!(split_name("1.2.3.4")).to(be_equal_to(("4", Some("1.2.3"))));
+  fn parse_name_test() {
+    // fully-qulified names start with a dot
+    expect!(parse_name(".package.Type")).to(be_equal_to(("Type", Some("package"))));
+    expect!(parse_name(".Type")).to(be_equal_to(("Type", Some(""))));
+    expect!(parse_name(".")).to(be_equal_to(("", Some(""))));  // TODO: should this be an error case?
+    
+    // relative names must have package set to None always
+    expect!(parse_name("")).to(be_equal_to(("", None)));   // TODO: should this be an error case?
+    expect!(parse_name("test")).to(be_equal_to(("test", None)));
+    expect!(parse_name("test.")).to(be_equal_to(("test.", None)));
+    expect!(parse_name("1.2.3.4")).to(be_equal_to(("1.2.3.4", None)));
+  }
+
+  #[test]
+  fn split_service_and_method_test() {
+    expect!(split_service_and_method("")).to(be_err());
+    expect!(split_service_and_method("test")).to(be_err());
+    expect!(split_service_and_method("/").unwrap()).to(be_equal_to(("", "")));
+    expect!(split_service_and_method("/method").unwrap()).to(be_equal_to(("", "method")));
+    expect!(split_service_and_method("service/").unwrap()).to(be_equal_to(("service", "")));
+    expect!(split_service_and_method("service/method").unwrap()).to(be_equal_to(("service", "method")));
+    // TODO: we don't support this case either way - maybe we should error out if there's more than one slash?
+    expect!(split_service_and_method("service/subservice/method").unwrap()).to(be_equal_to(("service", "subservice/method")));
+  }
+
+  #[test]
+  fn to_fully_qualified_name_test() {
+    expect!(to_fully_qualified_name("service", "package").unwrap()).to(be_equal_to(".package.service"));
+    expect!(to_fully_qualified_name("service", "package.with.dots").unwrap()).to(be_equal_to(".package.with.dots.service"));
+    expect!(to_fully_qualified_name("service", "").unwrap()).to(be_equal_to(".service"));
+    expect!(to_fully_qualified_name("", "package")).to(be_err());
+  }
+
+  #[test]
+  fn test_build_grpc_route() {
+    // Valid inputs
+    expect!(build_grpc_route(".com.example.Service", "Method").unwrap()).to(be_equal_to("/com.example.Service/Method"));
+    expect!(build_grpc_route("com.example.Service", "Method").unwrap()).to(be_equal_to("/com.example.Service/Method"));
+
+    // Errors
+    expect!(build_grpc_route("", "Method")).to(be_err());
+    expect!(build_grpc_route("com.example.Service", "")).to(be_err());
+    expect!(build_grpc_route("", "")).to(be_err());
+  }
+
+  #[test]
+  fn test_parse_grpc_route() {
+    // Valid inputs
+    expect!(parse_grpc_route("/com.example.Service/Method")).to(be_some().value((".com.example.Service".to_string(), "Method".to_string())));
+    expect!(parse_grpc_route("/com.example.Service/Method/")).to(be_some().value((".com.example.Service".to_string(), "Method".to_string())));
+
+    // Errors
+    expect!(parse_grpc_route("com.example.Service/Method")).to(be_none());
+    expect!(parse_grpc_route("/com.example.Service")).to(be_none());
+    expect!(parse_grpc_route("/com.example.Service/")).to(be_none());
   }
 
   pub(crate) const DESCRIPTOR_WITH_EXT_MESSAGE: [u8; 626] = [
@@ -674,19 +896,31 @@ use bytes::Bytes;
   ];
 
   #[test]
-  fn find_message_type_by_name_test() {
+  fn find_message_descriptor_for_type_ext_test() {
+    /*
+    Contents of the descriptor:
+    File descriptor: Some("Value.proto") package Some("area_calculator.Value")
+    Message: Some("AdBreakContext")
+    Enum: Some("AdBreakAdType")
+    File descriptor: Some("area_calculator.proto") package Some("area_calculator")
+    Message: Some("AdBreakRequest")
+    Message: Some("AreaResponse")
+    Service: Some("Calculator")
+    Method: Some("calculateOne")
+     */
     let bytes: &[u8] = &DESCRIPTOR_WITH_EXT_MESSAGE;
     let buffer = Bytes::from(bytes);
     let fds = FileDescriptorSet::decode(buffer).unwrap();
 
-    expect!(find_message_type_by_name("", &fds)).to(be_err());
-    expect!(find_message_type_by_name("Does not exist", &fds)).to(be_err());
+    expect!(find_message_descriptor_for_type("", &fds)).to(be_err());
+    expect!(find_message_descriptor_for_type("Does not exist", &fds)).to(be_err());
 
-    let (result, _) = find_message_type_by_name("AdBreakRequest", &fds).unwrap();
+    let (result, _) = find_message_descriptor_for_type("AdBreakRequest", &fds).unwrap();
     expect!(result.name).to(be_some().value("AdBreakRequest"));
 
-    let (result, _) = find_message_type_by_name("AdBreakContext", &fds).unwrap();
+    let (result, file_descriptor) = find_message_descriptor_for_type(".area_calculator.Value.AdBreakContext", &fds).unwrap();
     expect!(result.name).to(be_some().value("AdBreakContext"));
+    expect!(file_descriptor.package).to(be_some().value("area_calculator.Value"));
   }
 
   #[test]
@@ -930,104 +1164,205 @@ use bytes::Bytes;
   }
 
   #[test]
-  fn find_message_descriptor_test() {
+  fn find_message_descriptor_for_type_test() {
+    let request_msg = DescriptorProto {
+      name: Some("Request".to_string()),
+      .. DescriptorProto::default()
+    };
+    let another_request_msg = DescriptorProto {
+      name: Some("AnotherRequest".to_string()),
+      .. DescriptorProto::default()
+    };
+    let request_file: FileDescriptorProto = FileDescriptorProto {
+      name: Some("request.proto".to_string()),
+      package: Some("service".to_string()),
+      message_type: vec![
+        request_msg.clone(),
+        another_request_msg.clone()
+      ],
+      .. FileDescriptorProto::default()
+    };
+    let request_file2: FileDescriptorProto = FileDescriptorProto {
+      name: Some("request.proto".to_string()),
+      package: Some("service2".to_string()),
+      message_type: vec![
+        request_msg.clone()
+      ],
+      .. FileDescriptorProto::default()
+    };
+    let all_descriptors = FileDescriptorSet{file: vec!{request_file.clone(), request_file2.clone()}};
+    // fully qualified name
+    let (md, fd) = find_message_descriptor_for_type(".service.Request", &all_descriptors).unwrap();
+    expect!(&md).to(be_equal_to(&request_msg));
+    expect!(&fd).to(be_equal_to(&request_file));
+
+    // relative name
+    let (md, fd) = find_message_descriptor_for_type("AnotherRequest", &all_descriptors).unwrap();
+    expect!(&md).to(be_equal_to(&another_request_msg));
+    expect!(&fd).to(be_equal_to(&request_file));
+
+    // package not found error
+    let result_err = find_message_descriptor_for_type(".missing.MissingType", &all_descriptors);
+    expect!(result_err.as_ref()).to(be_err());
+    expect!(&result_err.unwrap_err().to_string()).to(be_equal_to(
+      "Did not find any file descriptors for a package 'missing'"));
+    // message not found error
+    let result_err = find_message_descriptor_for_type(".service.MissingType", &all_descriptors);
+    expect!(result_err.as_ref()).to(be_err());
+    let error_msg = result_err.unwrap_err().to_string();
+    expect!(error_msg.starts_with(
+      "Did not find a message type 'MissingType' in any of the file descriptors")).to(be_true());
+  }
+
+  #[test]
+  fn find_service_descriptor_for_type_test() {
+    let service_desc = ServiceDescriptorProto {
+      name: Some("Service".to_string()),
+      .. ServiceDescriptorProto::default()
+    }; 
     let service = FileDescriptorProto {
       name: Some("service.proto".to_string()),
       package: Some("service".to_string()),
       service: vec![
+        service_desc.clone(),
         ServiceDescriptorProto {
-          name: Some("Service".to_string()),
-          method: vec![
-            MethodDescriptorProto {
-              name: Some("Method".to_string()),
-              input_type: Some(".service.Request".to_string()),
-              output_type: Some(".service.Response".to_string()),
-              .. MethodDescriptorProto::default()
-            }
-          ],
+          name: Some("AnotherService".to_string()),
           .. ServiceDescriptorProto::default()
         }
       ],
       .. FileDescriptorProto::default()
     };
+    let relative_name_service = ServiceDescriptorProto {
+      name: Some("RelativeNameService".to_string()),
+      .. ServiceDescriptorProto::default()
+    };
+    let service2 = FileDescriptorProto {
+      name: Some("service.proto".to_string()),
+      package: Some("service".to_string()),
+      service: vec![
+        ServiceDescriptorProto {
+          name: Some("Service".to_string()),
+          .. ServiceDescriptorProto::default()
+        },
+        relative_name_service.clone()
+      ],
+      .. FileDescriptorProto::default()
+    };
+    let all_descriptors = FileDescriptorSet { file: vec!{service.clone(), service2.clone()} };
+
+    let (fd, sd) = find_service_descriptor_for_type(".service.Service", &all_descriptors).unwrap();
+    expect!(fd).to(be_equal_to(service));
+    expect!(sd).to(be_equal_to(service_desc));
+
+    let (fd, sd) = find_service_descriptor_for_type("RelativeNameService", &all_descriptors).unwrap();
+    expect!(fd).to(be_equal_to(service2));
+    expect!(sd).to(be_equal_to(relative_name_service));
+
+    // missing package case
+    let result_err = find_service_descriptor_for_type(".missing.MissingService", &all_descriptors);
+    expect!(result_err.as_ref()).to(be_err());
+    expect!(&result_err.unwrap_err().to_string()).to(be_equal_to(
+      "Did not find any file descriptors for a package 'missing'"));
+    // missing service case
+    let result_err = find_service_descriptor_for_type(".service.MissingService", &all_descriptors);
+    expect!(result_err.as_ref()).to(be_err());
+    expect!(&result_err.unwrap_err().to_string()).to(be_equal_to(
+      "Did not find a descriptor for service 'MissingService'"));
+  }
+
+  #[test]
+  fn find_file_descriptors_test() {
     let request: FileDescriptorProto = FileDescriptorProto {
       name: Some("request.proto".to_string()),
       package: Some("service".to_string()),
-      message_type: vec![
-        DescriptorProto {
-          name: Some("Request".to_string()),
-          field: vec![
-            FieldDescriptorProto {
-              name: Some("field".to_string()),
-              number: Some(1),
-              type_name: Some("string".to_string()),
-              .. FieldDescriptorProto::default()
-            },
-          ],
-          .. DescriptorProto::default()
-        }
-      ],
       .. FileDescriptorProto::default()
     };
     let response = FileDescriptorProto {
       name: Some("response.proto".to_string()),
       package: Some("service".to_string()),
-      message_type: vec![
-        DescriptorProto {
-          name: Some("Response".to_string()),
-          .. DescriptorProto::default()
-        }
-      ],
       .. FileDescriptorProto::default()
     };
     let request_no_package = FileDescriptorProto {
       name: Some("request_no_package.proto".to_string()),
-      message_type: vec![
-        DescriptorProto {
-          name: Some("Request".to_string()),
-          field: vec![
-            FieldDescriptorProto {
-              name: Some("bool_field".to_string()),
-              number: Some(1),
-              type_name: Some("bool".to_string()),
-              .. FieldDescriptorProto::default()
-            },
-          ],
-          .. DescriptorProto::default()
-        }
-      ],
         .. FileDescriptorProto::default()
     };
-    let all_descriptors = vec!{service, request, response, request_no_package};
+    let response_no_package = FileDescriptorProto {
+      name: Some("response_no_package.proto".to_string()),
+        .. FileDescriptorProto::default()
+    };
+    let all_descriptors_with_package_names = hashset!{
+      "request.proto".to_string(), 
+      "response.proto".to_string()
+    };
+    let all_descriptors_with_no_pacakge_names = hashset!{
+      "request_no_package.proto".to_string(), 
+      "response_no_package.proto".to_string()
+    };
+    let all_descritptor_names = hashset!{
+      "request.proto".to_string(), 
+      "response.proto".to_string(), 
+      "request_no_package.proto".to_string(), 
+      "response_no_package.proto".to_string()
+    };
+    let all_descriptors = vec!{request, response, request_no_package, response_no_package};
     // explicitly provide package name
-    let result_explicit_pkg = find_message_descriptor("Request", Some("service"), all_descriptors.clone());
-    expect!(result_explicit_pkg.as_ref().unwrap().field[0].name.as_ref()).to(be_some().value(&"field"));
+    _check_find_file_descriptors(Some("service"), &all_descriptors_with_package_names, &all_descriptors);
+
     // same but with a dot
-    let result_explicit_pkg_dot = find_message_descriptor("Request", Some(".service"), all_descriptors.clone());
-    expect!(result_explicit_pkg_dot.as_ref().unwrap().field[0].name.as_ref()).to(be_some().value(&"field"));
+    _check_find_file_descriptors(Some(".service"), &all_descriptors_with_package_names, &all_descriptors);
 
-    // no package provided means search descriptors without packages only
-    let result_no_pkg = find_message_descriptor("Request", None, all_descriptors.clone());
-    expect!(result_no_pkg.as_ref().unwrap().field[0].name.as_ref()).to(be_some().value(&"bool_field"));
+    // empty package means return descriptors without packages only
+    _check_find_file_descriptors(Some(""), &all_descriptors_with_no_pacakge_names, &all_descriptors);
 
-    // message not found error
-    let result_err = find_message_descriptor("Missing", Some("service"), all_descriptors.clone());
-    expect!(result_err.as_ref()).to(be_err());
-    expect!(result_err.unwrap_err().to_string()
-      .starts_with("Did not find a message type 'Missing' in any of the file descriptors"))
-      .to(be_true());
+    // none package means return all descriptors
+    _check_find_file_descriptors(None, &all_descritptor_names, &all_descriptors);
 
-    // file descriptor not found for package
-    let result_err_no_pkg = find_message_descriptor("Request", Some("missing"), all_descriptors.clone());
-    expect!(result_err_no_pkg.as_ref()).to(be_err());
-    // "Did not find a file descriptor for package 'missing'"
-    expect!(result_err_no_pkg.unwrap_err().to_string())
-      .to(be_equal_to("Did not find a file descriptor for a package 'missing'"));
-
-    // no descriptors found without a package
-    let result_err_no_pkg = find_message_descriptor("Request", None, vec!{});
-    expect!(result_err_no_pkg.as_ref()).to(be_err());
-    expect!(result_err_no_pkg.unwrap_err().to_string())
-      .to(be_equal_to("Did not find any file descriptors with no package specified"));
+    // Errors
+    // did not find any file descriptor with specified package
+    let result = find_file_descriptors(Some("missing"), &all_descriptors);
+    expect!(result.as_ref()).to(be_err());
+    expect!(&result.unwrap_err().to_string()).to(be_equal_to("Did not find any file descriptors for a package 'missing'"));
+    // did not find any file descriptors with no package
+    let result = find_file_descriptors(Some(""), &vec!{});
+    expect!(&result.unwrap_err().to_string()).to(be_equal_to("Did not find any file descriptors with no package specified"));
   }
+
+  fn _check_find_file_descriptors(
+    package: Option<&str>,
+    expected: &HashSet<String>,
+    all_descriptors: &Vec<FileDescriptorProto>
+  ) {
+    let actual = find_file_descriptors(package, all_descriptors).unwrap().iter()
+      .map(|d: &FileDescriptorProto| d.name.clone().unwrap_or_default()).collect::<HashSet<String>>();
+    expect!(&actual).to(be_equal_to(expected));
+  }
+
+  #[test]
+  fn find_method_descriptor_for_service_test() {
+    let method_desc1 = MethodDescriptorProto{
+      name: Some("method1".to_string()),
+      ..MethodDescriptorProto::default()
+    };
+    let method_desc2 = MethodDescriptorProto{
+      name: Some("method2".to_string()),
+      ..MethodDescriptorProto::default()
+    };
+    let service_desc = ServiceDescriptorProto {
+      name: Some("Service".to_string()),
+      method: vec!{
+        method_desc1.clone(),
+        method_desc2.clone()
+      },
+      .. ServiceDescriptorProto::default()
+    };
+    let actual = find_method_descriptor_for_service("method1", &service_desc).unwrap();
+    expect!(actual).to(be_equal_to(method_desc1));
+    // error case
+    let result_err = find_method_descriptor_for_service("missing", &service_desc);
+    expect!(result_err.as_ref()).to(be_err());
+    expect!(result_err.unwrap_err().to_string())
+      .to(be_equal_to("Did not find the method missing in the Protobuf descriptor for service 'Service'"));
+  }
+
 }
+

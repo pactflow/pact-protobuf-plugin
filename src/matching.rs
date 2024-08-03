@@ -21,24 +21,38 @@ use prost_types::field_descriptor_proto::Type;
 use tracing::{debug, instrument, trace, warn};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
-use crate::utils::{display_bytes, enum_name, field_data_to_json, find_message_field_by_name, find_message_type_by_name, find_service_descriptor, is_map_field, is_repeated_field, last_name};
+use crate::utils::{display_bytes, enum_name, field_data_to_json, find_message_descriptor_for_type, find_message_field_by_name, find_method_descriptor_for_service, find_service_descriptor_for_type, is_map_field, is_repeated_field, last_name, split_service_and_method};
 
 /// Match a single Protobuf message
+/// 
+/// # Arguments
+/// - `message_name` - Name of the message to match. Can be a fully-qualified name 
+///   (if created with a recent version of the plugin),
+///   or not (if created with an older version of the plugin). find_message_descriptor_for_type can handle both.
+/// - `descriptors` - All file descriptors available for this interaction to lookup message in.
+/// - `expected_message_bytes` - The expected message as bytes.
+/// - `actual_message_bytes` - The actual message as bytes.
+/// - `matching_rules` - Matching rules to use when comparing the messages.
+/// - `allow_unexpected_keys` - If true, allow unexpected keys in the actual message.
+/// 
+/// # Returns
+/// A BodyMatchResult indicating if the messages match or not.
 pub fn match_message(
   message_name: &str,
   descriptors: &FileDescriptorSet,
-  expected_request: &mut Bytes,
-  actual_request: &mut Bytes,
+  expected_message_bytes: &mut Bytes,
+  actual_message_bytes: &mut Bytes,
   matching_rules: &MatchingRuleCategory,
   allow_unexpected_keys: bool
 ) -> anyhow::Result<BodyMatchResult> {
-  debug!("Looking for message '{}'", message_name);
-  let (message_descriptor, _) = find_message_type_by_name(message_name, descriptors)?;
+  // message_name can be a fully-qualified name (if created with a recent version of the plugin),
+  // or not (if created with an older version of the plugin). find_message_descriptor_for_type can handle both.
+  let (message_descriptor, _) = find_message_descriptor_for_type(message_name, &descriptors)?;
 
-  let expected_message = decode_message(expected_request, &message_descriptor, descriptors)?;
+  let expected_message = decode_message(expected_message_bytes, &message_descriptor, descriptors)?;
   debug!("expected message = {:?}", expected_message);
 
-  let actual_message = decode_message(actual_request, &message_descriptor, descriptors)?;
+  let actual_message = decode_message(actual_message_bytes, &message_descriptor, descriptors)?;
   debug!("actual message = {:?}", actual_message);
 
   let plugin_config = hashmap!{};
@@ -50,13 +64,23 @@ pub fn match_message(
   let context = CoreMatchingContext::new(diff_config, matching_rules, &plugin_config);
 
   compare(&message_descriptor, &expected_message, &actual_message, &context,
-          expected_request, descriptors)
+          expected_message_bytes, descriptors)
 }
 
-/// Match a Protobuf service call, which has an input and output message
+/// Match a Protobuf service call, which has an input and output message.
+/// Not used when verifying a gRPC interaction, only when doing `compare_contents` call.
+/// Contains logic to determine which message to compare based on the content type, which contains 
+/// a `message` attribute that specifies the message type to compare, 
+/// e.g. `application/protobuf;message=.routeguide.Feature`.
+/// 
+/// If the message is there, we check if it's the same as the request or the response type in the service descriptor.
+/// If it's the same as the request type, we compare the request message. 
+/// If it's the same as the response type, we compare the response message.
+/// If it's not there but `request_part` is set to `request`, we compare request message.
+///   - request part is a part of the method name, e.g. `GetFeature:request`.
+/// In any other case we compare the response message.
 pub fn match_service(
-  service_name: &str,
-  method_name: &str,
+  service: &str,
   descriptors: &FileDescriptorSet,
   expected_request: &mut Bytes,
   actual_request: &mut Bytes,
@@ -64,36 +88,43 @@ pub fn match_service(
   allow_unexpected_keys: bool,
   content_type: &ContentType
 ) -> anyhow::Result<BodyMatchResult> {
-  debug!("Looking for service '{}'", service_name);
-  let (_, service_descriptor) = find_service_descriptor(descriptors, service_name)?;
-  trace!("Found service descriptor with name {:?}", service_descriptor.name);
+  trace!(service, ?descriptors, allow_unexpected_keys, ?rules, ?content_type, ">> match_service");
+  
+  let (service_name, method_name) = split_service_and_method(service)?;
+  // service_name can be a fully-qualified name (if created with a recent version of the plugin),
+  // or not (if created with an older version of the plugin). find_service_descriptor_for_type can handle both.
+  let (_, service_descriptor) = find_service_descriptor_for_type(service_name, descriptors)?;
 
   let (method_name, service_part) = if method_name.contains(':') {
     method_name.split_once(':').unwrap_or((method_name, ""))
   } else {
     (method_name, "")
   };
-  let method_descriptor = service_descriptor.method.iter().find(|method_desc| {
-    method_desc.name.clone().unwrap_or_default() == method_name
-  }).ok_or_else(|| anyhow!("Did not find the method {} in the Protobuf file descriptor for service '{}'", method_name, service_name))?;
-  trace!("Found method descriptor with name {:?}", method_descriptor.name);
-
+  let method_descriptor = find_method_descriptor_for_service(method_name, &service_descriptor)?;
+  
   let expected_message_type = content_type.attributes.get("message");
+  
+  // TODO: what if both the request and response have the same type but different matching rules?
   let message_type = if let Some(message_type) = expected_message_type {
-    let input_type = method_descriptor.input_type.clone().unwrap_or_default();
-    if last_name(input_type.as_str()) == message_type.as_str() {
+    // It's not necessary to look at the package from the content type here, as we're going to be using
+    // the package from the input or output type anyway, and those do contain package in their name
+    let message_type = last_name(message_type.as_str());
+    let input_type = method_descriptor.input_type();
+    if last_name(input_type) == message_type {
       input_type
     } else {
-      method_descriptor.output_type.clone().unwrap_or_default()
+      method_descriptor.output_type()
     }
   } else if service_part == "request" {
-    method_descriptor.input_type.clone().unwrap_or_default()
+    method_descriptor.input_type()
   } else {
-    method_descriptor.output_type.clone().unwrap_or_default()
+    method_descriptor.output_type()
   };
 
   trace!("Message type = {}", message_type);
-  match_message(last_name(message_type.as_str()), descriptors,
+  // message_type is the value of method_descriptor.input/output_type field, which is usually a fully-qualified name
+  // that includes both the package and the type. match_message expects this kind of input.
+  match_message(message_type, descriptors,
                 expected_request, actual_request,
                 rules, allow_unexpected_keys)
 }
@@ -848,7 +879,8 @@ mod tests {
     let bytes1 = Bytes::copy_from_slice(bytes.as_slice());
     let fds = FileDescriptorSet::decode(bytes1).unwrap();
 
-    let (message_descriptor, _) = find_message_type_by_name("InitPluginResponse", &fds).unwrap();
+    let (message_descriptor, _) = find_message_descriptor_for_type(
+      ".io.pact.plugin.InitPluginResponse", &fds).unwrap();
 
     let path = DocPath::new("$").unwrap();
     let context = CoreMatchingContext::new(DiffConfig::AllowUnexpectedKeys, &matchingrules_list! {
@@ -1029,7 +1061,8 @@ mod tests {
     EjIKCUdldFZhbHVlcxIQLlZhbHVlc01lc3NhZ2VJbhoRLlZhbHVlc01lc3NhZ2VPdXQiAGIGcHJvdG8z").unwrap();
     let fds = FileDescriptorSet::decode(descriptors.as_slice()).unwrap();
 
-    let (message_descriptor, _) = find_message_type_by_name("ValuesMessageIn", &fds).unwrap();
+    // no package in this descriptor
+    let (message_descriptor, _) = find_message_descriptor_for_type(".ValuesMessageIn", &fds).unwrap();
 
     let path = DocPath::new("$").unwrap();
     let context = CoreMatchingContext::new(DiffConfig::AllowUnexpectedKeys, &matchingrules_list! {
@@ -1086,7 +1119,8 @@ mod tests {
       2FnZU91dCIAYgZwcm90bzM=").unwrap();
     let fds = FileDescriptorSet::decode(descriptors.as_slice()).unwrap();
 
-    let (message_descriptor, _) = find_message_type_by_name("Resource", &fds).unwrap();
+    // use fully-qualified type name with no package.
+    let (message_descriptor, _) = find_message_descriptor_for_type(".Resource", &fds).unwrap();
 
     let each_value = MatchingRule::EachValue(MatchingRuleDefinition::new("foo".to_string(), ValueType::Unknown, MatchingRule::Type, None));
     let each_value_groups = MatchingRule::EachValue(MatchingRuleDefinition::new(
@@ -1157,7 +1191,8 @@ mod tests {
       46, 77, 101, 115, 115, 97, 103, 101, 79, 117, 116, 34, 0, 98, 6, 112, 114, 111, 116, 111, 51];
     let fds = FileDescriptorSet::decode(descriptors).unwrap();
 
-    let (message_descriptor, _) = find_message_type_by_name("MessageIn", &fds).unwrap();
+    let (message_descriptor, _) = find_message_descriptor_for_type(
+      ".pactissue.MessageIn", &fds).unwrap();
     let enum_descriptor= find_enum_by_name(&fds, "pactissue.TestDefault").unwrap();
 
     let matching_rules = matchingrules! {
@@ -1238,7 +1273,8 @@ mod tests {
       46, 77, 101, 115, 115, 97, 103, 101, 79, 117, 116, 34, 0, 98, 6, 112, 114, 111, 116, 111, 51];
     let fds = FileDescriptorSet::decode(descriptors).unwrap();
 
-    let (message_descriptor, _) = find_message_type_by_name("MessageIn", &fds).unwrap();
+    let (message_descriptor, _) = find_message_descriptor_for_type(
+      ".pactissue.MessageIn", &fds).unwrap();
     let enum_descriptor= find_enum_by_name(&fds, "pactissue.TestDefault").unwrap();
 
     let matching_rules = matchingrules! {

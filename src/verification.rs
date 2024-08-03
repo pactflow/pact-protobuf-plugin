@@ -9,7 +9,6 @@ use anyhow::anyhow;
 use bytes::BytesMut;
 use maplit::hashmap;
 use pact_matching::{BodyMatchResult, CoreMatchingContext, DiffConfig, Mismatch};
-use pact_models::content_types::ContentType;
 use pact_models::json_utils::{json_to_num, json_to_string};
 use pact_models::prelude::OptionalBody;
 use pact_models::prelude::v4::V4Pact;
@@ -18,7 +17,7 @@ use pact_models::v4::sync_message::SynchronousMessage;
 use pact_plugin_driver::proto;
 use pact_plugin_driver::utils::proto_value_to_string;
 use pact_verifier::verification_result::VerificationMismatchResult;
-use prost_types::{DescriptorProto, FileDescriptorSet, MethodDescriptorProto, ServiceDescriptorProto};
+use prost_types::{DescriptorProto, FileDescriptorSet, MethodDescriptorProto};
 use serde_json::Value;
 use tonic::{Request, Response, Status};
 use tonic::metadata::{Ascii, Binary, MetadataKey, MetadataMap, MetadataValue};
@@ -26,10 +25,10 @@ use tower::ServiceExt;
 use tracing::{debug, error, instrument, trace, warn};
 
 use crate::dynamic_message::{DynamicMessage, PactCodec};
-use crate::matching::match_service;
+use crate::matching::match_message;
 use crate::message_decoder::decode_message;
 use crate::metadata::{compare_metadata, grpc_status, MetadataMatchResult};
-use crate::utils::{find_message_type_by_name, last_name, lookup_service_descriptors_for_interaction};
+use crate::utils::{find_message_descriptor_for_type, lookup_service_descriptors_for_interaction};
 
 #[derive(Debug)]
 struct GrpcError {
@@ -44,7 +43,21 @@ impl Display for GrpcError {
 
 impl std::error::Error for GrpcError {}
 
-/// Verify a gRPC interaction
+/// Verify a gRPC interaction.
+/// 
+/// This function will make a call to the gRPC server with the request body and metadata
+/// and call `verify_response` to compare the response with the expected response in the interaction.
+/// 
+/// # Arguments
+/// * `pact` - Pact to verify against, full pact config containing all interactions and plugin configuration
+/// * `interaction` - Interaction to verify
+/// * `request_body` - Request body to send to the gRPC server; created in `server::prepare_interaction_for_verification`
+/// * `metadata` - Metadata to send to the gRPC server; created in `server::prepare_interaction_for_verification`
+/// * `config` - host and port to connect to the gRPC server
+/// 
+/// # Returns
+/// A tuple with a vector of verification results and a vector of strings 
+/// with the human-readable output of the verification
 pub async fn verify_interaction(
   pact: &V4Pact,
   interaction: &SynchronousMessage,
@@ -53,19 +66,24 @@ pub async fn verify_interaction(
   config: &HashMap<String, Value>
 ) -> anyhow::Result<(Vec<VerificationMismatchResult>, Vec<String>)> {
   debug!("Verifying interaction {}", interaction);
-  trace!("interaction={:?}", interaction);
-  trace!("metadata={:?}", metadata);
-  trace!("config={:?}", config);
+  trace!(?interaction, ?metadata, ?config, ?request_body, ?pact);
 
-  let (file_desc, service_desc, method_desc, _) = lookup_service_descriptors_for_interaction(interaction, pact)?;
+  let (all_file_descriptors, service_desc, method_desc, _) = 
+    lookup_service_descriptors_for_interaction(interaction, pact)?;
+  
   let input_message_name = method_desc.input_type.clone().unwrap_or_default();
-  let input_message = find_message_type_by_name(last_name(input_message_name.as_str()), &file_desc)?.0;
+  let (input_message_desc, _) = find_message_descriptor_for_type(
+    input_message_name.as_str(), &all_file_descriptors)?;
+  
   let output_message_name = method_desc.output_type.clone().unwrap_or_default();
-  let output_message = find_message_type_by_name(last_name(output_message_name.as_str()), &file_desc)?.0;
+  // uses type name from method_descriptor, which always contains the doc; 3-way logic is safe here
+  let (output_message_desc, _) = find_message_descriptor_for_type(
+    output_message_name.as_str(), &all_file_descriptors)?;
   let bold = Style::new().bold();
 
-  match build_grpc_request(request_body, metadata, &file_desc, &input_message) {
-    Ok(request) => match make_grpc_request(request, config, metadata, &file_desc, &input_message, &output_message, interaction).await {
+  match build_grpc_request(request_body, metadata, &all_file_descriptors, &input_message_desc) {
+    Ok(request) => match make_grpc_request(
+      request, config, metadata, &all_file_descriptors, &input_message_desc, &output_message_desc, interaction).await {
       Ok(response) => {
         debug!("Received response from gRPC server - {:?}", response);
         let response_metadata = response.metadata();
@@ -73,7 +91,7 @@ pub async fn verify_interaction(
         trace!("gRPC metadata: {:?}", response_metadata);
         trace!("gRPC body: {:?}", body);
         let (result, verification_output) = verify_response(body, response_metadata, interaction,
-          &file_desc, &service_desc, &method_desc)?;
+          &all_file_descriptors, &method_desc)?;
 
         let status_result = if !result.is_empty() {
           Red.paint("FAILED")
@@ -177,13 +195,13 @@ fn verify_error_response(
   (results, output)
 }
 
+/// Verify response from the gRPC server against expected response in the interaction
 fn verify_response(
   response_body: &DynamicMessage,
   response_metadata: &MetadataMap,
   interaction: &SynchronousMessage,
-  file_desc: &FileDescriptorSet,
-  service_desc: &ServiceDescriptorProto,
-  method_desc: &MethodDescriptorProto
+  all_file_descriptors: &FileDescriptorSet,
+  method_descriptor: &MethodDescriptorProto
 ) -> anyhow::Result<(Vec<VerificationMismatchResult>, Vec<String>)> {
   let response = interaction.response.first().cloned()
     .unwrap_or_default();
@@ -196,22 +214,16 @@ fn verify_response(
   let mut output = vec![];
 
   if let Some(mut expected_body) = expected_body {
-    let ct = ContentType {
-      main_type: "application".into(),
-      sub_type: "grpc".into(),
-      .. ContentType::default()
-    };
     let mut actual_body = BytesMut::new();
     response_body.write_to(&mut actual_body)?;
-    match match_service(
-      service_desc.name.clone().unwrap_or_default().as_str(),
-      method_desc.name.clone().unwrap_or_default().as_str(),
-      file_desc,
+
+    match match_message(
+      method_descriptor.output_type(), 
+      all_file_descriptors,
       &mut expected_body,
       &mut actual_body.freeze(),
       &response.matching_rules.rules_for_category("body").unwrap_or_default(),
-      true,
-      &ct
+      true
     ) {
       Ok(result) => {
         debug!("Match service result: {:?}", result);
@@ -322,6 +334,7 @@ fn build_grpc_request(
   file_desc: &FileDescriptorSet,
   input_desc: &DescriptorProto
 ) -> anyhow::Result<Request<DynamicMessage>> {
+  trace!(?body, ?metadata, ?file_desc, ?input_desc, ">> build_grpc_request");
   let mut bytes = body.value().unwrap_or_default();
   let message_fields = decode_message(&mut bytes, input_desc, file_desc)?;
   let mut request = Request::new(DynamicMessage::new(&message_fields, file_desc));

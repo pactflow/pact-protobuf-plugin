@@ -41,7 +41,7 @@ use tracing::{debug, error, Instrument, instrument, trace, trace_span};
 use crate::dynamic_message::PactCodec;
 use crate::metadata::MetadataMatchResult;
 use crate::mock_service::MockService;
-use crate::utils::{find_message_descriptor, last_name, split_name};
+use crate::utils::{build_grpc_route, find_message_descriptor_for_type, lookup_service_descriptors_for_interaction, parse_grpc_route, to_fully_qualified_name};
 
 lazy_static! {
   pub static ref MOCK_SERVER_STATE: Mutex<HashMap<String, (Sender<()>, HashMap<String, (usize, Vec<(BodyMatchResult, MetadataMatchResult)>)>)>> = Mutex::new(hashmap!{});
@@ -75,6 +75,9 @@ impl GrpcMockServer
   }
 
   /// Start the mock server, consuming this instance and returning the connection details
+  /// For each interaction, loads the corresponding service and file descriptors from the Pact file
+  /// into a map keyed by a gRPC route in a standard form of `/package.Service/Method`. 
+  /// When serving, it allows to easily find the correct descriptors based on the route being called.
   #[instrument(skip(self))]
   pub async fn start_server(mut self, host_interface: &str, port: u32, tls: bool) -> anyhow::Result<SocketAddr> {
     // Get all the descriptors from the Pact file and parse them
@@ -95,35 +98,21 @@ impl GrpcMockServer
 
     // Build a map of routes using the interactions in the Pact file
     self.routes = self.pact.interactions.iter()
-      .filter_map(|i| i.as_v4_sync_message())
-      .filter_map(|i| i.plugin_config.get("protobuf").map(|p| (p.clone(), i.clone())))
-      .filter_map(|(c, i)| {
-        if let Some(key) = c.get("descriptorKey") {
-          if let Some(descriptors) = self.descriptors.get(json_to_string(key).as_str()) {
-            if let Some(service) = c.get("service") {
-              if let Some((service_name, method_name)) = json_to_string(service).split_once('/') {
-                return descriptors.file.iter().find_map(|fd| fd.service.iter().find(|s| s.name.clone().unwrap_or_default() == service_name).map( |s| s.method.iter().
-                      find(|m| m.name.clone().unwrap_or_default() == method_name).
-                      map(|m| (format!("{service_name}/{method_name}"), (descriptors.clone(), fd.clone(), m.clone(), i.clone())))
-                    )
-                  ).unwrap();
-              } else {
-                // protobuf service was not properly formed <SERViCE>/<METHOD>
-                None
-              }
-            } else {
-              // protobuf plugin configuration section did not have a service defined
-              None
-            }
-          } else {
-            // protobuf plugin configuration section did not have a matching key to the descriptors
-            None
+    .filter_map(|i| i.as_v4_sync_message())
+    .filter_map(|i| match lookup_service_descriptors_for_interaction(&i, &self.pact) {
+      Ok((file_set, service, method, file)) => Some((file_set, service, method, file, i.clone())),
+      Err(_) => None
+    }).filter_map(|(file_set, service, method, file, i)| {
+      match to_fully_qualified_name(service.name(), file.package()) {
+        Ok(service_full_name) => {
+          match build_grpc_route(service_full_name.as_str(), method.name()) {
+            Ok(route) => Some((route, (file_set.clone(), file.clone(), method.clone(), i.clone()))),
+            Err(_) => None
           }
-        } else {
-          // Interaction did not have a protobuf plugin configuration section
-          None
-        }
-      }).collect();
+        },
+        Err(_) => None
+      }
+    }).collect();
 
     // Bind to a OS provided port and create a TCP listener
     let interface = if host_interface.is_empty() {
@@ -220,6 +209,10 @@ impl Service<Request<Incoming>> for GrpcMockServer  {
     Poll::Ready(Ok(()))
   }
 
+  /// Process gRPC call.
+  /// Looks up descriptors and interaction config in `self.routes` based on the request path, 
+  /// then uses them to respond to construct a `mock_service.MockService` instance and call it.
+  /// The actual work is done in `mock_service.MockService::handle_message()`.
   #[instrument(skip(self), level = "trace")]
   fn call(&mut self, req: Request<Incoming>) -> Self::Future {
     let routes = self.routes.clone();
@@ -247,27 +240,20 @@ impl Service<Request<Incoming>> for GrpcMockServer  {
           if method == Method::POST {
             let request_path = req.uri().path();
             debug!(?request_path, "gRPC request received");
-            if let Some((service, method)) = request_path[1..].split_once('/') {
-              let service_name = last_name(service);
-              let lookup = format!("{service_name}/{method}");
-              if let Some((file, _file_descriptor, method_descriptor, message)) = routes.get(lookup.as_str()) {
+            if let Some((service_full_name, method)) = parse_grpc_route(request_path) {
+              if let Some((file, _file_descriptor, method_descriptor, message)) = routes.get(request_path) {
                 trace!(message = message.description.as_str(), "Found route for service call");
+                
+                let service_and_method = format!("{service_full_name}/{method}");  // just for logging
                 let input_name = method_descriptor.input_type.as_ref().expect(format!(
-                  "Input message name is empty for service {}/{}", service_name, method).as_str());
-                let (input_message_name, input_package_name) = split_name(input_name);
-                let input_message = find_message_descriptor(
-                  input_message_name, input_package_name, file.file.clone());
-
+                  "Input message name is empty for service {}", service_and_method.as_str()).as_str());
                 let output_name = method_descriptor.output_type.as_ref().expect(format!(
-                  "Output message name is empty for service {}/{}", service_name, method).as_str());
-                let (output_message_name, output_package_name) = split_name(output_name);
-                let output_message = find_message_descriptor(
-                  output_message_name, output_package_name, file.file.clone());
+                  "Output message name is empty for service {}", service_and_method.as_str()).as_str());
 
-                if let Ok(input_message) = input_message {
-                  if let Ok(output_message) = output_message {
+                if let Ok((input_message, _)) = find_message_descriptor_for_type(input_name, &file) {
+                  if let Ok((output_message, _)) = find_message_descriptor_for_type(output_name, &file) {
                     let codec = PactCodec::new(file, &input_message, &output_message, message);
-                    let mock_service = MockService::new(file, service_name,
+                    let mock_service = MockService::new(file, service_full_name.as_str(),
                       method_descriptor, &input_message, &output_message, message, server_key.as_str(),
                       pact
                     );
@@ -276,11 +262,11 @@ impl Service<Request<Incoming>> for GrpcMockServer  {
                     trace!(?response, ">> sending response");
                     Ok(response)
                   } else {
-                    error!("Did not find the descriptor for the output message {}", output_message_name);
+                    error!("Did not find the descriptor for the output message {}", output_name);
                     Ok(failed_precondition())
                   }
                 } else {
-                  error!("Did not find the descriptor for the input message {}", input_message_name);
+                  error!("Did not find the descriptor for the input message {}", input_name);
                   Ok(failed_precondition())
                 }
               } else {
