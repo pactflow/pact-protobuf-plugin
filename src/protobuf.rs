@@ -30,6 +30,7 @@ use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorProto, Se
 use prost_types::field_descriptor_proto::Type;
 use prost_types::value::Kind;
 use serde_json::{json, Value};
+use serde_json::Value::Object;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tracing::{debug, error, instrument, trace, warn};
@@ -376,17 +377,29 @@ fn construct_protobuf_interaction_for_message(
 }
 
 fn extract_generators(generators: &HashMap<String, Generator>) -> HashMap<String, pact_plugin_driver::proto::Generator> {
-  generators.iter().map(|(path, generator)| {
-    let gen_values = generator.values();
-    let values = if gen_values.is_empty() {
-      None
+  generators.iter().filter_map(|(path, generator)| {
+    if let Some(Object(gen_values)) = generator.to_json() {
+      // TODO: Use generator.name() once pact_models 1.2.4+ is released
+      if let Some(generator_type) = gen_values.get("type") {
+        let gen_values = generator.values();
+        let values = if gen_values.is_empty() {
+          None
+        } else {
+          Some(to_proto_struct(&gen_values.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()))
+        };
+        Some((
+          path.to_string(),
+          pact_plugin_driver::proto::Generator {
+            r#type: generator_type.as_str().unwrap_or_default().to_string(),
+            values
+          }
+        ))
+      } else {
+        None
+      }
     } else {
-      Some(to_proto_struct(&gen_values.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()))
-    };
-    (path.to_string(), pact_plugin_driver::proto::Generator {
-      r#type: generator.name(),
-      values
-    })
+      None
+    }
   }).collect()
 }
 
@@ -1225,6 +1238,7 @@ pub(crate) mod tests {
   use pact_models::prelude::MatchingRuleCategory;
   use pact_plugin_driver::proto::{MatchingRule, MatchingRules};
   use pact_plugin_driver::proto::interaction_response::MarkupType;
+  use pretty_assertions::assert_eq;
   use prost::Message;
   use prost_types::{
     DescriptorProto,
@@ -2691,5 +2705,64 @@ pub(crate) mod tests {
         MessageFieldValue { name: "value".to_string(), raw_value: Some("Skip_holiday".to_string()), rtype: RType::String("Skip_holiday".to_string()) }
       ]
     ));
+  }
+
+  #[test]
+  fn construct_protobuf_interaction_with_provider_state_generator() {
+    let file_descriptor = FileDescriptorProto::default();
+    let message_descriptor = DescriptorProto {
+      name: Some("test_message".to_string()),
+      field: vec![
+        FieldDescriptorProto {
+          name: Some("implementation".to_string()),
+          number: Some(1),
+          r#type: Some(field_descriptor_proto::Type::String as i32),
+          type_name: Some("string".to_string()),
+          .. FieldDescriptorProto::default()
+        }
+      ],
+      .. DescriptorProto::default()
+    };
+    let config = btreemap! {
+      "implementation".to_string() => prost_types::Value {
+        kind: Some(prost_types::value::Kind::StringValue("notEmpty(fromProviderState('exp', 'plugin-driver-rust'))".to_string()))
+      }
+    };
+
+    let result = construct_protobuf_interaction_for_message(&message_descriptor, &config,
+      "test_message", "", &file_descriptor, &hashmap!{}, None).unwrap();
+
+    let body = result.contents.as_ref().unwrap();
+    expect!(body.content_type.as_str()).to(be_equal_to("application/protobuf;message=test_message"));
+    expect!(body.content_type_hint).to(be_equal_to(2));
+    expect!(body.content.as_ref()).to(be_some().value(&vec![
+      10, // field 1 length encoded (1 << 3 + 2 == 10)
+      18, // 18 bytes
+      112, 108, 117, 103, 105, 110, 45, 100, 114, 105, 118, 101, 114, 45, 114, 117, 115, 116
+    ]));
+
+    expect!(result.rules).to(be_equal_to(hashmap! {
+      "$.implementation".to_string() => MatchingRules {
+        rule: vec![
+          MatchingRule { r#type: "not-empty".to_string(), .. MatchingRule::default() }
+        ]
+      }
+    }));
+
+    assert_eq!(result.generators, hashmap! {
+      "$.implementation".to_string() => pact_plugin_driver::proto::Generator {
+        r#type: "ProviderState".to_string(),
+        values: Some(Struct {
+          fields: btreemap!{
+            "data_type".to_string() => prost_types::Value {
+              kind: Some(StringValue("STRING".to_string()))
+            },
+            "expression".to_string() => prost_types::Value {
+              kind: Some(StringValue("exp".to_string()))
+            }
+          }
+        })
+      }
+    });
   }
 }

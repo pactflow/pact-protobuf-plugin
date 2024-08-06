@@ -176,7 +176,7 @@ impl DynamicMessage {
     }
   }
 
-  #[instrument(skip(callback))]
+  #[instrument(skip(self, callback))]
   fn match_path<F>(
     &mut self,
     path_tokens: &mut Peekable<Iter<PathToken>>,

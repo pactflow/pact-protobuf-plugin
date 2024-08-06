@@ -9,7 +9,7 @@ use anyhow::{anyhow, bail};
 use bytes::{Bytes, BytesMut};
 use maplit::hashmap;
 use pact_matching::{BodyMatchResult, Mismatch};
-use pact_models::generators::{GenerateValue, Generator, NoopVariantMatcher, VariantMatcher};
+use pact_models::generators::{GenerateValue, Generator, GeneratorTestMode, NoopVariantMatcher, VariantMatcher};
 use pact_models::json_utils::json_to_string;
 use pact_models::matchingrules::MatchingRule;
 use pact_models::path_exp::DocPath;
@@ -19,6 +19,7 @@ use pact_plugin_driver::proto;
 use pact_plugin_driver::proto::{Body, body, CompareContentsRequest, CompareContentsResponse, GenerateContentRequest, GenerateContentResponse, MockServerResult, PluginConfiguration};
 use pact_plugin_driver::proto::body::ContentTypeHint;
 use pact_plugin_driver::proto::catalogue_entry::EntryType;
+use pact_plugin_driver::proto::generate_content_request::TestMode;
 use pact_plugin_driver::proto::pact_plugin_server::PactPlugin;
 use pact_plugin_driver::utils::{
   proto_struct_to_json,
@@ -320,7 +321,7 @@ impl ProtobufPactPlugin {
     }
   }
 
-  #[instrument(ret, fields(request))]
+  #[instrument(ret, skip(self))]
   fn generate_contents_impl(&self, request: &GenerateContentRequest) -> anyhow::Result<GenerateContentResponse> {
     // Check for the plugin specific configuration for the interaction
     let plugin_configuration = request.plugin_configuration.clone().unwrap_or_default();
@@ -345,7 +346,7 @@ impl ProtobufPactPlugin {
           } else {
             let message = decode_message(&mut body, &message_descriptor, &descriptors)?;
             debug!("message to generate = {:?}", message);
-            let generated_message = generate_protobuf_contents(&message, &content_type, &request.generators, &descriptors)?;
+            let generated_message = generate_protobuf_contents(&message, &content_type, &request.generators, &descriptors, request.test_mode())?;
             Ok(GenerateContentResponse {
               contents: Some(generated_message),
             })
@@ -393,9 +394,10 @@ fn generate_protobuf_contents(
   fields: &Vec<ProtobufField>,
   content_type: &ContentType,
   generators: &HashMap<String, proto::Generator>,
-  all_descriptors: &FileDescriptorSet
+  all_descriptors: &FileDescriptorSet,
+  mode: TestMode
 ) -> anyhow::Result<Body> {
-  let mut message = DynamicMessage::new(fields, all_descriptors, );
+  let mut message = DynamicMessage::new(fields, all_descriptors);
   let variant_matcher = NoopVariantMatcher {};
   let vm_boxed = variant_matcher.boxed();
   let context = hashmap!{};
@@ -404,11 +406,14 @@ fn generate_protobuf_contents(
     let path = DocPath::new(key)?;
     let value = message.fetch_value(&path);
     if let Some(value) = value {
-      let generator_values = generator.values.as_ref().map(proto_struct_to_json).unwrap_or_default();
-      let generator = Generator::create(generator.r#type.as_str(),
-                                        &generator_values)?;
-      let generated_value = generator.generate_value(&value.data, &context, &vm_boxed)?;
-      message.set_value(&path, generated_value)?;
+      let generator_values = generator.values.as_ref()
+        .map(proto_struct_to_json)
+        .unwrap_or_default();
+      let generator = Generator::create(generator.r#type.as_str(), &generator_values)?;
+      if generator.corresponds_to_mode(&to_generator_mode(mode)) {
+        let generated_value = generator.generate_value(&value.data, &context, &vm_boxed)?;
+        message.set_value(&path, generated_value)?;
+      }
     }
   }
 
@@ -420,6 +425,14 @@ fn generate_protobuf_contents(
     content: Some(buffer.to_vec()),
     content_type_hint: i32::from(body::ContentTypeHint::Binary),
   })
+}
+
+fn to_generator_mode(mode: TestMode) -> GeneratorTestMode {
+  match mode {
+    TestMode::Unknown => GeneratorTestMode::Consumer,
+    TestMode::Consumer => GeneratorTestMode::Consumer,
+    TestMode::Provider => GeneratorTestMode::Provider
+  }
 }
 
 #[tonic::async_trait]
