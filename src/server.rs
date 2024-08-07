@@ -739,7 +739,7 @@ impl PactPlugin for ProtobufPactPlugin {
     let mut raw_request_body = interaction.request.contents.value().unwrap_or_default();
     let input_message_name = method_desc.input_type.clone().unwrap_or_default();
     let input_message = match find_message_type_by_name(last_name(input_message_name.as_str()), &file_desc) {
-      Ok(message) => message.0,
+      Ok((message, _)) => message,
       Err(err) => {
         return Ok(Self::verification_preparation_error_response(err.to_string()))
       }
@@ -748,9 +748,11 @@ impl PactPlugin for ProtobufPactPlugin {
     let decoded_body = match decode_message(&mut raw_request_body, &input_message, &file_desc) {
       Ok(message) => {
         let mut message = DynamicMessage::new(&message, &file_desc);
+        let config = proto_struct_to_map(&request.config.clone().unwrap_or_default());
         if let Err(err) = message.apply_generators(
           interaction.request.generators.categories.get(&GeneratorCategory::BODY),
-          &GeneratorTestMode::Provider
+          &GeneratorTestMode::Provider,
+          &config.iter().map(|(k, v)| (k.as_str(), v.clone())).collect()
         ) {
           return Ok(Self::verification_preparation_error_response(err.to_string()));
         }

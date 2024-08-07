@@ -22,6 +22,7 @@ use pact_models::time_utils::{parse_pattern, to_chrono_pattern};
 use rand::prelude::*;
 use regex::{Captures, Regex};
 use serde_json::Value;
+use serde_json::Value::Object;
 use tracing::{debug, instrument, warn};
 use uuid::Uuid;
 
@@ -186,8 +187,16 @@ impl GenerateValue<ProtobufFieldData> for Generator {
           _ => Err(anyhow!("Can not generate a boolean value for a field type {:?}", value))
         }
       },
-      Generator::ProviderStateGenerator(ref exp, ref dt) =>
-        match generate_value_from_context(exp, context, dt) {
+      Generator::ProviderStateGenerator(ref exp, ref dt) => {
+        let provider_state_config = if let Some(Object(psc)) = context.get("providerState") {
+          psc
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.clone()))
+            .collect()
+        } else {
+          context.clone()
+        };
+        match generate_value_from_context(exp, &provider_state_config, dt) {
           Ok(val) => match value {
             ProtobufFieldData::String(_) => Ok(ProtobufFieldData::String(val.to_string())),
             ProtobufFieldData::Boolean(_) => Ok(ProtobufFieldData::Boolean(bool::try_from(val)?)),
@@ -200,7 +209,8 @@ impl GenerateValue<ProtobufFieldData> for Generator {
             _ => Err(anyhow!("Can not generate a value from the provider state for a field type {:?}", value))
           },
           Err(err) => Err(err)
-        },
+        }
+      }
       Generator::MockServerURL(example, regex) => {
         debug!("context = {:?}", context);
         if let Some(mock_server_details) = context.get("mockServer") {

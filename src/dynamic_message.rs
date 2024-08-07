@@ -7,7 +7,6 @@ use std::slice::Iter;
 use anyhow::anyhow;
 use bytes::{BufMut, Bytes};
 use itertools::Itertools;
-use maplit::hashmap;
 use pact_models::generators::{
   GenerateValue,
   Generator,
@@ -19,6 +18,7 @@ use pact_models::path_exp::{DocPath, PathToken};
 use pact_models::v4::sync_message::SynchronousMessage;
 use prost::encoding::{encode_key, encode_varint, WireType};
 use prost_types::{DescriptorProto, FileDescriptorSet};
+use serde_json::Value;
 use tonic::codec::{Codec, DecodeBuf, Decoder, EncodeBuf, Encoder};
 use tonic::Status;
 use tracing::{debug, error, instrument, trace};
@@ -233,12 +233,12 @@ impl DynamicMessage {
   pub fn apply_generators(
     &mut self,
     generators: Option<&HashMap<DocPath, Generator>>,
-    mode: &GeneratorTestMode
+    mode: &GeneratorTestMode,
+    context: &HashMap<&str, Value>
   ) -> anyhow::Result<()> {
     if let Some(generators) = generators {
       let variant_matcher = NoopVariantMatcher {};
       let vm_boxed = variant_matcher.boxed();
-      let context = hashmap!{};
 
       for (path, generator) in generators {
         let value = self.fetch_value(&path);
@@ -455,7 +455,7 @@ mod tests {
       path.clone() => RandomInt(1, 10)
     };
 
-    expect!(message.apply_generators(Some(&generators), &GeneratorTestMode::Provider)).to(be_ok());
+    expect!(message.apply_generators(Some(&generators), &GeneratorTestMode::Provider, &hashmap!{})).to(be_ok());
   }
 
   #[test]
@@ -475,7 +475,7 @@ mod tests {
       DocPath::new_unwrap("$.two") => RandomInt(1, 10)
     };
 
-    expect!(message.apply_generators(Some(&generators), &GeneratorTestMode::Provider)).to(be_ok());
+    expect!(message.apply_generators(Some(&generators), &GeneratorTestMode::Provider, &hashmap!{})).to(be_ok());
   }
 
   #[test]
@@ -495,7 +495,7 @@ mod tests {
       DocPath::new_unwrap("$.one") => RandomInt(1, 10)
     };
 
-    expect!(message.apply_generators(Some(&generators), &GeneratorTestMode::Provider)).to(be_ok());
+    expect!(message.apply_generators(Some(&generators), &GeneratorTestMode::Provider, &hashmap!{})).to(be_ok());
     expect!(message.fields[0].data.as_i64().unwrap()).to_not(be_equal_to(100));
   }
 
@@ -550,7 +550,7 @@ mod tests {
       path.clone() => RandomInt(1, 10)
     };
 
-    expect!(message.apply_generators(Some(&generators), &GeneratorTestMode::Provider)).to(be_ok());
+    expect!(message.apply_generators(Some(&generators), &GeneratorTestMode::Provider, &hashmap!{})).to(be_ok());
     expect!(message.fetch_value(&path).unwrap().data.as_i64().unwrap()).to_not(be_equal_to(100));
   }
 }
