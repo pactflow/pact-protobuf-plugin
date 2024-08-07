@@ -1,11 +1,20 @@
 //! gRPC codec that used a Pact interaction
 
+use std::collections::HashMap;
 use std::iter::Peekable;
 use std::slice::Iter;
 
 use anyhow::anyhow;
 use bytes::{BufMut, Bytes};
 use itertools::Itertools;
+use maplit::hashmap;
+use pact_models::generators::{
+  GenerateValue,
+  Generator,
+  GeneratorTestMode,
+  NoopVariantMatcher,
+  VariantMatcher
+};
 use pact_models::path_exp::{DocPath, PathToken};
 use pact_models::v4::sync_message::SynchronousMessage;
 use prost::encoding::{encode_key, encode_varint, WireType};
@@ -143,6 +152,7 @@ impl DynamicMessage {
   }
 
   /// Retrieve the value using the given path
+  #[instrument(ret, skip(self))]
   pub fn fetch_value(&mut self, path: &DocPath) -> Option<ProtobufField> {
     let path_tokens = path.tokens().clone();
     let mut iter = path_tokens.iter().peekable();
@@ -159,7 +169,7 @@ impl DynamicMessage {
   }
 
   /// Update the value using the given path
-  #[instrument]
+  #[instrument(ret, skip(self))]
   pub fn set_value(&mut self, path: &DocPath, value: ProtobufFieldData) -> anyhow::Result<()> {
     let path_tokens = path.tokens().clone();
     let mut iter = path_tokens.iter().peekable();
@@ -190,14 +200,18 @@ impl DynamicMessage {
           if path_tokens.peek().is_none() {
             callback(field);
           } else {
-            match &field.data {
-              ProtobufFieldData::Enum(_, _) => todo!(),
+            match &mut field.data {
+              ProtobufFieldData::Enum(_, _) => todo!("Support for dynamically fetching enum values is not supported yet"),
               ProtobufFieldData::Message(data, descriptor) => {
                 let mut buffer = Bytes::copy_from_slice(data);
                 match decode_message(&mut buffer, descriptor, &descriptors) {
                   Ok(fields) => {
                     let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
                     message.match_path(path_tokens, callback);
+                    data.clear();
+                    if let Err(err) = message.write_to(data) {
+                      error!("Failed to rewrite child message: {}", err);
+                    }
                   }
                   Err(err) => error!("Failed to decode child message: {}", err)
                 }
@@ -212,6 +226,32 @@ impl DynamicMessage {
         _ => ()
       }
     }
+  }
+
+  /// Mutates the message by applying the generators to any matching message fields
+  #[instrument(ret, skip(self))]
+  pub fn apply_generators(
+    &mut self,
+    generators: Option<&HashMap<DocPath, Generator>>,
+    mode: &GeneratorTestMode
+  ) -> anyhow::Result<()> {
+    if let Some(generators) = generators {
+      let variant_matcher = NoopVariantMatcher {};
+      let vm_boxed = variant_matcher.boxed();
+      let context = hashmap!{};
+
+      for (path, generator) in generators {
+        let value = self.fetch_value(&path);
+        if let Some(value) = value {
+          if generator.corresponds_to_mode(mode) {
+            let generated_value = generator.generate_value(&value.data, &context, &vm_boxed)?;
+            self.set_value(&path, generated_value)?;
+          }
+        }
+      }
+    }
+
+    Ok(())
   }
 }
 
@@ -277,7 +317,10 @@ impl Decoder for DynamicMessageDecoder {
 mod tests {
   use bytes::BytesMut;
   use expectest::prelude::*;
+  use maplit::hashmap;
+  use pact_models::generators::GeneratorTestMode;
   use pact_models::path_exp::DocPath;
+  use pact_models::prelude::Generator::RandomInt;
   use prost::encoding::WireType;
   use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet};
 
@@ -398,5 +441,116 @@ mod tests {
     let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let path = DocPath::new("$.one.two").unwrap();
     expect!(message.fetch_value(&path)).to(be_some().value(child_field));
+  }
+
+  #[test]
+  fn dynamic_message_generate_value_with_no_fields() {
+    let fields = vec![];
+    let descriptors = FileDescriptorSet {
+      file: vec![]
+    };
+    let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
+    let path = DocPath::new_unwrap("$.one.two.three");
+    let generators = hashmap!{
+      path.clone() => RandomInt(1, 10)
+    };
+
+    expect!(message.apply_generators(Some(&generators), &GeneratorTestMode::Provider)).to(be_ok());
+  }
+
+  #[test]
+  fn dynamic_message_generate_value_with_no_matching_field() {
+    let field = ProtobufField {
+      field_num: 1,
+      field_name: "one".to_string(),
+      wire_type: WireType::Varint,
+      data: ProtobufFieldData::Integer64(100)
+    };
+    let descriptors = FileDescriptorSet {
+      file: vec![]
+    };
+    let fields = vec![ field.clone() ];
+    let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
+    let generators = hashmap!{
+      DocPath::new_unwrap("$.two") => RandomInt(1, 10)
+    };
+
+    expect!(message.apply_generators(Some(&generators), &GeneratorTestMode::Provider)).to(be_ok());
+  }
+
+  #[test]
+  fn dynamic_message_generate_value_with_matching_field() {
+    let field = ProtobufField {
+      field_num: 1,
+      field_name: "one".to_string(),
+      wire_type: WireType::Varint,
+      data: ProtobufFieldData::Integer64(100)
+    };
+    let descriptors = FileDescriptorSet {
+      file: vec![]
+    };
+    let fields = vec![ field.clone() ];
+    let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
+    let generators = hashmap!{
+      DocPath::new_unwrap("$.one") => RandomInt(1, 10)
+    };
+
+    expect!(message.apply_generators(Some(&generators), &GeneratorTestMode::Provider)).to(be_ok());
+    expect!(message.fields[0].data.as_i64().unwrap()).to_not(be_equal_to(100));
+  }
+
+  #[test]
+  fn dynamic_message_generate_value_with_matching_child_field() {
+    let child_descriptor = DescriptorProto {
+      name: Some("child".to_string()),
+      field: vec![
+        FieldDescriptorProto {
+          name: Some("two".to_string()),
+          number: Some(1),
+          r#type: Some(3),
+          .. FieldDescriptorProto::default()
+        },
+        FieldDescriptorProto {
+          name: Some("three".to_string()),
+          number: Some(2),
+          r#type: Some(3),
+          .. FieldDescriptorProto::default()
+        }
+      ],
+      .. DescriptorProto::default()
+    };
+    let child_field = ProtobufField {
+      field_num: 1,
+      field_name: "two".to_string(),
+      wire_type: WireType::Varint,
+      data: ProtobufFieldData::Integer64(100)
+    };
+    let child_field2 = ProtobufField {
+      field_num: 2,
+      field_name: "three".to_string(),
+      wire_type: WireType::Varint,
+      data: ProtobufFieldData::Integer64(200)
+    };
+    let descriptors = FileDescriptorSet {
+      file: vec![]
+    };
+    let child_message = DynamicMessage::new(&[child_field.clone(), child_field2], &descriptors);
+    let mut buffer = BytesMut::new();
+    child_message.write_to(&mut buffer).unwrap();
+    let field = ProtobufField {
+      field_num: 1,
+      field_name: "one".to_string(),
+      wire_type: WireType::LengthDelimited,
+      data: ProtobufFieldData::Message(buffer.to_vec(), child_descriptor)
+    };
+    let fields = vec![ field.clone() ];
+    let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
+    let path = DocPath::new_unwrap("$.one.two");
+    let generators = hashmap!{
+      path.clone() => RandomInt(1, 10)
+    };
+
+    expect!(message.apply_generators(Some(&generators), &GeneratorTestMode::Provider)).to(be_ok());
+    expect!(message.fetch_value(&path).unwrap().data.as_i64().unwrap()).to_not(be_equal_to(100));
   }
 }

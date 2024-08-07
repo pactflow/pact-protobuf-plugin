@@ -9,14 +9,21 @@ use anyhow::{anyhow, bail};
 use bytes::{Bytes, BytesMut};
 use maplit::hashmap;
 use pact_matching::{BodyMatchResult, Mismatch};
-use pact_models::generators::{GenerateValue, Generator, GeneratorTestMode, NoopVariantMatcher, VariantMatcher};
+use pact_models::generators::{
+  GenerateValue,
+  Generator,
+  GeneratorCategory,
+  GeneratorTestMode,
+  NoopVariantMatcher,
+  VariantMatcher
+};
 use pact_models::json_utils::json_to_string;
 use pact_models::matchingrules::MatchingRule;
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::{ContentType, MatchingRuleCategory, OptionalBody, RuleLogic};
 use pact_plugin_driver::plugin_models::PactPluginManifest;
 use pact_plugin_driver::proto;
-use pact_plugin_driver::proto::{Body, body, CompareContentsRequest, CompareContentsResponse, GenerateContentRequest, GenerateContentResponse, MockServerResult, PluginConfiguration};
+use pact_plugin_driver::proto::{Body, body, CompareContentsRequest, CompareContentsResponse, GenerateContentRequest, GenerateContentResponse, MockServerResult, PluginConfiguration, VerificationPreparationResponse};
 use pact_plugin_driver::proto::body::ContentTypeHint;
 use pact_plugin_driver::proto::catalogue_entry::EntryType;
 use pact_plugin_driver::proto::generate_content_request::TestMode;
@@ -387,6 +394,13 @@ impl ProtobufPactPlugin {
       None => Ok(self.manifest.plugin_config.clone())
     }
   }
+
+  fn verification_preparation_error_response<E: Into<String>>(err: E) -> Response<VerificationPreparationResponse> {
+    Response::new(proto::VerificationPreparationResponse {
+      response: Some(proto::verification_preparation_response::Response::Error(err.into())),
+      ..proto::VerificationPreparationResponse::default()
+    })
+  }
 }
 
 #[instrument(level = "trace")]
@@ -699,10 +713,7 @@ impl PactPlugin for ProtobufPactPlugin {
 
     let pact = match parse_pact_from_request_json(request.pact.as_str(), "grpc:prepare_interaction_for_verification") {
       Ok(pact) => pact,
-      Err(err) => return Ok(Response::new(proto::VerificationPreparationResponse {
-        response: Some(proto::verification_preparation_response::Response::Error(format!("Failed to parse Pact JSON: {}", err))),
-        .. proto::VerificationPreparationResponse::default()
-      }))
+      Err(err) => return Ok(Self::verification_preparation_error_response(format!("Failed to parse Pact JSON: {}", err)))
     };
 
     let key = request.interaction_key.as_str();
@@ -710,29 +721,18 @@ impl PactPlugin for ProtobufPactPlugin {
     let interaction = match interaction_by_id {
       Some(interaction) => match interaction.as_v4_sync_message() {
         Some(interaction) => interaction,
-        None => return Ok(Response::new(proto::VerificationPreparationResponse {
-          response: Some(proto::verification_preparation_response::Response::Error(format!("gRPC interactions must be of type V4 synchronous message, got {}", interaction.type_of()))),
-          ..proto::VerificationPreparationResponse::default()
-        }))
+        None => return Ok(Self::verification_preparation_error_response(format!("gRPC interactions must be of type V4 synchronous message, got {}", interaction.type_of())))
       }
       None => {
         error!(?key, "Did not find an interaction that matches the given key");
-        return Ok(Response::new(proto::VerificationPreparationResponse {
-          response: Some(proto::verification_preparation_response::Response::Error(
-            format!("Did not find an interaction that matches the given key '{}'", key)
-          )),
-          ..proto::VerificationPreparationResponse::default()
-        }))
+        return Ok(Self::verification_preparation_error_response(format!("Did not find an interaction that matches the given key '{}'", key)));
       }
     };
 
     let (file_desc, service_desc, method_desc, package) = match lookup_service_descriptors_for_interaction(&interaction, &pact) {
       Ok(values) => values,
       Err(err) => {
-        return Ok(Response::new(proto::VerificationPreparationResponse {
-          response: Some(proto::verification_preparation_response::Response::Error(err.to_string())),
-          ..proto::VerificationPreparationResponse::default()
-        }))
+        return Ok(Self::verification_preparation_error_response(err.to_string()))
       }
     };
 
@@ -741,23 +741,26 @@ impl PactPlugin for ProtobufPactPlugin {
     let input_message = match find_message_type_by_name(last_name(input_message_name.as_str()), &file_desc) {
       Ok(message) => message.0,
       Err(err) => {
-        return Ok(Response::new(proto::VerificationPreparationResponse {
-          response: Some(proto::verification_preparation_response::Response::Error(err.to_string())),
-          ..proto::VerificationPreparationResponse::default()
-        }))
+        return Ok(Self::verification_preparation_error_response(err.to_string()))
       }
     };
 
-    // TODO: use any generators here
     let decoded_body = match decode_message(&mut raw_request_body, &input_message, &file_desc) {
-      Ok(message) => DynamicMessage::new(&message, &file_desc),
+      Ok(message) => {
+        let mut message = DynamicMessage::new(&message, &file_desc);
+        if let Err(err) = message.apply_generators(
+          interaction.request.generators.categories.get(&GeneratorCategory::BODY),
+          &GeneratorTestMode::Provider
+        ) {
+          return Ok(Self::verification_preparation_error_response(err.to_string()));
+        }
+        message
+      },
       Err(err) => {
-        return Ok(Response::new(proto::VerificationPreparationResponse {
-          response: Some(proto::verification_preparation_response::Response::Error(err.to_string())),
-          ..proto::VerificationPreparationResponse::default()
-        }))
+        return Ok(Self::verification_preparation_error_response(err.to_string()));
       }
     };
+
     let request = Request::new(decoded_body.clone());
 
     let mut request_metadata: HashMap<String, proto::MetadataValue> = interaction.request.metadata.iter()
@@ -792,10 +795,7 @@ impl PactPlugin for ProtobufPactPlugin {
 
     let mut buffer = BytesMut::new();
     if let Err(err) = decoded_body.write_to(&mut buffer) {
-      return Ok(Response::new(proto::VerificationPreparationResponse {
-        response: Some(proto::verification_preparation_response::Response::Error(err.to_string())),
-        ..proto::VerificationPreparationResponse::default()
-      }))
+      return Ok(Self::verification_preparation_error_response(err.to_string()));
     }
     let integration_data = proto::InteractionData {
       body: Some(Body {

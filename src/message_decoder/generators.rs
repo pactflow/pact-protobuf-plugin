@@ -22,12 +22,13 @@ use pact_models::time_utils::{parse_pattern, to_chrono_pattern};
 use rand::prelude::*;
 use regex::{Captures, Regex};
 use serde_json::Value;
-use tracing::{debug, warn};
+use tracing::{debug, instrument, warn};
 use uuid::Uuid;
 
 use crate::message_decoder::ProtobufFieldData;
 
 impl GenerateValue<ProtobufFieldData> for Generator {
+  #[instrument(ret)]
   fn generate_value(&self,
                     value: &ProtobufFieldData,
                     context: &HashMap<&str, Value>,
