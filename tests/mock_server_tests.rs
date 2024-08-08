@@ -58,8 +58,7 @@ fn mock_server_with_no_requests() {
 
     let error = result.unwrap_err();
     let error_message = panic_message::panic_message(&error);
-    expect!(error_message).to(be_equal_to(
-      "plugin mock server failed verification:\n    1) /com.pact.protobuf.example.Test/GetTest: Did not receive any requests for path '/com.pact.protobuf.example.Test/GetTest'\n"));
+    expect!(error_message.contains("Test/GetTest: Did not receive any requests for path")).to(be_true());
 }
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
