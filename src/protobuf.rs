@@ -406,7 +406,7 @@ fn construct_protobuf_interaction_for_message(
   };
   if let Some(metadata) = metadata {
     for (k, v) in &metadata.values {
-      metadata_fields.insert(k.clone(), prost_string(v));
+      metadata_fields.insert(k.clone(), prost_string(&v.value));
     }
   }
 

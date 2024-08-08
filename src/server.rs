@@ -9,6 +9,7 @@ use anyhow::{anyhow, bail};
 use bytes::{Bytes, BytesMut};
 use maplit::hashmap;
 use pact_matching::{BodyMatchResult, Mismatch};
+use pact_matching::generators::DefaultVariantMatcher;
 use pact_models::generators::{
   GenerateValue,
   Generator,
@@ -21,9 +22,21 @@ use pact_models::json_utils::json_to_string;
 use pact_models::matchingrules::MatchingRule;
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::{ContentType, MatchingRuleCategory, OptionalBody, RuleLogic};
+use pact_models::v4::sync_message::SynchronousMessage;
 use pact_plugin_driver::plugin_models::PactPluginManifest;
 use pact_plugin_driver::proto;
-use pact_plugin_driver::proto::{Body, body, CompareContentsRequest, CompareContentsResponse, GenerateContentRequest, GenerateContentResponse, MockServerResult, PluginConfiguration, VerificationPreparationResponse};
+use pact_plugin_driver::proto::{
+  Body,
+  body,
+  CompareContentsRequest,
+  CompareContentsResponse,
+  GenerateContentRequest,
+  GenerateContentResponse,
+  MetadataValue,
+  MockServerResult,
+  PluginConfiguration,
+  VerificationPreparationResponse
+};
 use pact_plugin_driver::proto::body::ContentTypeHint;
 use pact_plugin_driver::proto::catalogue_entry::EntryType;
 use pact_plugin_driver::proto::generate_content_request::TestMode;
@@ -36,22 +49,28 @@ use pact_plugin_driver::utils::{
   to_proto_value
 };
 use pact_verifier::verification_result::VerificationMismatchResult;
-use prost_types::FileDescriptorSet;
+use prost_types::{FileDescriptorProto, FileDescriptorSet, MethodDescriptorProto, ServiceDescriptorProto};
 use prost_types::value::Kind;
 use serde_json::Value;
 use tonic::{Request, Response, Status};
 use tonic::metadata::KeyAndValueRef;
-use tracing::{debug, error, info, instrument, trace};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::dynamic_message::DynamicMessage;
 use crate::matching::{match_message, match_service};
 use crate::message_decoder::{decode_message, ProtobufField};
-use crate::metadata::MetadataMatchResult;
+use crate::metadata::{MessageMetadataValue, MetadataMatchResult};
 use crate::mock_server::{GrpcMockServer, MOCK_SERVER_STATE};
 use crate::protobuf::process_proto;
 use crate::protoc::setup_protoc;
 use crate::utils::{
-  build_grpc_route, find_message_descriptor_for_type, get_descriptors_for_interaction, lookup_interaction_by_id, lookup_service_descriptors_for_interaction, parse_pact_from_request_json, to_fully_qualified_name
+  build_grpc_route,
+  find_message_descriptor_for_type,
+  get_descriptors_for_interaction,
+  lookup_interaction_by_id,
+  lookup_service_descriptors_for_interaction,
+  parse_pact_from_request_json,
+  to_fully_qualified_name
 };
 use crate::verification::verify_interaction;
 
@@ -441,6 +460,82 @@ impl ProtobufPactPlugin {
       ..proto::VerificationPreparationResponse::default()
     })
   }
+
+  // Applies the metadata to the request, sourced from merging the interaction request metadata and
+  // the Tonic request metadata.
+  fn setup_metadata(
+    interaction: &SynchronousMessage,
+    service_desc: &ServiceDescriptorProto,
+    method_desc: &MethodDescriptorProto,
+    file_desc: &FileDescriptorProto,
+    request: Request<DynamicMessage>
+  ) -> HashMap<String, MetadataValue> {
+    let mut request_metadata = hashmap! {};
+    for (k, v) in &interaction.request.metadata {
+      request_metadata.insert(k.clone(), proto::MetadataValue {
+        value: Some(proto::metadata_value::Value::NonBinaryValue(to_proto_value(v)))
+      });
+    }
+
+    let service_full_name = to_fully_qualified_name(service_desc.name(), file_desc.package()).unwrap_or_default();
+    let path = build_grpc_route(service_full_name.as_str(), method_desc.name()).unwrap_or_default();
+    request_metadata.insert("request-path".to_string(), proto::MetadataValue {
+      value: Some(proto::metadata_value::Value::NonBinaryValue(prost_types::Value {
+        kind: Some(Kind::StringValue(path))
+      }))
+    });
+
+    for entry in request.metadata().iter() {
+      match entry {
+        KeyAndValueRef::Ascii(k, v) => {
+          request_metadata.insert(k.to_string(), proto::MetadataValue {
+            value: Some(proto::metadata_value::Value::NonBinaryValue(prost_types::Value {
+              kind: Some(Kind::StringValue(v.to_str().unwrap_or_default().to_string()))
+            }))
+          });
+        }
+        KeyAndValueRef::Binary(k, v) => {
+          request_metadata.insert(k.to_string(), proto::MetadataValue {
+            value: Some(proto::metadata_value::Value::BinaryValue(v.to_bytes().unwrap_or_default().to_vec()))
+          });
+        }
+      }
+    }
+    request_metadata
+  }
+
+  fn apply_generators_to_metadata(
+    interaction: SynchronousMessage,
+    test_context: &HashMap<&str, Value>,
+    request_metadata: &mut HashMap<String, MetadataValue>
+  ) {
+    let metadata_generators = interaction.request.generators.categories
+      .get(&GeneratorCategory::METADATA)
+      .cloned()
+      .unwrap_or_default();
+    if !metadata_generators.is_empty() {
+      debug!(?metadata_generators, ?test_context, "Applying metadata generators...");
+      let vm = DefaultVariantMatcher.boxed();
+      for (key, generator) in &metadata_generators {
+        if generator.corresponds_to_mode(&GeneratorTestMode::Provider) {
+          if let Some(header) = key.first_field() {
+            match generator.generate_value(&MessageMetadataValue::default(), &test_context, &vm) {
+              Ok(v) => {
+                request_metadata.insert(header.to_string(), proto::MetadataValue {
+                  value: Some(proto::metadata_value::Value::NonBinaryValue(prost_types::Value {
+                    kind: Some(Kind::StringValue(v.value))
+                  }))
+                });
+              }
+              Err(err) => {
+                warn!("Failed to generate value for metadata key '{}': {}", key, err);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
 }
 
 /// Generate contents for the interaction
@@ -807,14 +902,15 @@ impl PactPlugin for ProtobufPactPlugin {
       }
     };
 
+    let config = proto_struct_to_map(&request.config.clone().unwrap_or_default());
+    let test_context = config.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
     let decoded_body = match decode_message(&mut raw_request_body, &input_message, &all_file_desc) {
       Ok(message) => {
         let mut message = DynamicMessage::new(&message, &all_file_desc);
-        let config = proto_struct_to_map(&request.config.clone().unwrap_or_default());
         if let Err(err) = message.apply_generators(
           interaction.request.generators.categories.get(&GeneratorCategory::BODY),
           &GeneratorTestMode::Provider,
-          &config.iter().map(|(k, v)| (k.as_str(), v.clone())).collect()
+          &test_context
         ) {
           return Ok(Self::verification_preparation_error_response(err.to_string()));
         }
@@ -827,36 +923,9 @@ impl PactPlugin for ProtobufPactPlugin {
 
     let request = Request::new(decoded_body.clone());
 
-    let mut request_metadata: HashMap<String, proto::MetadataValue> = interaction.request.metadata.iter()
-      .map(|(k, v)| (k.clone(), proto::MetadataValue {
-        value: Some(proto::metadata_value::Value::NonBinaryValue(to_proto_value(v)))
-      }))
-      .collect();
-    
-    let service_full_name = to_fully_qualified_name(service_desc.name(), file_desc.package()).unwrap_or_default();
-    let path = build_grpc_route(service_full_name.as_str(), method_desc.name()).unwrap_or_default();
-    request_metadata.insert("request-path".to_string(), proto::MetadataValue {
-      value: Some(proto::metadata_value::Value::NonBinaryValue(prost_types::Value {
-        kind: Some(Kind::StringValue(path))
-      }))
-    });
-
-    for entry in request.metadata().iter() {
-      match entry {
-        KeyAndValueRef::Ascii(k, v) => {
-          request_metadata.insert(k.to_string(), proto::MetadataValue {
-            value: Some(proto::metadata_value::Value::NonBinaryValue(prost_types::Value {
-              kind: Some(Kind::StringValue(v.to_str().unwrap_or_default().to_string()))
-            }))
-          });
-        }
-        KeyAndValueRef::Binary(k, v) => {
-          request_metadata.insert(k.to_string(), proto::MetadataValue {
-            value: Some(proto::metadata_value::Value::BinaryValue(v.to_bytes().unwrap_or_default().to_vec()))
-          });
-        }
-      }
-    }
+    let mut request_metadata = Self::setup_metadata(&interaction, &service_desc,
+      &method_desc, &file_desc, request);
+    Self::apply_generators_to_metadata(interaction, &test_context, &mut request_metadata);
 
     let mut buffer = BytesMut::new();
     if let Err(err) = decoded_body.write_to(&mut buffer) {

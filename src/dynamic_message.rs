@@ -7,11 +7,11 @@ use std::slice::Iter;
 use anyhow::anyhow;
 use bytes::{BufMut, Bytes};
 use itertools::Itertools;
+use pact_matching::generators::DefaultVariantMatcher;
 use pact_models::generators::{
   GenerateValue,
   Generator,
   GeneratorTestMode,
-  NoopVariantMatcher,
   VariantMatcher
 };
 use pact_models::path_exp::{DocPath, PathToken};
@@ -237,8 +237,7 @@ impl DynamicMessage {
     context: &HashMap<&str, Value>
   ) -> anyhow::Result<()> {
     if let Some(generators) = generators {
-      let variant_matcher = NoopVariantMatcher {};
-      let vm_boxed = variant_matcher.boxed();
+      let vm_boxed = DefaultVariantMatcher.boxed();
 
       for (path, generator) in generators {
         let value = self.fetch_value(&path);

@@ -23,10 +23,11 @@ use rand::prelude::*;
 use regex::{Captures, Regex};
 use serde_json::Value;
 use serde_json::Value::Object;
-use tracing::{debug, instrument, warn};
+use tracing::{debug, instrument, trace, warn};
 use uuid::Uuid;
 
 use crate::message_decoder::ProtobufFieldData;
+use crate::metadata::MessageMetadataValue;
 
 impl GenerateValue<ProtobufFieldData> for Generator {
   #[instrument(ret)]
@@ -261,6 +262,39 @@ fn replace_with_regex(example: &String, url: String, re: Regex) -> String {
     let m = caps.get(1).unwrap();
     format!("{}{}", url, m.as_str())
   }).to_string()
+}
+
+impl GenerateValue<MessageMetadataValue> for Generator {
+  #[instrument]
+  fn generate_value(
+    &self,
+    value: &MessageMetadataValue,
+    context: &HashMap<&str, Value>,
+    matcher: &Box<dyn VariantMatcher + Send + Sync>
+  ) -> anyhow::Result<MessageMetadataValue> {
+    match self {
+      Generator::ProviderStateGenerator(exp, dt) => {
+        // TODO: Remove this once pact_models 1.2.4+ is released
+        // Provider state values may come under a "providerState" key
+        let provider_state_config = if let Some(Object(psc)) = context.get("providerState") {
+          psc
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.clone()))
+            .collect()
+        } else {
+          context.clone()
+        };
+        trace!(?exp, ?provider_state_config, ?dt, "Calling generate_value_from_context");
+        generate_value_from_context(exp, &provider_state_config, dt)
+          .map(|value| MessageMetadataValue::new(value.to_string()))
+      }
+      _ => {
+        let generator: &dyn GenerateValue<String> = self;
+        generator.generate_value(&value.value, context, matcher)
+          .map(|result| MessageMetadataValue::new(result))
+      }
+    }
+  }
 }
 
 #[cfg(test)]

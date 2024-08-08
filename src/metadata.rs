@@ -24,11 +24,26 @@ use tracing::log::trace;
 
 use crate::utils::proto_value_to_map;
 
+#[derive(Clone, Debug, PartialEq, PartialOrd, Default)]
+/// Wrapper for a message metadata value. Currently only string values are supported.
+pub struct MessageMetadataValue {
+  pub value: String
+}
+
+impl MessageMetadataValue {
+  /// Create a new value from string data
+  pub fn new<S: Into<String>>(s: S) -> Self {
+    MessageMetadataValue {
+      value: s.into()
+    }
+  }
+}
+
 #[derive(Clone, Debug)]
 pub struct MessageMetadata {
   pub matching_rules: MatchingRuleCategory,
   pub generators: HashMap<String, Generator>,
-  pub values: HashMap<String, String>,
+  pub values: HashMap<String, MessageMetadataValue>,
 }
 
 #[instrument(ret, level = "trace")]
@@ -58,9 +73,9 @@ pub fn process_metadata(metadata_config: Option<&Value>) -> anyhow::Result<Optio
           if let Some(generator) = mrd.generator {
             generators.insert(key.clone(), generator);
           }
-          values.insert(key.clone(), mrd.value);
+          values.insert(key.clone(), MessageMetadataValue::new(mrd.value));
         } else {
-          values.insert(key.clone(), str_value);
+          values.insert(key.clone(), MessageMetadataValue::new(str_value));
         }
       }
 
@@ -345,7 +360,7 @@ mod tests {
   use tonic::Code;
   use tonic::metadata::MetadataMap;
 
-  use crate::metadata::{compare_metadata, grpc_status, process_metadata};
+  use crate::metadata::{compare_metadata, grpc_status, MessageMetadataValue, process_metadata};
   use crate::utils::prost_string;
 
   #[test]
@@ -376,9 +391,9 @@ mod tests {
     };
     let result = process_metadata(Some(&config)).unwrap().unwrap();
     expect!(result.values).to(be_equal_to(hashmap!{
-      "A".to_string() => "a".to_string(),
-      "B".to_string() => "b".to_string(),
-      "C".to_string() => "c".to_string()
+      "A".to_string() => MessageMetadataValue::new("a"),
+      "B".to_string() => MessageMetadataValue::new("b"),
+      "C".to_string() => MessageMetadataValue::new("c")
     }));
   }
 
@@ -395,9 +410,9 @@ mod tests {
     };
     let result = process_metadata(Some(&config)).unwrap().unwrap();
     expect!(result.values).to(be_equal_to(hashmap!{
-      "A".to_string() => "a".to_string(),
-      "B".to_string() => "true".to_string(),
-      "C".to_string() => "c".to_string()
+      "A".to_string() => MessageMetadataValue::new("a"),
+      "B".to_string() => MessageMetadataValue::new("true"),
+      "C".to_string() => MessageMetadataValue::new("c")
     }));
     let rules = result.matching_rules.rules.get(&DocPath::new("B").unwrap());
     let rules_list = rules.unwrap();
