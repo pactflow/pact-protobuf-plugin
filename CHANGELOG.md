@@ -1,3 +1,22 @@
+# 0.5.0 - Supports provider state injected values and better use of package names when resolving messages
+
+* a9630de - chore: Make test less brittle (Ronald Holshausen, Fri Aug 9 09:16:16 2024 +1000)
+* 309f8fc - docs: updated a couple of code comments (Stan Vodetskyi, Thu Aug 8 15:30:16 2024 -0700)
+* fcf42b5 - feat: Update readme with example of provider state injected values #69 (Ronald Holshausen, Thu Aug 8 16:15:58 2024 +1000)
+* 402ad18 - feat: Enable support for provider state injected values for gRPC metadata #69 (Ronald Holshausen, Thu Aug 8 15:39:29 2024 +1000)
+* e001efa - feat: use packages when looking up services and message types. (Stan Vodetskyi, Sat Aug 3 02:34:08 2024 -0700)
+* 6064316 - feat: Pass the test context values through to the ProviderStateGenerator #69 (Ronald Holshausen, Wed Aug 7 15:30:42 2024 +1000)
+* 7e85d34 - feat: Implement applying generators to mutate the Protobuf messages #69 (Ronald Holshausen, Wed Aug 7 10:40:13 2024 +1000)
+* ef237ec - feat: Support for use of provider state generator in consumer tests #69 (Ronald Holshausen, Tue Aug 6 15:04:04 2024 +1000)
+* 2b7d5e0 - chore: cleanup some unused code warnings (Ronald Holshausen, Fri Jul 19 09:32:12 2024 +1000)
+* c551867 - chore: Remove unused crate (Ronald Holshausen, Thu Jul 18 14:12:52 2024 +1000)
+* eda6c17 - chore: Update integration test dependencies (Ronald Holshausen, Thu Jul 18 12:04:11 2024 +1000)
+* 8baefcb - chore: Upgrade Tonic to 0.12.0 and Hyper to 1.4.1 (Ronald Holshausen, Thu Jul 18 11:42:11 2024 +1000)
+* f7c459a - chore: Update depenendencies (Ronald Holshausen, Thu Jul 18 09:48:12 2024 +1000)
+* 2e281ff - Merge pull request #65 from pactflow/docs/binary_compat (Ronald Holshausen, Tue Jun 11 10:47:11 2024 +1000)
+* a5ed622 - bump version to 0.4.1 (Ronald Holshausen, Tue Jun 11 10:36:44 2024 +1000)
+* 13e9cc0 - chore(docs): update binary compatability (Yousaf Nabi, Mon May 20 13:36:23 2024 +0100)
+
 # 0.4.0 - Fixes message name resolving to correctly use package names
 
 * a1fad28 - chore: Update default protoc compiler to next major version (21.12) (Ronald Holshausen, Tue Jun 11 10:20:14 2024 +1000)
