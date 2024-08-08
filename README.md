@@ -479,6 +479,33 @@ You could define a test like
 This will require the map of labels to only have keys and values that match the given regular expressions, and the map
 must have at least one entry. `"100": "this is a label"` is the example value used in the consumer test.
 
+### Provider state injected values
+_Requires 0.5.0+ of the Protobuf plugin._
+
+Values from [provider states](https://docs.pact.io/getting_started/provider_states) can be injected into Protobuf 
+message fields and gRPC metadata. This can be done by using the `fromProviderState` function in the consumer test.
+
+For example (taken from an [example Java Consumer Test](https://github.com/pact-foundation/pact-plugins/blob/main/examples/gRPC/provider-states/consumer-jvm/src/test/java/io/pact/example/grpc/consumer/PactConsumerTest.java)):
+```json
+{
+  "request": {
+    "rectangle": {
+      "length": "matching(number, fromProviderState('${rectangleLength}', 3))",
+      "width": "matching(number, fromProviderState('${rectangleWidth}', 3))"
+    },
+    "requestMetadata": {
+      "Auth": "matching(equalTo, fromProviderState('${Auth}', 'AST00004'))"
+    },
+    "response": {
+      "value": "matching(number, 12)"
+    }
+  }
+}
+```
+
+This example allows the rectangle length and width to be changed from values from the provider state callback, as well
+as the `Auth` metadata value. You can see an example doing that [here](https://github.com/pact-foundation/pact-plugins/blob/main/examples/gRPC/provider-states/provider-jvm/server/src/test/java/io/pact/example/grpc/provider/PactVerificationTest.java#L54).
+
 ## Running within docker containers
 
 The plugin will try to use an IP6 address when opening the port for the gRPC server. Docker will only support IP6
@@ -592,12 +619,8 @@ To encode a .proto file into a base64-encoded FileDescriptorSet,
 e.g. if you modified `tests/simple.proto` and need to update its encoded form in tests:
 - `protoc --descriptor_set_out=/dev/stdout tests/simple.proto | base64`
 
-## Development Roadmap
-
-Pact plugin development board: https://github.com/pact-foundation/pact-plugins/projects/1
-
 ## License and Copyright
 
-This plugin is released under the **MIT License** and is copyright © 2021-22 [Pactflow](https://pactflow.io).
+This plugin is released under the **MIT License** and is copyright © 2021-24 [SmartBear](https://pactflow.io).
 
-The Pactflow logos are copyright © [Pactflow](https://pactflow.io) and may not be used without permission.
+The Pactflow logos are copyright © [SmartBear](https://pactflow.io) and may not be used without permission.
