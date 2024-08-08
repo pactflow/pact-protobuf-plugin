@@ -13,7 +13,7 @@ use prost_types::field_descriptor_proto::Type;
 use tracing::{debug, error, trace, warn};
 
 use crate::utils::{
-  as_hex, find_enum_by_name, find_enum_by_name_in_message, find_message_descriptor, is_repeated_field, should_be_packed_type, split_name
+  as_hex, find_enum_by_name, find_enum_by_name_in_message, find_message_descriptor_for_type, is_repeated_field, last_name, should_be_packed_type
 };
 
 mod generators;
@@ -381,6 +381,8 @@ pub fn decode_message<B>(
   descriptors: &FileDescriptorSet
 ) -> anyhow::Result<Vec<ProtobufField>>
   where B: Buf {
+  trace!("Decoding message using descriptor {:?}", descriptor);
+  trace!("all descriptors available for decoding the message: {:?}", descriptors);
   trace!("Incoming buffer has {} bytes", buffer.remaining());
   let mut fields = vec![];
 
@@ -439,12 +441,20 @@ pub fn decode_message<B>(
             match t {
               Type::String => vec![ (ProtobufFieldData::String(from_utf8(&data_buffer)?.to_string()), wire_type) ],
               Type::Message => {
-                let (type_name, type_package) = split_name(field_descriptor.type_name.as_deref().unwrap_or_default());
-                let message_proto = descriptor.nested_type.iter()
-                  .find(|message_descriptor| message_descriptor.name.as_deref() == Some(type_name))
-                  .cloned()
-                  .or_else(|| find_message_descriptor(type_name, type_package, descriptors.file.clone()).ok())
-                  .ok_or_else(|| anyhow!("Did not find the embedded message {:?} for the field {} in the Protobuf descriptor", field_descriptor.type_name, field_num))?;
+                let full_type_name = field_descriptor.type_name.as_deref().unwrap_or_default();
+                // TODO: replace with proper support for nested fields
+                // this code checks fully qualified name first, if it can find it, this means the type name was a 
+                // valid fully-qualified reference;
+                // if it's not found, it's a nested type, so we look for it in the nested types of the current message
+                // This misses the case when the type name refers to a fully-qualified nested type in another message
+                // or package. This also doesn't deal with relative paths, but I don't think descriptors actually
+                // contain those.
+                let message_proto = find_message_descriptor_for_type(full_type_name, descriptors).map(|(d,_)|d)
+                .or_else(|_| {
+                  descriptor.nested_type.iter().find(
+                    |message_descriptor| message_descriptor.name.as_deref() == Some(last_name(full_type_name))
+                  ).cloned().ok_or_else(|| anyhow!("Did not find the message {:?} for the field {} in the Protobuf descriptor", field_descriptor.type_name, field_num))
+                })?;
                 vec![ (ProtobufFieldData::Message(data_buffer.to_vec(), message_proto), wire_type) ]
               }
               Type::Bytes => vec![ (ProtobufFieldData::Bytes(data_buffer.to_vec()), wire_type) ],

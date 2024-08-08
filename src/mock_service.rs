@@ -25,6 +25,7 @@ use crate::matching::compare;
 use crate::message_decoder::decode_message;
 use crate::metadata::{compare_metadata, grpc_status};
 use crate::mock_server::MOCK_SERVER_STATE;
+use crate::utils::build_grpc_route;
 
 #[derive(Debug, Clone)]
 pub(crate) struct MockService {
@@ -39,6 +40,21 @@ pub(crate) struct MockService {
 }
 
 impl MockService {
+  /// Handle the gRPC call. Compare the incoming message to the expected request message, respond with 
+  /// the expected response mesage.
+  /// 
+  /// Stores comparison results in `MOCK_SERVER_STATE` for later retrieval.
+  /// 
+  /// # Arguments
+  /// 
+  /// * `request` - The incoming request message
+  /// * `message_descriptor` - The descriptor of the expected request message
+  /// * `response_descriptor` - The descriptor of the expected response message
+  /// * `request_metadata` - The incoming request metadata
+  /// 
+  /// # Returns
+  /// 
+  /// Returns a `Result` with the response message or an error
   pub(crate) async fn handle_message(
     &self,
     request: DynamicMessage,
@@ -77,7 +93,11 @@ impl MockService {
         {
           // record the result in the static store
           let mut guard = MOCK_SERVER_STATE.lock().unwrap();
-          let key = format!("{}/{}", self.service_name, self.method_descriptor.name.clone().unwrap_or_else(|| "unknown method".into()));
+          let method_name = self.method_descriptor.name.clone().unwrap_or_else(|| "unknown method".into());
+          let key = match build_grpc_route(self.service_name.as_str(), method_name.as_str()) {
+            Ok(k) => k,
+            Err(err) => Err(Status::internal(err.to_string()))?
+          };
           if let Some((_, results)) = guard.get_mut(self.server_key.as_str()) {
             let route_results = results.entry(key).or_insert((0, vec![]));
             trace!(store_length = route_results.1.len(), "Adding result to mock server '{}' static store", self.server_key);

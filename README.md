@@ -580,6 +580,18 @@ There is a Pact test that verifies the plugin aqainst the Pact file published to
 Running this test requires a Pactflow API token and the plugin to be built and installed. See the installation instructions above.
 The test is run using `cargo test --test pact_verify`.
 
+### Developer notes
+#### Base64-encoded strings in unit-tests
+Several unit-tests have base64 encoded proto descriptors as input. They're hard to read and update.
+To decode and check out the contents:
+- save the encoded string into a file, e.g. `/tmp/some.b64` and then `base64 -d /tmp/some.b64 | protoc --decode_raw`
+- this will be somewhat readable, even if not a proper proto3 syntax, but it will be possible to reconstruct it.
+- github copilot can decode the raw base64 string easily too
+
+To encode a .proto file into a base64-encoded FileDescriptorSet, 
+e.g. if you modified `tests/simple.proto` and need to update its encoded form in tests:
+- `protoc --descriptor_set_out=/dev/stdout tests/simple.proto | base64`
+
 ## Development Roadmap
 
 Pact plugin development board: https://github.com/pact-foundation/pact-plugins/projects/1
