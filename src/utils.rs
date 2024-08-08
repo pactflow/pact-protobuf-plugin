@@ -61,13 +61,14 @@ pub fn parse_name(name: &str) -> (&str, Option<&str>) {
     })
     .unwrap_or_else(|| (name, None))
   } else {
-    // otherwise it's a relative name, so if it contains dots, this means embedded types, not packages?
+    // otherwise it's a relative name, so if it contains dots, this means embedded types, not packages
+    // we don't support embedded types at this point
     (name, None)
   }
 }
 
-/// Converts a relative protobuf type name to a fully qualified one by appending a `.<package>.` prefix,
-/// or if the package is empty, just a `.` prefix.
+/// Converts a relative protobuf type name to a fully qualified one by prepending `.<package>.`,
+/// or if the package is empty, just a `.`.
 /// E.g. `MyType` with package `example` becomes `.example.MyType`
 /// and `MyType` with empty package becomes `.MyType`
 pub fn to_fully_qualified_name(name: &str, package: &str) -> anyhow::Result<String> {
@@ -156,7 +157,7 @@ pub fn find_method_descriptor_for_service(
 /// Type name format is the same as in `type_name` field in field descriptor
 /// or the `input_type`/`output_type` fields in method descriptor.
 /// 
-/// If type name contains a dot ('.') it is a fully qualified name, so it is split into package name and message name; 
+/// If type name starts with a dot ('.') it's a fully qualified name, so it is split into package and message names; 
 /// if the package is empty, will only lookup messages which have no package.
 /// 
 /// If type name does not contain a dot, it is a relative type. We'll search all file descriptors then.
@@ -174,7 +175,7 @@ pub fn find_message_descriptor_for_type_in_vec(
 /// Type name format is the same as in `type_name` field in field descriptor
 /// or the `input_type`/`output_type` fields in method descriptor.
 /// 
-/// If type name contains a dot ('.') it is a fully qualified name, so it is split into package name and message name; 
+/// If type name starts with a dot ('.') it's a fully qualified name, so it is split into package and message names; 
 /// if the package is empty, will only lookup messages which have no package.
 /// 
 /// If type name does not contain a dot, it is a relative type. We'll search all file descriptors then.
@@ -192,7 +193,7 @@ pub fn find_message_descriptor_for_type_in_map(
 /// Type name format is the same as in `type_name` field in field descriptor
 /// or the `input_type`/`output_type` fields in method descriptor.
 /// 
-/// If type name contains a dot ('.') it is a fully qualified name, so it is split into package name and message name; 
+/// If type name starts with a dot ('.') it's a fully qualified name, so it is split into package and message names; 
 /// if the package is empty, will only lookup messages which have no package.
 /// 
 /// If type name does not contain a dot, it is a relative type. We'll search all file descriptors then.
@@ -233,7 +234,7 @@ pub(crate) fn find_message_descriptor(
 
 /// Find a service descriptor for a given service type name, fully qualified or relative.
 /// 
-/// If type name contains a dot ('.') it is a fully qualified name, so it is split into package name and service name; 
+/// If type name starts with a dot ('.') it's a fully qualified name, so it is split into package and message names; 
 /// if the package is empty, will only lookup services which have no package.
 /// 
 /// If type name does not contain a dot, it is a relative type. We'll search all file descriptors then.
