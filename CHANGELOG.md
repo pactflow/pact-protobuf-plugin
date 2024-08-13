@@ -1,3 +1,13 @@
+# 0.5.1 - Bugfix Release
+
+* 7e6eb62 - chore: fix integrated_tests after upgrading pact consumer crate (Ronald Holshausen, Wed Aug 14 09:36:25 2024 +1000)
+* 2eb9d1b - chore: fix integrated_tests after upgrading pact consumer crate (Ronald Holshausen, Wed Aug 14 09:23:35 2024 +1000)
+* 090de50 - chore: fix integrated_tests after upgrading pact consumer crate (Ronald Holshausen, Tue Aug 13 16:49:09 2024 +1000)
+* e3c32f1 - chore: fix integrated_tests after upgrading pact consumer crate (Ronald Holshausen, Tue Aug 13 16:36:35 2024 +1000)
+* f459668 - chore: Upgrade all the Pact dependencies (Ronald Holshausen, Tue Aug 13 16:16:33 2024 +1000)
+* c3ec0eb - fix: Handle google.Structs correctly #71 (Ronald Holshausen, Tue Aug 13 10:50:12 2024 +1000)
+* 1e5e5bc - bump version to 0.5.1 (Ronald Holshausen, Fri Aug 9 09:37:43 2024 +1000)
+
 # 0.5.0 - Supports provider state injected values and better use of package names when resolving messages
 
 * a9630de - chore: Make test less brittle (Ronald Holshausen, Fri Aug 9 09:16:16 2024 +1000)
