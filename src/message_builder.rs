@@ -161,7 +161,7 @@ impl MessageBuilder {
               buffer.put_slice(&message_bytes);
             }
             RType::Struct(s) => {
-              trace!("Encoding a Protobuf Struct");
+              trace!(?s, "Encoding a Protobuf Struct");
               let mut buffer2 = BytesMut::with_capacity(s.encoded_len());
               s.encode(&mut buffer2)?;
               encode_key(tag as u32, WireType::LengthDelimited, &mut buffer);

@@ -846,15 +846,15 @@ fn build_proto_value(
       Ok(prost_types::Value { kind: Some(prost_types::value::Kind::StringValue(s.clone())) })
     }
     Value::Array(a) => {
-      let mut values = a.iter().enumerate().map(|(index, v)| {
+      let values = a.iter().enumerate().map(|(index, v)| {
         let index_path = path.join(index.to_string());
         build_proto_value(&index_path, v, matching_rules, generators)
-      });
-      if let Some(err) = values.find_map(|v| v.err()) {
+      }).collect_vec();
+      if let Some(err) = values.iter().find_map(|v| v.as_ref().err()) {
         return Err(anyhow!("Could not construct a Protobuf list value - {}", err))
       }
       // Unwrap here is safe as the previous statement would catch an error
-      let list = prost_types::ListValue { values: values.map(|v| v.unwrap()).collect() };
+      let list = prost_types::ListValue { values: values.iter().map(|v| v.as_ref().unwrap().clone()).collect() };
       Ok(prost_types::Value { kind: Some(prost_types::value::Kind::ListValue(list)) })
     }
     Value::Object(map) => {

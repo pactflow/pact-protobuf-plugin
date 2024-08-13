@@ -390,9 +390,10 @@ pub fn decode_message<B>(
     let (field_num, wire_type) = decode_key(buffer)?;
     trace!(field_num, ?wire_type, "read field header, bytes remaining = {}", buffer.remaining());
 
-    match find_field_descriptor(field_num as i32, descriptor) {
+    match &find_field_descriptor(field_num as i32, descriptor) {
       Ok(field_descriptor) => {
-        let field_name = field_descriptor.name.clone().unwrap_or_default();
+        let field_name = field_descriptor.name();
+        trace!("field_name = {}", field_name);
         let data = match wire_type {
           WireType::Varint => {
             let varint = decode_varint(buffer)?;
@@ -438,10 +439,12 @@ pub fn decode_message<B>(
               return Err(anyhow!("Insufficient data remaining ({} bytes) to read {} bytes for field {}", buffer.remaining(), data_length, field_num));
             };
             let t: Type = field_descriptor.r#type();
+            trace!(field_type = ?t, data_buffer = ?data_buffer);
             match t {
               Type::String => vec![ (ProtobufFieldData::String(from_utf8(&data_buffer)?.to_string()), wire_type) ],
               Type::Message => {
-                let full_type_name = field_descriptor.type_name.as_deref().unwrap_or_default();
+                let full_type_name = field_descriptor.type_name();
+                trace!(%full_type_name, "Embedded message");
                 // TODO: replace with proper support for nested fields
                 // this code checks fully qualified name first, if it can find it, this means the type name was a 
                 // valid fully-qualified reference;
@@ -490,7 +493,7 @@ pub fn decode_message<B>(
         for (data, wire_type) in data {
           fields.push(ProtobufField {
             field_num,
-            field_name: field_name.clone(),
+            field_name: field_name.to_string(),
             wire_type,
             data
           });
@@ -545,7 +548,7 @@ fn decode_enum(
 }
 
 fn decode_packed_field(
-  field: FieldDescriptorProto,
+  field: &FieldDescriptorProto,
   descriptor: &DescriptorProto,
   descriptors: &FileDescriptorSet,
   data: &mut Bytes

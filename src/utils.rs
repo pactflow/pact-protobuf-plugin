@@ -9,7 +9,6 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use bytes::{Bytes, BytesMut};
 use field_descriptor_proto::Type;
-use maplit::hashmap;
 use pact_models::json_utils::json_to_string;
 use pact_models::pact::load_pact_from_json;
 use pact_models::prelude::v4::V4Pact;
@@ -28,8 +27,8 @@ use prost_types::{
 };
 use prost_types::field_descriptor_proto::Label;
 use prost_types::value::Kind;
-use serde_json::json;
-use tracing::{debug, error, trace, warn};
+use serde_json::{json, Map};
+use tracing::{debug, error, instrument, trace, warn};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
 
@@ -541,45 +540,99 @@ pub fn find_enum_by_name(
   }
 }
 
-/// Convert the message field data into a JSON value
-pub fn field_data_to_json(
+/// Convert the Google Struct field data into a JSON value
+#[instrument(level = "trace", skip(descriptors))]
+pub fn struct_field_data_to_json(
   field_data: Vec<ProtobufField>,
   descriptor: &DescriptorProto,
   descriptors: &FileDescriptorSet
 ) -> anyhow::Result<serde_json::Value> {
-  let mut object = hashmap!{};
+  let mut object = Map::new();
 
   for field in field_data {
-    if let Some(value) = descriptor.field.iter().find(|f| f.number.unwrap_or(-1) as u32 == field.field_num) {
-      match &value.name {
-        Some(name) => {
-          object.insert(name.clone(), match &field.data {
-            ProtobufFieldData::String(s) => serde_json::Value::String(s.clone()),
-            ProtobufFieldData::Boolean(b) => serde_json::Value::Bool(*b),
-            ProtobufFieldData::UInteger32(n) => json!(n),
-            ProtobufFieldData::Integer32(n) => json!(n),
-            ProtobufFieldData::UInteger64(n) => json!(n),
-            ProtobufFieldData::Integer64(n) => json!(n),
-            ProtobufFieldData::Float(n) => json!(n),
-            ProtobufFieldData::Double(n) => json!(n),
-            ProtobufFieldData::Bytes(b) => serde_json::Value::Array(b.iter().map(|v| json!(v)).collect()),
-            ProtobufFieldData::Enum(n, descriptor) => serde_json::Value::String(enum_name(*n, descriptor)),
-            ProtobufFieldData::Message(b, descriptor) => {
-              let mut bytes = BytesMut::from(b.as_slice());
-              let message_data = decode_message(&mut bytes, descriptor, descriptors)?;
-              field_data_to_json(message_data, descriptor, descriptors)?
-            }
-            ProtobufFieldData::Unknown(b) => serde_json::Value::Array(b.iter().map(|v| json!(v)).collect())
-          });
-        }
-        None => warn!("Did not get the field name for field number {}", field.field_num)
+    if let ProtobufFieldData::Message(b, entry_descriptor) = &field.data {
+      trace!(name = ?entry_descriptor.name, ?b, "constructing entry");
+      let mut bytes = BytesMut::from(b.as_slice());
+      let message_data = decode_message(&mut bytes, entry_descriptor, descriptors)?;
+      trace!(?message_data, "decoded entry");
+      if message_data.len() == 2 {
+        let key_field = message_data.iter().find(|f| f.field_name == "key")
+          .ok_or_else(|| anyhow!("Did not find the key for the entry"))?;
+        let value_field = message_data.iter().find(|f| f.field_name == "value")
+          .ok_or_else(|| anyhow!("Did not find the value for the entry"))?;
+        let key = if let ProtobufFieldData::String(key) = &key_field.data {
+          key.clone()
+        } else {
+          return Err(anyhow!("Key for {} must be a String, but got {}", entry_descriptor.name(), key_field.data.type_name()));
+        };
+        let value = proto_value_to_json(descriptors, value_field)?;
+        object.insert(key, value);
+      } else {
+        return Err(anyhow!("Was expecting 2 values (key, value) for the entry with field number {}, but got {:?}", field.field_num, message_data));
       }
     } else {
-      warn!("Did not find the descriptor for field number {}", field.field_num);
+      return Err(anyhow!("Was expecting a message for the entry with field number {}, but got {}", field.field_num, field.data));
     }
   }
 
-  Ok(serde_json::Value::Object(object.iter().map(|(k, v)| (k.clone(), v.clone())).collect()))
+  Ok(serde_json::Value::Object(object))
+}
+
+#[instrument(level = "trace", skip(descriptors))]
+fn proto_value_to_json(
+  descriptors: &FileDescriptorSet,
+  value_field: &ProtobufField
+) -> anyhow::Result<serde_json::Value> {
+  match &value_field.data {
+    ProtobufFieldData::Message(m, d) => {
+      let mut bytes = BytesMut::from(m.as_slice());
+      let message_data = decode_message(&mut bytes, d, descriptors)?;
+      trace!(?message_data, "decoded value");
+      if let Some(field_data) = message_data.first() {
+        match &field_data.data {
+          ProtobufFieldData::String(s) => Ok(serde_json::Value::String(s.clone())),
+          ProtobufFieldData::Boolean(b) => Ok(serde_json::Value::Bool(*b)),
+          ProtobufFieldData::UInteger32(n) => Ok(json!(*n)),
+          ProtobufFieldData::Integer32(n) => Ok(json!(*n)),
+          ProtobufFieldData::UInteger64(n) => Ok(json!(*n)),
+          ProtobufFieldData::Integer64(n) => Ok(json!(*n)),
+          ProtobufFieldData::Float(f) => Ok(json!(*f)),
+          ProtobufFieldData::Double(f) => Ok(json!(*f)),
+          ProtobufFieldData::Message(m, desc) => {
+            if desc.name() == "ListValue" {
+              let mut list_bytes = BytesMut::from(m.as_slice());
+              let list_data = decode_message(&mut list_bytes, desc, descriptors)?;
+              trace!(?list_data, "decoded list");
+              let mut items = vec![];
+              for field in &list_data {
+                items.push(proto_value_to_json(descriptors, field)?);
+              }
+              Ok(serde_json::Value::Array(items))
+            } else if desc.name() == "Struct" {
+              let mut struct_bytes = BytesMut::from(m.as_slice());
+              let struct_data = decode_message(&mut struct_bytes, desc, descriptors)?;
+              trace!(?struct_data, "decoded struct");
+              struct_field_data_to_json(struct_data, desc, descriptors)
+            } else {
+              Err(anyhow!("{} is not a valid value for a Struct entry", field_data.data.type_name()))
+            }
+          }
+          ProtobufFieldData::Enum(_, enum_desc) if enum_desc.name() == "NullValue" => {
+            Ok(serde_json::Value::Null)
+          }
+          _ => {
+            Err(anyhow!("{} is not a valid value for a Struct entry", field_data.data.type_name()))
+          }
+        }
+      } else {
+        warn!("Decoded entry value is empty");
+        Ok(serde_json::Value::Null)
+      }
+    }
+    _ => {
+      Err(anyhow!("Found an unrecognisable type for a Google Struct field {}", value_field.data.type_name()))
+    }
+  }
 }
 
 /// Parse the JSON string into a V4 Pact model
@@ -773,9 +826,13 @@ pub(crate) mod tests {
   use std::collections::HashSet;
   use std::vec;
 
-use bytes::Bytes;
+  use base64::Engine;
+  use base64::engine::general_purpose::STANDARD as BASE64;
+  use bytes::{BufMut, Bytes, BytesMut};
   use expectest::prelude::*;
   use maplit::{hashmap, hashset};
+  use pretty_assertions::assert_eq;
+  use prost::encoding::WireType::LengthDelimited;
   use prost::Message;
   use prost_types::{
     DescriptorProto,
@@ -784,15 +841,24 @@ use bytes::Bytes;
     FieldDescriptorProto,
     FileDescriptorProto,
     FileDescriptorSet,
-    MessageOptions, MethodDescriptorProto, ServiceDescriptorProto
+    MessageOptions,
+    MethodDescriptorProto,
+    ServiceDescriptorProto
   };
   use prost_types::field_descriptor_proto::{Label, Type};
-
-  use crate::utils::{
-    to_fully_qualified_name, as_hex, find_enum_value_by_name, find_nested_type, is_map_field, last_name, parse_name
+  use prost_types::field_descriptor_proto::Label::Optional;
+  use serde_json::json;
+  use crate::message_decoder::{ProtobufField, ProtobufFieldData};
+  use crate::utils::{as_hex, struct_field_data_to_json, find_enum_value_by_name, find_nested_type, is_map_field, last_name, parse_name, to_fully_qualified_name};
+  use super::{
+    build_grpc_route,
+    find_file_descriptors,
+    find_message_descriptor_for_type,
+    find_method_descriptor_for_service,
+    find_service_descriptor_for_type,
+    parse_grpc_route,
+    split_service_and_method
   };
-
-use super::{build_grpc_route, find_file_descriptors, find_message_descriptor_for_type, find_method_descriptor_for_service, find_service_descriptor_for_type, parse_grpc_route, split_service_and_method};
 
   #[test]
   fn last_name_test() {
@@ -1365,5 +1431,170 @@ use super::{build_grpc_route, find_file_descriptors, find_message_descriptor_for
       .to(be_equal_to("Did not find the method missing in the Protobuf descriptor for service 'Service'"));
   }
 
-}
+  #[test_log::test]
+  fn field_data_to_json_test() {
+    // message Request {
+    //   string name = 1;
+    //   google.protobuf.Struct params = 2;
+    // }
+    let desc = "CuIFChxnb29nbGUvcHJvdG9idWYvc3RydWN0LnByb3RvEg9nb29nbGUucHJvdG9idWYimAEKBlN0\
+    cnVjdBI7CgZmaWVsZHMYASADKAsyIy5nb29nbGUucHJvdG9idWYuU3RydWN0LkZpZWxkc0VudHJ5UgZmaWVsZHMaUQoLR\
+    mllbGRzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSLAoFdmFsdWUYAiABKAsyFi5nb29nbGUucHJvdG9idWYuVmFsdWVSBX\
+    ZhbHVlOgI4ASKyAgoFVmFsdWUSOwoKbnVsbF92YWx1ZRgBIAEoDjIaLmdvb2dsZS5wcm90b2J1Zi5OdWxsVmFsdWVIAFI\
+    JbnVsbFZhbHVlEiMKDG51bWJlcl92YWx1ZRgCIAEoAUgAUgtudW1iZXJWYWx1ZRIjCgxzdHJpbmdfdmFsdWUYAyABKAlIA\
+    FILc3RyaW5nVmFsdWUSHwoKYm9vbF92YWx1ZRgEIAEoCEgAUglib29sVmFsdWUSPAoMc3RydWN0X3ZhbHVlGAUgASgLMh\
+    cuZ29vZ2xlLnByb3RvYnVmLlN0cnVjdEgAUgtzdHJ1Y3RWYWx1ZRI7CgpsaXN0X3ZhbHVlGAYgASgLMhouZ29vZ2xlLn\
+    Byb3RvYnVmLkxpc3RWYWx1ZUgAUglsaXN0VmFsdWVCBgoEa2luZCI7CglMaXN0VmFsdWUSLgoGdmFsdWVzGAEgAygLMhY\
+    uZ29vZ2xlLnByb3RvYnVmLlZhbHVlUgZ2YWx1ZXMqGwoJTnVsbFZhbHVlEg4KCk5VTExfVkFMVUUQAEJ/ChNjb20uZ29v\
+    Z2xlLnByb3RvYnVmQgtTdHJ1Y3RQcm90b1ABWi9nb29nbGUuZ29sYW5nLm9yZy9wcm90b2J1Zi90eXBlcy9rbm93bi9zd\
+    HJ1Y3RwYvgBAaICA0dQQqoCHkdvb2dsZS5Qcm90b2J1Zi5XZWxsS25vd25UeXBlc2IGcHJvdG8zCpwBChRnb29nbGVfc3\
+    RydWN0cy5wcm90bxIOZ29vZ2xlX3N0cnVjdHMaHGdvb2dsZS9wcm90b2J1Zi9zdHJ1Y3QucHJvdG8iTgoHUmVxdWVzdBIS\
+    CgRuYW1lGAEgASgJUgRuYW1lEi8KBnBhcmFtcxgCIAEoCzIXLmdvb2dsZS5wcm90b2J1Zi5TdHJ1Y3RSBnBhcmFtc2IGc\
+    HJvdG8z";
 
+    let bytes = BASE64.decode(desc).unwrap();
+    let bytes1 = Bytes::copy_from_slice(bytes.as_slice());
+    let fds: FileDescriptorSet = FileDescriptorSet::decode(bytes1).unwrap();
+
+    let field_descriptor =  DescriptorProto {
+      name: Some("FieldsEntry".to_string()),
+      field: vec![
+        FieldDescriptorProto {
+          name: Some("key".to_string()),
+          number: Some(1),
+          label: Some(Optional as i32),
+          r#type: Some(Type::String as i32),
+          json_name: Some("key".to_string()),
+          .. FieldDescriptorProto::default()
+        },
+        FieldDescriptorProto {
+          name: Some("value".to_string()),
+          number: Some(2),
+          label: Some(Optional as i32),
+          r#type: Some(Type::Message as i32),
+          type_name: Some(".google.protobuf.Value".to_string()),
+          json_name: Some("value".to_string()),
+          .. FieldDescriptorProto::default()
+        }],
+      options: Some(MessageOptions {
+        message_set_wire_format: None,
+        no_standard_descriptor_accessor: None,
+        deprecated: None,
+        map_entry: Some(true),
+        uninterpreted_option: vec![]
+      }),
+      .. DescriptorProto::default()
+    };
+
+    let mut buffer = BytesMut::new();
+    buffer.put_u8(10); // field 1 length encoded (1 << 3 + 2 == 10)
+    buffer.put_u8(1); // 1 byte
+    buffer.put_slice("n".as_bytes());
+    buffer.put_u8(18); // field 2 length encoded (2 << 3 + 2 == 18)
+    buffer.put_u8(2); // 2 bytes
+    buffer.put_u8(8); // field 1 varint (1 << 3 + 0 == 8)
+    buffer.put_u8(0); // 0 (NULL Value)
+
+    let mut buffer2 = BytesMut::new();
+    buffer2.put_u8(10); // field 1 length encoded (1 << 3 + 2 == 10)
+    buffer2.put_u8(1); // 1 byte
+    buffer2.put_slice("b".as_bytes());
+    buffer2.put_u8(18); // field 2 length encoded (2 << 3 + 2 == 18)
+    buffer2.put_u8(2); // 2 bytes
+    buffer2.put_u8(32); // field 4 varint (4 << 3 + 0 == 32)
+    buffer2.put_u8(1); // 1 == true
+
+    let mut buffer3 = BytesMut::new();
+    buffer3.put_u8(10); // field 1 length encoded (1 << 3 + 2 == 10)
+    buffer3.put_u8(3); // 3 bytes
+    buffer3.put_slice("num".as_bytes());
+    buffer3.put_u8(18); // field 2 length encoded (2 << 3 + 2 == 18)
+    buffer3.put_u8(9); // 9 bytes
+    buffer3.put_u8(17); // field 2 64bit (2 << 3 + 1 == 17)
+    buffer3.put_f64_le(100.0); // 100 as f64
+
+    let field_data = vec![
+      ProtobufField {
+        field_num: 1,
+        field_name: "fields".to_string(),
+        wire_type: LengthDelimited,
+        data: ProtobufFieldData::Message(
+          buffer.freeze().to_vec(),
+          field_descriptor.clone()
+        )
+      },
+      ProtobufField {
+        field_num: 1,
+        field_name: "fields".to_string(),
+        wire_type: LengthDelimited,
+        data: ProtobufFieldData::Message(
+          buffer2.freeze().to_vec(),
+          field_descriptor.clone()
+        )
+      },
+      ProtobufField {
+        field_num: 1,
+        field_name: "fields".to_string(),
+        wire_type: LengthDelimited,
+        data: ProtobufFieldData::Message(
+          buffer3.freeze().to_vec(),
+          field_descriptor.clone()
+        )
+      }
+    ];
+
+    let result = struct_field_data_to_json(field_data, &field_descriptor, &fds).unwrap();
+    assert_eq!(result, json!({
+      "n": null,
+      "b": true,
+      "num": 100.0
+    }));
+
+    // Original Issue #71
+    let mut buffer1 = BytesMut::new();
+    buffer1.put_u8(10); // field 1 length encoded (1 << 3 + 2 == 10)
+    buffer1.put_u8(7); // 7 bytes
+    buffer1.put_slice("message".as_bytes());
+    buffer1.put_u8(18); // field 2 length encoded (2 << 3 + 2 == 18)
+    buffer1.put_u8(6); // 6 bytes
+    buffer1.put_u8(26); // field 3 length encoded (3 << 3 + 2 == 26)
+    buffer1.put_u8(4); // 4 bytes
+    buffer1.put_slice("test".as_bytes());
+
+    let mut buffer2 = BytesMut::new();
+    buffer2.put_u8(10); // field 1 length encoded (1 << 3 + 2 == 10)
+    buffer2.put_u8(4); // 4 bytes
+    buffer2.put_slice("kind".as_bytes());
+    buffer2.put_u8(18); // field 2 length encoded (2 << 3 + 2 == 18)
+    buffer2.put_u8(9); // 9 bytes
+    buffer2.put_u8(26); // field 3 length encoded (3 << 3 + 2 == 26)
+    buffer2.put_u8(7); // 7 bytes
+    buffer2.put_slice("general".as_bytes());
+
+    let field_data = vec![
+      ProtobufField {
+        field_num: 1,
+        field_name: "fields".to_string(),
+        wire_type: LengthDelimited,
+        data: ProtobufFieldData::Message(
+          buffer1.freeze().to_vec(),
+          field_descriptor.clone()
+        )
+      }, ProtobufField {
+        field_num: 1,
+        field_name: "fields".to_string(),
+        wire_type: LengthDelimited,
+        data: ProtobufFieldData::Message(
+          buffer2.freeze().to_vec(),
+          field_descriptor.clone()
+        )
+      }
+    ];
+
+    let result = struct_field_data_to_json(field_data, &field_descriptor, &fds).unwrap();
+    assert_eq!(result, json!({
+      "message": "test",
+      "kind": "general"
+    }));
+  }
+}

@@ -21,7 +21,19 @@ use prost_types::field_descriptor_proto::Type;
 use tracing::{debug, instrument, trace, warn};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
-use crate::utils::{display_bytes, enum_name, field_data_to_json, find_message_descriptor_for_type, find_message_field_by_name, find_method_descriptor_for_service, find_service_descriptor_for_type, is_map_field, is_repeated_field, last_name, split_service_and_method};
+use crate::utils::{
+  display_bytes,
+  enum_name,
+  struct_field_data_to_json,
+  find_message_descriptor_for_type,
+  find_message_field_by_name,
+  find_method_descriptor_for_service,
+  find_service_descriptor_for_type,
+  is_map_field,
+  is_repeated_field,
+  last_name,
+  split_service_and_method
+};
 
 /// Match a single Protobuf message
 /// 
@@ -432,7 +444,8 @@ fn compare_field(
           }
           ".google.protobuf.Struct" => {
             debug!("Field is a Protobuf Struct, will compare it as JSON");
-            let expected_json = match field_data_to_json(expected_message, message_descriptor, descriptors) {
+            trace!("Parsing expected message");
+            let expected_json = match struct_field_data_to_json(expected_message, message_descriptor, descriptors) {
               Ok(j) => j,
               Err(err) => {
                 return vec![
@@ -445,7 +458,8 @@ fn compare_field(
                 ];
               }
             };
-            let actual_json = match field_data_to_json(actual_message, message_descriptor, descriptors) {
+            trace!("Parsing actual message");
+            let actual_json = match struct_field_data_to_json(actual_message, message_descriptor, descriptors) {
               Ok(j) => j,
               Err(err) => {
                 return vec![
@@ -459,6 +473,7 @@ fn compare_field(
               }
             };
 
+            trace!(%expected_json, %actual_json, "Comparing JSON");
             match compare_json(path, &expected_json, &actual_json, matching_context) {
               Ok(_) => vec![],
               Err(err) => err.iter().map(CommonMismatch::to_body_mismatch).collect()
