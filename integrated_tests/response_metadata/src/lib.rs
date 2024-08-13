@@ -69,7 +69,7 @@ mod tests {
     expect!(interaction.response[0].matching_rules.clone()).to(be_equal_to(expected_response_rules));
 
     let mock_server = builder_async
-      .start_mock_server_async(Some("protobuf/transport/grpc")).await;
+      .start_mock_server_async(Some("protobuf/transport/grpc"), None).await;
     let url = mock_server.url();
     let mut client = test_client::TestClient::connect(url.to_string()).await.unwrap();
 
