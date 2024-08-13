@@ -39,7 +39,7 @@ async fn mock_server_block() {
       i
     })
     .await
-    .start_mock_server_async(Some("protobuf/transport/grpc"))
+    .start_mock_server_async(Some("protobuf/transport/grpc"), None)
     .await;
 
   // Should fail as we have not made a request to the mock server when the mock server is dropped
@@ -86,7 +86,7 @@ async fn each_value_matcher() {
     })
     .await;
   let mock_server = pact_builder
-    .start_mock_server_async(Some("protobuf/transport/grpc"))
+    .start_mock_server_async(Some("protobuf/transport/grpc"), None)
     .await;
 
   let url = mock_server.url();
