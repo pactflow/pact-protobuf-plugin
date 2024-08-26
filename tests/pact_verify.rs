@@ -35,7 +35,7 @@ use tracing::{debug, error};
 use pact_protobuf_plugin::built_info;
 use pact_protobuf_plugin::server::ProtobufPactPlugin;
 
-// We are not using provider states, so we define a executor that does nothing
+// We are not using provider states, so we define an executor that does nothing
 #[derive(Debug)]
 struct NoopProviderStateExecutor { }
 
@@ -139,8 +139,14 @@ async fn init_plugin_request(request_message: &MessageRequest) -> (Status, (Cont
             let mut buffer = BytesMut::new();
             match response.get_ref().encode(&mut buffer) {
               Ok(_) => {
-                (Status::Ok, (ContentType::new("application", "protobuf").with_params(("message", "InitPluginResponse")),
-                              buffer.to_vec()))
+                (
+                  Status::Ok,
+                  (
+                    ContentType::new("application", "protobuf")
+                      .with_params(("message", ".io.pact.plugin.InitPluginResponse")),
+                    buffer.to_vec()
+                  )
+                )
               }
               Err(err) => {
                 error!("Failed to write response to buffer - {}", err);
