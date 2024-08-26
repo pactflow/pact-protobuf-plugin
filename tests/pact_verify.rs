@@ -108,7 +108,7 @@ async fn messages(request: MessageRequest) -> (Status, (ContentType, Vec<u8>)) {
     if content_type.sub_type == "protobuf" {
       if let Some(message_type) = content_type.attributes.get("message") {
         match message_type.as_str() {
-          "InitPluginRequest" => init_plugin_request(&request).await,
+          ".io.pact.plugin.InitPluginRequest" => init_plugin_request(&request).await,
           _ => (Status::BadRequest, (ContentType::Text, Vec::from("Unknown protobuf message type provided")))
         }
       } else {
