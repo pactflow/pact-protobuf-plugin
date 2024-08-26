@@ -1,3 +1,10 @@
+# 0.5.2 - Bugfix Release
+
+* 7475c0f - chore: Fix pact verification request (Ronald Holshausen, Mon Aug 26 11:27:33 2024 +1000)
+* 089e864 - chore: Fix pact verification request (Ronald Holshausen, Mon Aug 26 11:19:51 2024 +1000)
+* d6865b4 - fix: HTTP Protobuf interactions can have a message defined for both the request and response parts (Ronald Holshausen, Mon Aug 26 10:54:55 2024 +1000)
+* 4997452 - bump version to 0.5.2 (Ronald Holshausen, Wed Aug 14 09:47:37 2024 +1000)
+
 # 0.5.1 - Bugfix Release
 
 * 7e6eb62 - chore: fix integrated_tests after upgrading pact consumer crate (Ronald Holshausen, Wed Aug 14 09:36:25 2024 +1000)
