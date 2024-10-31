@@ -49,7 +49,7 @@ use pact_plugin_driver::utils::{
   to_proto_value
 };
 use pact_verifier::verification_result::VerificationMismatchResult;
-use prost_types::{FileDescriptorProto, FileDescriptorSet, MethodDescriptorProto, ServiceDescriptorProto};
+use prost_types::{DescriptorProto, FileDescriptorProto, FileDescriptorSet, MethodDescriptorProto, ServiceDescriptorProto};
 use prost_types::value::Kind;
 use serde_json::Value;
 use tonic::{Request, Response, Status};
@@ -462,9 +462,9 @@ impl ProtobufPactPlugin {
           if body.is_empty() {
             Ok(GenerateContentResponse::default())
           } else {
-            let message = decode_message(&mut body, &message_descriptor, &descriptors)?;
-            debug!("message to generate = {:?}", message);
-            let generated_message = generate_protobuf_contents(&message, &content_type, &request.generators, &descriptors, request.test_mode())?;
+            let field_data = decode_message(&mut body, &message_descriptor, &descriptors)?;
+            debug!("message to generate = {:?}", field_data);
+            let generated_message = generate_protobuf_contents(&message_descriptor, &field_data, &content_type, &request.generators, &descriptors, request.test_mode())?;
             Ok(GenerateContentResponse {
               contents: Some(generated_message),
             })
@@ -593,6 +593,7 @@ impl ProtobufPactPlugin {
 /// Generate contents for the interaction
 /// 
 /// # Arguments:
+///  * `message_descriptor` - Descriptor for the message
 ///  * `fields` - all fields in the message to generate contents for
 ///  * `content_type` - content type of the message, comes from generation request
 ///  * `generators` - map of generators, comes from generation request
@@ -606,13 +607,14 @@ impl ProtobufPactPlugin {
 ///  * `content_type_hint` - always `ContentTypeHint::Binary`
 #[instrument(level = "trace")]
 fn generate_protobuf_contents(
+  message_descriptor: &DescriptorProto,
   fields: &Vec<ProtobufField>,
   content_type: &ContentType,
   generators: &HashMap<String, proto::Generator>,
   all_descriptors: &FileDescriptorSet,
   mode: TestMode
 ) -> anyhow::Result<Body> {
-  let mut message: DynamicMessage = DynamicMessage::new(fields, all_descriptors, );
+  let mut message: DynamicMessage = DynamicMessage::new(message_descriptor, fields, all_descriptors);
   let variant_matcher = NoopVariantMatcher {};
   let vm_boxed = variant_matcher.boxed();
   let context = hashmap!{};
@@ -957,8 +959,8 @@ impl PactPlugin for ProtobufPactPlugin {
     let config = proto_struct_to_map(&request.config.clone().unwrap_or_default());
     let test_context = config.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
     let decoded_body = match decode_message(&mut raw_request_body, &input_message, &all_file_desc) {
-      Ok(message) => {
-        let mut message = DynamicMessage::new(&message, &all_file_desc);
+      Ok(field_values) => {
+        let mut message = DynamicMessage::new(&input_message, &field_values, &all_file_desc);
         if let Err(err) = message.apply_generators(
           interaction.request.generators.categories.get(&GeneratorCategory::BODY),
           &GeneratorTestMode::Provider,
@@ -967,7 +969,7 @@ impl PactPlugin for ProtobufPactPlugin {
           return Ok(Self::verification_preparation_error_response(err.to_string()));
         }
         message
-      },
+      }
       Err(err) => {
         return Ok(Self::verification_preparation_error_response(err.to_string()));
       }

@@ -1,7 +1,6 @@
 use std::panic::catch_unwind;
 use std::path::Path;
 use base64::Engine;
-use bytes::{BufMut, BytesMut};
 
 use expectest::prelude::*;
 use pact_consumer::mock_server::StartMockServerAsync;
@@ -116,10 +115,6 @@ async fn each_value_matcher() {
     data: ProtobufFieldData::String("value2".to_string())
   };
   let fields = vec![ field, field2 ];
-  let message = DynamicMessage::new(fields.as_slice(), &fds);
-  let mut buffer = BytesMut::new();
-  buffer.put_u8(0);
-  message.write_to(&mut buffer).unwrap();
 
   let mut conn = tonic::transport::Endpoint::from_shared(url.to_string())
     .unwrap()
@@ -139,6 +134,8 @@ async fn each_value_matcher() {
   let codec = PactCodec::new(&fds, &input_message, &output_message, &interaction);
   let mut grpc = tonic::client::Grpc::new(conn);
   let path = http::uri::PathAndQuery::try_from("/com.pact.protobuf.example.Test/GetValues").unwrap();
+
+  let message = DynamicMessage::new(&input_message, fields.as_slice(), &fds);
   grpc.unary(Request::new(message), path, codec).await.unwrap();
 }
 
