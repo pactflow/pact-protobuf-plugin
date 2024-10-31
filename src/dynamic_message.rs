@@ -160,17 +160,20 @@ impl DynamicMessage {
     Ok(())
   }
 
-  /// Retrieve the value using the given path
+  /// Retrieve the value for a message field using the given path
   #[instrument(ret, skip(self))]
-  pub fn fetch_value(&mut self, path: &DocPath) -> Option<ProtobufField> {
+  pub fn fetch_field_value(&mut self, path: &DocPath) -> Option<ProtobufField> {
     let path_tokens = path.tokens().clone();
     let mut iter = path_tokens.iter().peekable();
     if let Some(PathToken::Root) = iter.peek() {
       iter.next();
       let mut found = None;
-      self.match_path(&mut iter, |v| {
+      let result = self.match_path(&mut iter, |v| {
         found.replace(v.clone());
       });
+      if let Err(err) = result {
+        error!("Failed to fetch field value for path '{}': {}", path, err);
+      }
       found
     } else {
       None
@@ -179,19 +182,16 @@ impl DynamicMessage {
 
   /// Update the value using the given path
   #[instrument(ret, skip(self))]
-  pub fn set_value(&mut self, path: &DocPath, value: ProtobufFieldData) -> anyhow::Result<()> {
+  pub fn set_field_value(&mut self, path: &DocPath, value: ProtobufFieldData) -> anyhow::Result<()> {
     let path_tokens = path.tokens().clone();
     let mut iter = path_tokens.iter().peekable();
     if let Some(PathToken::Root) = iter.peek() {
       iter.next();
-      let mut result = Err(anyhow!("Path '{}' did not match any field", path));
       self.match_path(&mut iter, |v| {
         v.data = value.clone();
-        result = Ok(());
-      });
-      result
+      })
     } else {
-      Err(anyhow!("Path '{}' does not start with a root marker", path))
+      Err(anyhow!("Path '{}' does not start with a root path marker ('$')", path))
     }
   }
 
@@ -200,40 +200,51 @@ impl DynamicMessage {
     &mut self,
     path_tokens: &mut Peekable<Iter<PathToken>>,
     callback: F
-  ) where F: FnOnce(&mut ProtobufField) {
+  ) -> anyhow::Result<()> where F: FnOnce(&mut ProtobufField) {
     let descriptors = self.descriptors.clone();
     let fields = &mut self.fields;
     if let Some(next) = path_tokens.next() {
       match next {
-        PathToken::Field(name) => if let Some(field) = find_field(fields, name.as_str()) {
+        PathToken::Root => Ok(()),
+        PathToken::Field(name) => if let Some(field) = find_field_value(fields, name.as_str()) {
           if path_tokens.peek().is_none() {
             callback(field);
+            Ok(())
           } else {
             match &mut field.data {
-              ProtobufFieldData::Enum(_, _) => todo!("Support for dynamically fetching enum values is not supported yet"),
+              ProtobufFieldData::Enum(_, _) => Err(anyhow!("Support for dynamically fetching enum values is not supported yet")),
               ProtobufFieldData::Message(data, descriptor) => {
                 let mut buffer = Bytes::copy_from_slice(data);
                 match decode_message(&mut buffer, descriptor, &descriptors) {
                   Ok(fields) => {
                     let mut message = DynamicMessage::new(descriptor, fields.as_slice(), &descriptors);
-                    message.match_path(path_tokens, callback);
+                    message.match_path(path_tokens, callback)?;
                     data.clear();
-                    if let Err(err) = message.write_to(data) {
+                    message.write_to(data).map_err(|err| {
                       error!("Failed to rewrite child message: {}", err);
-                    }
+                      anyhow!("Failed to rewrite child message: {}", err)
+                    })
                   }
-                  Err(err) => error!("Failed to decode child message: {}", err)
+                  Err(err) => {
+                    Err(anyhow!("Failed to decode child message: {}", err))
+                  }
                 }
               },
-              _ => ()
+              _ => {
+                warn!("Ignoring field of type '{}'", field.data.type_name());
+                Ok(())
+              }
             }
           }
+        } else {
+          Err(anyhow!("Path '{}' does not match any field int the message", name))
         }
-        PathToken::Index(_) => todo!("Support for index paths is not supported yet"),
-        PathToken::Star => todo!("Support for * in paths is not supported yet"),
-        PathToken::StarIndex => todo!("Support for [*] in paths is not supported yet"),
-        _ => ()
+        PathToken::Index(_) => Err(anyhow!("Support for index paths is not supported yet")),
+        PathToken::Star => Err(anyhow!("Support for '*' in paths is not supported yet")),
+        PathToken::StarIndex => Err(anyhow!("Support for '[*]' in paths is not supported yet")),
       }
+    } else {
+      Err(anyhow!("Path does not match any field int the message"))
     }
   }
 
@@ -249,11 +260,11 @@ impl DynamicMessage {
       let vm_boxed = DefaultVariantMatcher.boxed();
 
       for (path, generator) in generators {
-        let value = self.fetch_value(&path);
+        let value = self.fetch_field_value(&path);
         if let Some(value) = value {
           if generator.corresponds_to_mode(mode) {
             let generated_value = generator.generate_value(&value.data, &context, &vm_boxed)?;
-            self.set_value(&path, generated_value)?;
+            self.set_field_value(&path, generated_value)?;
           }
         } else {
           warn!("No matching field found for generator '{}'", path);
@@ -266,7 +277,7 @@ impl DynamicMessage {
 }
 
 // TODO: This only supports the first value, needs to deal with repeated fields
-fn find_field<'a>(
+fn find_field_value<'a>(
   fields: &'a mut HashMap<u32, Vec<ProtobufField>>,
   field_name: &str
 ) -> Option<&'a mut ProtobufField> {
@@ -357,7 +368,7 @@ mod tests {
     let descriptor = DescriptorProto::default();
     let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
     let path = DocPath::new("$.one.two.three").unwrap();
-    expect!(message.fetch_value(&path)).to(be_none());
+    expect!(message.fetch_field_value(&path)).to(be_none());
   }
 
   #[test]
@@ -375,7 +386,7 @@ mod tests {
     let descriptor = DescriptorProto::default();
     let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
     let path = DocPath::new("one").unwrap();
-    expect!(message.fetch_value(&path)).to(be_some().value(field));
+    expect!(message.fetch_field_value(&path)).to(be_some().value(field));
   }
 
   #[test]
@@ -393,7 +404,7 @@ mod tests {
     let fields = vec![ field.clone() ];
     let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
     let path = DocPath::new("$.one").unwrap();
-    expect!(message.fetch_value(&path)).to(be_some().value(field));
+    expect!(message.fetch_field_value(&path)).to(be_some().value(field));
   }
 
   #[test]
@@ -465,7 +476,7 @@ mod tests {
     let fields = vec![ field.clone() ];
     let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
     let path = DocPath::new("$.one.two").unwrap();
-    expect!(message.fetch_value(&path)).to(be_some().value(child_field));
+    expect!(message.fetch_field_value(&path)).to(be_some().value(child_field));
   }
 
   #[test]
@@ -580,6 +591,6 @@ mod tests {
     };
 
     expect!(message.apply_generators(Some(&generators), &GeneratorTestMode::Provider, &hashmap!{})).to(be_ok());
-    expect!(message.fetch_value(&path).unwrap().data.as_i64().unwrap()).to_not(be_equal_to(100));
+    expect!(message.fetch_field_value(&path).unwrap().data.as_i64().unwrap()).to_not(be_equal_to(100));
   }
 }

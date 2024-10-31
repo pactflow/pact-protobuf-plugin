@@ -218,10 +218,10 @@ impl MockService {
     if let Some(generators) = contents.generators.categories.get(&GeneratorCategory::BODY) {
       for (key, generator) in generators.iter() {
         let path = DocPath::new(key)?;
-        let value = message.fetch_value(&path);
+        let value = message.fetch_field_value(&path);
         if let Some(value) = value {
           let generated_value = generator.generate_value(&value.data, &context, &vm_boxed)?;
-          message.set_value(&path, generated_value)?;
+          message.set_field_value(&path, generated_value)?;
         }
       }
     }
