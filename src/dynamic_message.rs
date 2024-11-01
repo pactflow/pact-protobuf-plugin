@@ -377,7 +377,8 @@ mod tests {
       field_num: 1,
       field_name: "one".to_string(),
       wire_type: WireType::Varint,
-      data: ProtobufFieldData::Integer64(100)
+      data: ProtobufFieldData::Integer64(100),
+      descriptor: Default::default()
     };
     let descriptors = FileDescriptorSet {
       file: vec![]
@@ -395,7 +396,8 @@ mod tests {
       field_num: 1,
       field_name: "one".to_string(),
       wire_type: WireType::Varint,
-      data: ProtobufFieldData::Integer64(100)
+      data: ProtobufFieldData::Integer64(100),
+      descriptor: Default::default()
     };
     let descriptors = FileDescriptorSet {
       file: vec![]
@@ -409,35 +411,37 @@ mod tests {
 
   #[test]
   fn dynamic_message_fetch_value_with_matching_child_field() {
+    let child_proto_1 = FieldDescriptorProto {
+      name: Some("two".to_string()),
+      number: Some(1),
+      label: None,
+      r#type: Some(3),
+      type_name: None,
+      extendee: None,
+      default_value: None,
+      oneof_index: None,
+      json_name: None,
+      options: None,
+      proto3_optional: None
+    };
+    let child_proto_2 = FieldDescriptorProto {
+      name: Some("three".to_string()),
+      number: Some(2),
+      label: None,
+      r#type: Some(3),
+      type_name: None,
+      extendee: None,
+      default_value: None,
+      oneof_index: None,
+      json_name: None,
+      options: None,
+      proto3_optional: None
+    };
     let child_descriptor = DescriptorProto {
       name: Some("child".to_string()),
       field: vec![
-        FieldDescriptorProto {
-          name: Some("two".to_string()),
-          number: Some(1),
-          label: None,
-          r#type: Some(3),
-          type_name: None,
-          extendee: None,
-          default_value: None,
-          oneof_index: None,
-          json_name: None,
-          options: None,
-          proto3_optional: None
-        },
-        FieldDescriptorProto {
-          name: Some("three".to_string()),
-          number: Some(2),
-          label: None,
-          r#type: Some(3),
-          type_name: None,
-          extendee: None,
-          default_value: None,
-          oneof_index: None,
-          json_name: None,
-          options: None,
-          proto3_optional: None
-        }
+        child_proto_1.clone(),
+        child_proto_2.clone()
       ],
       extension: vec![],
       nested_type: vec![],
@@ -452,13 +456,15 @@ mod tests {
       field_num: 1,
       field_name: "two".to_string(),
       wire_type: WireType::Varint,
-      data: ProtobufFieldData::Integer64(100)
+      data: ProtobufFieldData::Integer64(100),
+      descriptor: child_proto_1.clone()
     };
     let child_field2 = ProtobufField {
       field_num: 2,
       field_name: "three".to_string(),
       wire_type: WireType::Varint,
-      data: ProtobufFieldData::Integer64(200)
+      data: ProtobufFieldData::Integer64(200),
+      descriptor: child_proto_2.clone()
     };
     let descriptors = FileDescriptorSet {
       file: vec![]
@@ -471,7 +477,8 @@ mod tests {
       field_num: 1,
       field_name: "one".to_string(),
       wire_type: WireType::LengthDelimited,
-      data: ProtobufFieldData::Message(buffer.to_vec(), child_descriptor)
+      data: ProtobufFieldData::Message(buffer.to_vec(), child_descriptor),
+      descriptor: child_proto_1.clone()
     };
     let fields = vec![ field.clone() ];
     let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
@@ -501,7 +508,8 @@ mod tests {
       field_num: 1,
       field_name: "one".to_string(),
       wire_type: WireType::Varint,
-      data: ProtobufFieldData::Integer64(100)
+      data: ProtobufFieldData::Integer64(100),
+      descriptor: Default::default()
     };
     let descriptors = FileDescriptorSet {
       file: vec![]
@@ -522,7 +530,8 @@ mod tests {
       field_num: 1,
       field_name: "one".to_string(),
       wire_type: WireType::Varint,
-      data: ProtobufFieldData::Integer64(100)
+      data: ProtobufFieldData::Integer64(100),
+      descriptor: Default::default()
     };
     let descriptors = FileDescriptorSet {
       file: vec![]
@@ -540,21 +549,23 @@ mod tests {
 
   #[test]
   fn dynamic_message_generate_value_with_matching_child_field() {
+    let child_proto_1 = FieldDescriptorProto {
+      name: Some("two".to_string()),
+      number: Some(1),
+      r#type: Some(3),
+      ..FieldDescriptorProto::default()
+    };
+    let child_proto_2 = FieldDescriptorProto {
+      name: Some("three".to_string()),
+      number: Some(2),
+      r#type: Some(3),
+      ..FieldDescriptorProto::default()
+    };
     let child_descriptor = DescriptorProto {
       name: Some("child".to_string()),
       field: vec![
-        FieldDescriptorProto {
-          name: Some("two".to_string()),
-          number: Some(1),
-          r#type: Some(3),
-          .. FieldDescriptorProto::default()
-        },
-        FieldDescriptorProto {
-          name: Some("three".to_string()),
-          number: Some(2),
-          r#type: Some(3),
-          .. FieldDescriptorProto::default()
-        }
+        child_proto_1.clone(),
+        child_proto_2.clone()
       ],
       .. DescriptorProto::default()
     };
@@ -562,13 +573,15 @@ mod tests {
       field_num: 1,
       field_name: "two".to_string(),
       wire_type: WireType::Varint,
-      data: ProtobufFieldData::Integer64(100)
+      data: ProtobufFieldData::Integer64(100),
+      descriptor: child_proto_1.clone()
     };
     let child_field2 = ProtobufField {
       field_num: 2,
       field_name: "three".to_string(),
       wire_type: WireType::Varint,
-      data: ProtobufFieldData::Integer64(200)
+      data: ProtobufFieldData::Integer64(200),
+      descriptor: child_proto_2.clone()
     };
     let descriptors = FileDescriptorSet {
       file: vec![]
@@ -580,7 +593,8 @@ mod tests {
       field_num: 1,
       field_name: "one".to_string(),
       wire_type: WireType::LengthDelimited,
-      data: ProtobufFieldData::Message(buffer.to_vec(), child_descriptor)
+      data: ProtobufFieldData::Message(buffer.to_vec(), child_descriptor),
+      descriptor: child_proto_1.clone()
     };
     let fields = vec![ field.clone() ];
     let descriptor = DescriptorProto::default();

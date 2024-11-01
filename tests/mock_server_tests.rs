@@ -102,19 +102,6 @@ async fn each_value_matcher() {
     ZXNzYWdlSW4aKy5jb20ucGFjdC5wcm90b2J1Zi5leGFtcGxlLlZhbHVlc01lc3NhZ2VPdXQiAGIG\
     cHJvdG8z").unwrap();
   let fds = FileDescriptorSet::decode(descriptors.as_slice()).unwrap();
-  let field = ProtobufField {
-    field_num: 1,
-    field_name: "value".to_string(),
-    wire_type: WireType::LengthDelimited,
-    data: ProtobufFieldData::String("value1".to_string())
-  };
-  let field2 = ProtobufField {
-    field_num: 1,
-    field_name: "value".to_string(),
-    wire_type: WireType::LengthDelimited,
-    data: ProtobufFieldData::String("value2".to_string())
-  };
-  let fields = vec![ field, field2 ];
 
   let mut conn = tonic::transport::Endpoint::from_shared(url.to_string())
     .unwrap()
@@ -135,7 +122,24 @@ async fn each_value_matcher() {
   let mut grpc = tonic::client::Grpc::new(conn);
   let path = http::uri::PathAndQuery::try_from("/com.pact.protobuf.example.Test/GetValues").unwrap();
 
+  let field_descriptor = input_message.field.iter()
+    .find(|field| field.number == Some(1))
+    .unwrap();
+  let field = ProtobufField {
+    field_num: 1,
+    field_name: "value".to_string(),
+    wire_type: WireType::LengthDelimited,
+    data: ProtobufFieldData::String("value1".to_string()),
+    descriptor: field_descriptor.clone()
+  };
+  let field2 = ProtobufField {
+    field_num: 1,
+    field_name: "value".to_string(),
+    wire_type: WireType::LengthDelimited,
+    data: ProtobufFieldData::String("value2".to_string()),
+    descriptor: field_descriptor.clone()
+  };
+  let fields = vec![ field, field2 ];
   let message = DynamicMessage::new(&input_message, fields.as_slice(), &fds);
   grpc.unary(Request::new(message), path, codec).await.unwrap();
 }
-

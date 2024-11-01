@@ -28,17 +28,20 @@ pub struct ProtobufField {
   /// Wire type for the field
   pub wire_type: WireType,
   /// Field data
-  pub data: ProtobufFieldData
+  pub data: ProtobufFieldData,
+  /// Descriptor for this field
+  pub descriptor: FieldDescriptorProto
 }
 
 impl ProtobufField {
   /// Create a copy of this field with the value replaced with the default
-  pub fn default_field_value(&self, descriptor: &FieldDescriptorProto) -> ProtobufField {
+  pub fn default_field_value(&self) -> ProtobufField {
     ProtobufField {
       field_num: self.field_num,
       field_name: self.field_name.clone(),
       wire_type: self.wire_type,
-      data: self.data.default_field_value(descriptor)
+      data: self.data.default_field_value(&self.descriptor),
+      descriptor: self.descriptor.clone()
     }
   }
 
@@ -53,7 +56,8 @@ impl ProtobufField {
         field_num: field_descriptor.number.unwrap_or_default() as u32,
         field_name: field_descriptor.name.clone().unwrap_or_default(),
         wire_type: wire_type_for_field(field_descriptor),
-        data
+        data,
+        descriptor: field_descriptor.clone()
       }
     )
   }
@@ -495,7 +499,8 @@ pub fn decode_message<B>(
             field_num,
             field_name: field_name.to_string(),
             wire_type,
-            data
+            data,
+            descriptor: field_descriptor.clone()
           });
         }
       }
@@ -525,7 +530,8 @@ pub fn decode_message<B>(
           field_num,
           field_name: "unknown".to_string(),
           wire_type,
-          data: ProtobufFieldData::Unknown(data)
+          data: ProtobufFieldData::Unknown(data),
+          descriptor: Default::default()
         });
       }
     }

@@ -57,12 +57,16 @@ async fn repeated_enum_test() {
     let (message_descriptor, fs) = find_message_descriptor_for_type(
       ".example.enum.package.MessageIn", &fds).unwrap();
     let enum_descriptor = fs.enum_type.first().unwrap();
+    let field_descriptor = message_descriptor.field.iter()
+      .find(|field| field.number == Some(1))
+      .unwrap();
     let expected = vec![
       ProtobufField {
         field_num: 1,
         field_name: "in".to_string(),
         wire_type: WireType::LengthDelimited,
-        data: ProtobufFieldData::Enum(1, enum_descriptor.clone())
+        data: ProtobufFieldData::Enum(1, enum_descriptor.clone()),
+        descriptor: field_descriptor.clone()
       }
     ];
     let actual = vec![
@@ -70,7 +74,8 @@ async fn repeated_enum_test() {
         field_num: 1,
         field_name: "in".to_string(),
         wire_type: WireType::LengthDelimited,
-        data: ProtobufFieldData::Enum(1, enum_descriptor.clone())
+        data: ProtobufFieldData::Enum(1, enum_descriptor.clone()),
+        descriptor: field_descriptor.clone()
       },
     ];
 

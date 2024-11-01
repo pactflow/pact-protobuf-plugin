@@ -55,14 +55,59 @@ async fn basic_values_test() {
   let fds = get_descriptors_for_interaction(descriptor_key.as_str(), &plugin_config).unwrap();
   let (message_descriptor, _) = find_message_descriptor_for_type(
     ".com.pact.protobuf.example.MessageIn", &fds).unwrap();
+  let field_descriptor1 = message_descriptor.field.iter()
+    .find(|field| field.number == Some(1))
+    .unwrap();
+  let field_descriptor2 = message_descriptor.field.iter()
+    .find(|field| field.number == Some(2))
+    .unwrap();
+  let field_descriptor3 = message_descriptor.field.iter()
+    .find(|field| field.number == Some(3))
+    .unwrap();
+  let field_descriptor4 = message_descriptor.field.iter()
+    .find(|field| field.number == Some(4))
+    .unwrap();
+  let field_descriptor5 = message_descriptor.field.iter()
+    .find(|field| field.number == Some(5))
+    .unwrap();
   let mut buffer = request.contents.value().unwrap();
 
   let fields = decode_message(&mut buffer, &message_descriptor, &fds).unwrap();
   expect!(fields).to(be_equal_to(vec![
-    ProtobufField { field_num: 1, field_name: "f1".to_string(), wire_type: Varint, data: Boolean(true) },
-    ProtobufField { field_num: 2, field_name: "f2".to_string(), wire_type: Varint, data: Integer32(-1122) },
-    ProtobufField { field_num: 3, field_name: "f3".to_string(), wire_type: Varint, data: UInteger32(1122) },
-    ProtobufField { field_num: 4, field_name: "f4".to_string(), wire_type: SixtyFourBit, data: Double(1122.33) },
-    ProtobufField { field_num: 5, field_name: "f5".to_string(), wire_type: LengthDelimited, data: String("1122.33".to_string()) }
+    ProtobufField {
+      field_num: 1,
+      field_name: "f1".to_string(),
+      wire_type: Varint,
+      data: Boolean(true),
+      descriptor: field_descriptor1.clone()
+    },
+    ProtobufField {
+      field_num: 2,
+      field_name: "f2".to_string(),
+      wire_type: Varint,
+      data: Integer32(-1122),
+      descriptor: field_descriptor2.clone()
+    },
+    ProtobufField {
+      field_num: 3,
+      field_name: "f3".to_string(),
+      wire_type: Varint,
+      data: UInteger32(1122),
+      descriptor: field_descriptor3.clone()
+    },
+    ProtobufField {
+      field_num: 4,
+      field_name: "f4".to_string(),
+      wire_type: SixtyFourBit,
+      data: Double(1122.33),
+      descriptor: field_descriptor4.clone()
+    },
+    ProtobufField {
+      field_num: 5,
+      field_name: "f5".to_string(),
+      wire_type: LengthDelimited,
+      data: String("1122.33".to_string()),
+      descriptor: field_descriptor5.clone()
+    }
   ]));
 }

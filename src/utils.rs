@@ -1456,26 +1456,29 @@ pub(crate) mod tests {
     let bytes1 = Bytes::copy_from_slice(bytes.as_slice());
     let fds: FileDescriptorSet = FileDescriptorSet::decode(bytes1).unwrap();
 
+    let key_descriptor = FieldDescriptorProto {
+      name: Some("key".to_string()),
+      number: Some(1),
+      label: Some(Optional as i32),
+      r#type: Some(Type::String as i32),
+      json_name: Some("key".to_string()),
+      ..FieldDescriptorProto::default()
+    };
+    let value_descriptor = FieldDescriptorProto {
+      name: Some("value".to_string()),
+      number: Some(2),
+      label: Some(Optional as i32),
+      r#type: Some(Type::Message as i32),
+      type_name: Some(".google.protobuf.Value".to_string()),
+      json_name: Some("value".to_string()),
+      ..FieldDescriptorProto::default()
+    };
     let field_descriptor =  DescriptorProto {
       name: Some("FieldsEntry".to_string()),
       field: vec![
-        FieldDescriptorProto {
-          name: Some("key".to_string()),
-          number: Some(1),
-          label: Some(Optional as i32),
-          r#type: Some(Type::String as i32),
-          json_name: Some("key".to_string()),
-          .. FieldDescriptorProto::default()
-        },
-        FieldDescriptorProto {
-          name: Some("value".to_string()),
-          number: Some(2),
-          label: Some(Optional as i32),
-          r#type: Some(Type::Message as i32),
-          type_name: Some(".google.protobuf.Value".to_string()),
-          json_name: Some("value".to_string()),
-          .. FieldDescriptorProto::default()
-        }],
+        key_descriptor.clone(),
+        value_descriptor.clone()
+      ],
       options: Some(MessageOptions {
         message_set_wire_format: None,
         no_standard_descriptor_accessor: None,
@@ -1521,7 +1524,8 @@ pub(crate) mod tests {
         data: ProtobufFieldData::Message(
           buffer.freeze().to_vec(),
           field_descriptor.clone()
-        )
+        ),
+        descriptor: Default::default()
       },
       ProtobufField {
         field_num: 1,
@@ -1530,7 +1534,8 @@ pub(crate) mod tests {
         data: ProtobufFieldData::Message(
           buffer2.freeze().to_vec(),
           field_descriptor.clone()
-        )
+        ),
+        descriptor: Default::default()
       },
       ProtobufField {
         field_num: 1,
@@ -1539,7 +1544,8 @@ pub(crate) mod tests {
         data: ProtobufFieldData::Message(
           buffer3.freeze().to_vec(),
           field_descriptor.clone()
-        )
+        ),
+        descriptor: Default::default()
       }
     ];
 
@@ -1579,7 +1585,8 @@ pub(crate) mod tests {
         data: ProtobufFieldData::Message(
           buffer1.freeze().to_vec(),
           field_descriptor.clone()
-        )
+        ),
+        descriptor: Default::default()
       }, ProtobufField {
         field_num: 1,
         field_name: "fields".to_string(),
@@ -1587,7 +1594,8 @@ pub(crate) mod tests {
         data: ProtobufFieldData::Message(
           buffer2.freeze().to_vec(),
           field_descriptor.clone()
-        )
+        ),
+        descriptor: Default::default()
       }
     ];
 

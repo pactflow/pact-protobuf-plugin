@@ -255,7 +255,7 @@ pub fn compare_message(
     } else if let Some(expected_value) = expected.first() {
       let actual_value = actual.first().map(|v| (*v).clone()).unwrap_or_else(|| {
         // Need to compare against the default values, as gRPC lib may have skipped sending the field if it was a default
-        expected_value.default_field_value(field_descriptor)
+        expected_value.default_field_value()
       });
 
       if matching_context.values_matcher_defined(&path) {
@@ -896,6 +896,9 @@ mod tests {
 
     let (message_descriptor, _) = find_message_descriptor_for_type(
       ".io.pact.plugin.InitPluginResponse", &fds).unwrap();
+    let catalogue_descriptor = message_descriptor.field.iter()
+      .find(|field| field.name.clone().unwrap_or_default() == "catalogue")
+      .unwrap();
 
     let path = DocPath::new("$").unwrap();
     let context = CoreMatchingContext::new(DiffConfig::AllowUnexpectedKeys, &matchingrules_list! {
@@ -1043,7 +1046,8 @@ mod tests {
         field_num: 1,
         field_name: "catalogue".to_string(),
         wire_type: WireType::LengthDelimited,
-        data: ProtobufFieldData::Message(vec![8, 0, 18, 4, 116, 101, 115, 116], descriptor.clone()) 
+        data: ProtobufFieldData::Message(vec![8, 0, 18, 4, 116, 101, 115, 116], descriptor.clone()),
+        descriptor: catalogue_descriptor.clone()
       }
     ];
     let actual = vec![
@@ -1051,7 +1055,8 @@ mod tests {
           field_num: 1,
           field_name: "catalogue".to_string(),
           wire_type: WireType::LengthDelimited,
-          data: ProtobufFieldData::Message(vec![18, 8, 112, 114, 111, 116, 111, 98, 117, 102, 26, 54, 10, 13, 99, 111, 110, 116, 101, 110, 116, 45, 116, 121, 112, 101, 115, 18, 37, 97, 112, 112, 108, 105, 99, 97, 116, 105, 111, 110, 47, 112, 114, 111, 116, 111, 98, 117, 102, 59, 97, 112, 112, 108, 105, 99, 97, 116, 105, 111, 110, 47, 103, 114, 112, 99], descriptor.clone())
+          data: ProtobufFieldData::Message(vec![18, 8, 112, 114, 111, 116, 111, 98, 117, 102, 26, 54, 10, 13, 99, 111, 110, 116, 101, 110, 116, 45, 116, 121, 112, 101, 115, 18, 37, 97, 112, 112, 108, 105, 99, 97, 116, 105, 111, 110, 47, 112, 114, 111, 116, 111, 98, 117, 102, 59, 97, 112, 112, 108, 105, 99, 97, 116, 105, 111, 110, 47, 103, 114, 112, 99], descriptor.clone()),
+          descriptor: catalogue_descriptor.clone()
         }
     ];
 
@@ -1078,6 +1083,9 @@ mod tests {
 
     // no package in this descriptor
     let (message_descriptor, _) = find_message_descriptor_for_type(".ValuesMessageIn", &fds).unwrap();
+    let field_descriptor = message_descriptor.field.iter()
+      .find(|field| field.name.clone().unwrap_or_default() == "value")
+      .unwrap();
 
     let path = DocPath::new("$").unwrap();
     let context = CoreMatchingContext::new(DiffConfig::AllowUnexpectedKeys, &matchingrules_list! {
@@ -1091,7 +1099,8 @@ mod tests {
         field_num: 1,
         field_name: "value".to_string(),
         wire_type: WireType::LengthDelimited,
-        data: ProtobufFieldData::String("00000000000000000000000000000000".to_string())
+        data: ProtobufFieldData::String("00000000000000000000000000000000".to_string()),
+        descriptor: field_descriptor.clone()
       }
     ];
     let actual = vec![
@@ -1099,13 +1108,15 @@ mod tests {
         field_num: 1,
         field_name: "value".to_string(),
         wire_type: WireType::LengthDelimited,
-        data: ProtobufFieldData::String("value1".to_string())
+        data: ProtobufFieldData::String("value1".to_string()),
+        descriptor: field_descriptor.clone()
       },
       ProtobufField {
         field_num: 1,
         field_name: "value".to_string(),
         wire_type: WireType::LengthDelimited,
-        data: ProtobufFieldData::String("value2".to_string())
+        data: ProtobufFieldData::String("value2".to_string()),
+        descriptor: field_descriptor.clone()
       }
     ];
 
@@ -1136,6 +1147,9 @@ mod tests {
 
     // use fully-qualified type name with no package.
     let (message_descriptor, _) = find_message_descriptor_for_type(".Resource", &fds).unwrap();
+    let field_descriptor = message_descriptor.field.iter()
+      .find(|field| field.name.clone().unwrap_or_default() == "groups")
+      .unwrap();
 
     let each_value = MatchingRule::EachValue(MatchingRuleDefinition::new("foo".to_string(), ValueType::Unknown, MatchingRule::Type, None));
     let each_value_groups = MatchingRule::EachValue(MatchingRuleDefinition::new(
@@ -1157,7 +1171,8 @@ mod tests {
         field_num: 3,
         field_name: "groups".to_string(),
         wire_type: WireType::LengthDelimited,
-        data: ProtobufFieldData::String("*".to_string())
+        data: ProtobufFieldData::String("*".to_string()),
+        descriptor: field_descriptor.clone()
       }
     ];
     let actual = vec![
@@ -1165,13 +1180,15 @@ mod tests {
         field_num: 3,
         field_name: "groups".to_string(),
         wire_type: WireType::LengthDelimited,
-        data: ProtobufFieldData::String("*".to_string())
+        data: ProtobufFieldData::String("*".to_string()),
+        descriptor: field_descriptor.clone()
       },
       ProtobufField {
         field_num: 3,
         field_name: "groups".to_string(),
         wire_type: WireType::LengthDelimited,
-        data: ProtobufFieldData::String("*".to_string())
+        data: ProtobufFieldData::String("*".to_string()),
+        descriptor: field_descriptor.clone()
       }
     ];
 
@@ -1208,6 +1225,15 @@ mod tests {
 
     let (message_descriptor, _) = find_message_descriptor_for_type(
       ".pactissue.MessageIn", &fds).unwrap();
+    let field_descriptor1 = message_descriptor.field.iter()
+      .find(|field| field.number == Some(1))
+      .unwrap();
+    let field_descriptor2 = message_descriptor.field.iter()
+      .find(|field| field.number == Some(2))
+      .unwrap();
+    let field_descriptor3 = message_descriptor.field.iter()
+      .find(|field| field.number == Some(3))
+      .unwrap();
     let enum_descriptor= find_enum_by_name(&fds, "pactissue.TestDefault").unwrap();
 
     let matching_rules = matchingrules! {
@@ -1224,19 +1250,22 @@ mod tests {
         field_num: 1,
         field_name: "in".to_string(),
         wire_type: WireType::Varint,
-        data: ProtobufFieldData::Boolean(false)
+        data: ProtobufFieldData::Boolean(false),
+        descriptor: field_descriptor1.clone()
       },
       ProtobufField {
         field_num: 2,
         field_name: "e".to_string(),
         wire_type: WireType::Varint,
-        data: ProtobufFieldData::Enum(0, enum_descriptor)
+        data: ProtobufFieldData::Enum(0, enum_descriptor),
+        descriptor: field_descriptor2.clone()
       },
       ProtobufField {
         field_num: 3,
         field_name: "s".to_string(),
         wire_type: WireType::LengthDelimited,
-        data: ProtobufFieldData::String("".to_string())
+        data: ProtobufFieldData::String("".to_string()),
+        descriptor: field_descriptor3.clone()
       }
     ];
     let expected_bytes = Bytes::from_static(&[8, 0, 16, 0, 26, 0]);
@@ -1256,7 +1285,8 @@ mod tests {
         field_num: 1,
         field_name: "in".to_string(),
         wire_type: WireType::Varint,
-        data: ProtobufFieldData::Boolean(true)
+        data: ProtobufFieldData::Boolean(true),
+        descriptor: field_descriptor1.clone()
       }
     ];
     let result = compare(
@@ -1290,6 +1320,15 @@ mod tests {
 
     let (message_descriptor, _) = find_message_descriptor_for_type(
       ".pactissue.MessageIn", &fds).unwrap();
+    let field_descriptor1 = message_descriptor.field.iter()
+      .find(|field| field.number == Some(1))
+      .unwrap();
+    let field_descriptor2 = message_descriptor.field.iter()
+      .find(|field| field.number == Some(2))
+      .unwrap();
+    let field_descriptor3 = message_descriptor.field.iter()
+      .find(|field| field.number == Some(3))
+      .unwrap();
     let enum_descriptor= find_enum_by_name(&fds, "pactissue.TestDefault").unwrap();
 
     let matching_rules = matchingrules! {
@@ -1305,13 +1344,15 @@ mod tests {
         field_num: 1,
         field_name: "in".to_string(),
         wire_type: WireType::Varint,
-        data: ProtobufFieldData::Boolean(false)
+        data: ProtobufFieldData::Boolean(false),
+        descriptor: field_descriptor1.clone()
       },
       ProtobufField {
         field_num: 2,
         field_name: "e".to_string(),
         wire_type: WireType::Varint,
-        data: ProtobufFieldData::Enum(0, enum_descriptor)
+        data: ProtobufFieldData::Enum(0, enum_descriptor),
+        descriptor: field_descriptor2.clone()
       }
     ];
     let expected_bytes = Bytes::from_static(&[8, 0, 16, 0, 26, 0]);
@@ -1321,13 +1362,15 @@ mod tests {
         field_num: 1,
         field_name: "in".to_string(),
         wire_type: WireType::Varint,
-        data: ProtobufFieldData::Boolean(true)
+        data: ProtobufFieldData::Boolean(true),
+        descriptor: field_descriptor1.clone()
       },
       ProtobufField {
         field_num: 3,
         field_name: "s".to_string(),
         wire_type: WireType::LengthDelimited,
-        data: ProtobufFieldData::String("".to_string())
+        data: ProtobufFieldData::String("".to_string()),
+        descriptor: field_descriptor3.clone()
       }
     ];
     let result = compare(
@@ -1345,13 +1388,15 @@ mod tests {
         field_num: 1,
         field_name: "in".to_string(),
         wire_type: WireType::Varint,
-        data: ProtobufFieldData::Boolean(true)
+        data: ProtobufFieldData::Boolean(true),
+        descriptor: field_descriptor1.clone()
       },
       ProtobufField {
         field_num: 3,
         field_name: "s".to_string(),
         wire_type: WireType::LengthDelimited,
-        data: ProtobufFieldData::String("not empty".to_string())
+        data: ProtobufFieldData::String("not empty".to_string()),
+        descriptor: field_descriptor3.clone()
       }
     ];
     let result = compare(
