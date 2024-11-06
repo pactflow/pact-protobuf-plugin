@@ -16,7 +16,7 @@ use crate::utils::{
   as_hex, find_enum_by_name, find_enum_by_name_in_message, find_message_descriptor_for_type, is_repeated_field, last_name, should_be_packed_type
 };
 
-mod generators;
+pub mod generators;
 
 /// Decoded Protobuf field
 #[derive(Clone, Debug, PartialEq)]
@@ -65,6 +65,11 @@ impl ProtobufField {
   /// If the field contains the default value for its type
   pub fn is_default_value(&self) -> bool {
     self.data.is_default_field_value()
+  }
+
+  /// If the field is a Protobuf repeated field
+  pub fn repeated_field(&self) -> bool {
+    is_repeated_field(&self.descriptor)
   }
 }
 

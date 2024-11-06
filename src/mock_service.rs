@@ -6,10 +6,9 @@ use std::task::{Context, Poll};
 
 use maplit::hashmap;
 use pact_matching::{CoreMatchingContext, DiffConfig};
-use pact_models::generators::{GenerateValue, GeneratorCategory, NoopVariantMatcher, VariantMatcher};
+use pact_models::generators::{GeneratorCategory, GeneratorTestMode};
 use pact_models::json_utils::json_to_string;
 use pact_models::pact::Pact;
-use pact_models::path_exp::DocPath;
 use pact_models::prelude::v4::V4Pact;
 use pact_models::v4::message_parts::MessageContents;
 use pact_models::v4::sync_message::SynchronousMessage;
@@ -211,19 +210,10 @@ impl MockService {
   }
 
   fn apply_generators(&self, message: &mut DynamicMessage, contents: &MessageContents) -> anyhow::Result<()> {
-    let variant_matcher = NoopVariantMatcher {};
-    let vm_boxed = variant_matcher.boxed();
     let context = hashmap!{}; // TODO: This needs to be passed in via the start mock server call
 
     if let Some(generators) = contents.generators.categories.get(&GeneratorCategory::BODY) {
-      for (key, generator) in generators.iter() {
-        let path = DocPath::new(key)?;
-        let value = message.fetch_field_value(&path);
-        if let Some(value) = value {
-          let generated_value = generator.generate_value(&value.data, &context, &vm_boxed)?;
-          message.set_field_value(&path, generated_value)?;
-        }
-      }
+      message.apply_generators(Some(&generators), &GeneratorTestMode::Consumer, &context)?;
     }
 
     Ok(())

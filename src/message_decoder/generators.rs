@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::anyhow;
 use chrono::{DateTime, Local};
+use pact_models::expression_parser::DataValue;
 use pact_models::generators::{
   generate_ascii_string,
   generate_decimal,
@@ -23,11 +24,18 @@ use rand::prelude::*;
 use regex::{Captures, Regex};
 use serde_json::Value;
 use serde_json::Value::Object;
+use thiserror::Error;
 use tracing::{debug, instrument, trace, warn};
 use uuid::Uuid;
 
 use crate::message_decoder::ProtobufFieldData;
 use crate::metadata::MessageMetadataValue;
+
+#[derive(Error, Debug)]
+pub enum GeneratorError {
+  #[error("Provider state value is a collection (Array or Object), and can not be injected into a single field")]
+  ProviderStateValueIsCollection(DataValue)
+}
 
 impl GenerateValue<ProtobufFieldData> for Generator {
   #[instrument(ret)]
@@ -197,19 +205,11 @@ impl GenerateValue<ProtobufFieldData> for Generator {
         } else {
           context.clone()
         };
-        match generate_value_from_context(exp, &provider_state_config, dt) {
-          Ok(val) => match value {
-            ProtobufFieldData::String(_) => Ok(ProtobufFieldData::String(val.to_string())),
-            ProtobufFieldData::Boolean(_) => Ok(ProtobufFieldData::Boolean(bool::try_from(val)?)),
-            ProtobufFieldData::UInteger32(_) => Ok(ProtobufFieldData::UInteger32(u64::try_from(val)? as u32)),
-            ProtobufFieldData::Integer32(_) => Ok(ProtobufFieldData::Integer32(i64::try_from(val)? as i32)),
-            ProtobufFieldData::UInteger64(_) => Ok(ProtobufFieldData::UInteger64(u64::try_from(val)?)),
-            ProtobufFieldData::Integer64(_) => Ok(ProtobufFieldData::Integer64(i64::try_from(val)?)),
-            ProtobufFieldData::Float(_) => Ok(ProtobufFieldData::Float(f64::try_from(val)? as f32)),
-            ProtobufFieldData::Double(_) => Ok(ProtobufFieldData::Double(f64::try_from(val)?)),
-            _ => Err(anyhow!("Can not generate a value from the provider state for a field type {:?}", value))
-          },
-          Err(err) => Err(err)
+        let val = generate_value_from_context(exp, &provider_state_config, dt)?;
+        if val.wrapped.is_array() || val.wrapped.is_object() {
+          Err(anyhow!(GeneratorError::ProviderStateValueIsCollection(val.clone())))
+        } else {
+          data_value_to_proto_value(value, &val)
         }
       }
       Generator::MockServerURL(example, regex) => {
@@ -262,6 +262,21 @@ fn replace_with_regex(example: &String, url: String, re: Regex) -> String {
     let m = caps.get(1).unwrap();
     format!("{}{}", url, m.as_str())
   }).to_string()
+}
+
+pub fn data_value_to_proto_value(value: &ProtobufFieldData, val: &DataValue) -> anyhow::Result<ProtobufFieldData> {
+  let val = val.clone();
+  match value {
+    ProtobufFieldData::String(_) => Ok(ProtobufFieldData::String(val.to_string())),
+    ProtobufFieldData::Boolean(_) => Ok(ProtobufFieldData::Boolean(bool::try_from(val)?)),
+    ProtobufFieldData::UInteger32(_) => Ok(ProtobufFieldData::UInteger32(u64::try_from(val)? as u32)),
+    ProtobufFieldData::Integer32(_) => Ok(ProtobufFieldData::Integer32(i64::try_from(val)? as i32)),
+    ProtobufFieldData::UInteger64(_) => Ok(ProtobufFieldData::UInteger64(u64::try_from(val)?)),
+    ProtobufFieldData::Integer64(_) => Ok(ProtobufFieldData::Integer64(i64::try_from(val)?)),
+    ProtobufFieldData::Float(_) => Ok(ProtobufFieldData::Float(f64::try_from(val)? as f32)),
+    ProtobufFieldData::Double(_) => Ok(ProtobufFieldData::Double(f64::try_from(val)?)),
+    _ => Err(anyhow!("Can not generate a value from the provider state for a field type {:?}", value))
+  }
 }
 
 impl GenerateValue<MessageMetadataValue> for Generator {

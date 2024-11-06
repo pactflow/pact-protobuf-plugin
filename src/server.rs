@@ -15,7 +15,6 @@ use pact_models::generators::{
   Generator,
   GeneratorCategory,
   GeneratorTestMode,
-  NoopVariantMatcher,
   VariantMatcher
 };
 use pact_models::json_utils::json_to_string;
@@ -615,24 +614,18 @@ fn generate_protobuf_contents(
   mode: TestMode
 ) -> anyhow::Result<Body> {
   let mut message: DynamicMessage = DynamicMessage::new(message_descriptor, fields, all_descriptors);
-  let variant_matcher = NoopVariantMatcher {};
-  let vm_boxed = variant_matcher.boxed();
   let context = hashmap!{};
 
+  let mut generator_map = hashmap!{};
   for (key, generator) in generators {
     let path = DocPath::new(key)?;
-    let value = message.fetch_field_value(&path);
-    if let Some(value) = value {
-      let generator_values = generator.values.as_ref()
-        .map(proto_struct_to_json)
-        .unwrap_or_default();
-      let generator = Generator::create(generator.r#type.as_str(), &generator_values)?;
-      if generator.corresponds_to_mode(&to_generator_mode(mode)) {
-        let generated_value = generator.generate_value(&value.data, &context, &vm_boxed)?;
-        message.set_field_value(&path, generated_value)?;
-      }
-    }
+    let generator_values = generator.values.as_ref()
+      .map(proto_struct_to_json)
+      .unwrap_or_default();
+    let generator = Generator::create(generator.r#type.as_str(), &generator_values)?;
+    generator_map.insert(path, generator);
   }
+  message.apply_generators(Some(&generator_map), &to_generator_mode(mode), &context)?;
 
   trace!(?message, "Writing generated message");
   let mut buffer = BytesMut::new();

@@ -4,10 +4,11 @@ use std::collections::HashMap;
 use std::iter::Peekable;
 use std::slice::Iter;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use bytes::{BufMut, Bytes};
 use itertools::Itertools;
 use pact_matching::generators::DefaultVariantMatcher;
+use pact_models::expression_parser::DataValue;
 use pact_models::generators::{
   GenerateValue,
   Generator,
@@ -24,6 +25,7 @@ use tonic::Status;
 use tracing::{debug, error, instrument, trace, warn};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
+use crate::message_decoder::generators::{data_value_to_proto_value, GeneratorError};
 
 #[derive(Debug, Clone)]
 pub struct PactCodec {
@@ -161,14 +163,14 @@ impl DynamicMessage {
   }
 
   /// Retrieve the value for a message field using the given path
-  #[instrument(ret, skip(self))]
-  pub fn fetch_field_value(&mut self, path: &DocPath) -> Option<ProtobufField> {
+  #[instrument(ret, skip(self), fields(path = %path))]
+  pub fn fetch_field_value(&mut self, path: &DocPath) -> Option<Vec<ProtobufField>> {
     let path_tokens = path.tokens().clone();
     let mut iter = path_tokens.iter().peekable();
     if let Some(PathToken::Root) = iter.peek() {
       iter.next();
       let mut found = None;
-      let result = self.match_path(&mut iter, |v| {
+      let result = self.match_path(&mut iter, |v, _| {
         found.replace(v.clone());
       });
       if let Err(err) = result {
@@ -181,37 +183,45 @@ impl DynamicMessage {
   }
 
   /// Update the value using the given path
-  #[instrument(ret, skip(self))]
+  #[instrument(ret, skip(self), fields(path = %path))]
   pub fn set_field_value(&mut self, path: &DocPath, value: ProtobufFieldData) -> anyhow::Result<()> {
     let path_tokens = path.tokens().clone();
     let mut iter = path_tokens.iter().peekable();
     if let Some(PathToken::Root) = iter.peek() {
       iter.next();
-      self.match_path(&mut iter, |v| {
-        v.data = value.clone();
+      self.match_path(&mut iter, |v, segment| {
+        if let Some(PathToken::Index(index)) = segment {
+          if index >= v.len() {
+            v.resize(index + 1, v[0].clone());
+          }
+          v[index].data = value.clone();
+        } else {
+          v[0].data = value.clone();
+        }
       })
     } else {
       Err(anyhow!("Path '{}' does not start with a root path marker ('$')", path))
     }
   }
 
-  #[instrument(skip(self, callback))]
   fn match_path<F>(
     &mut self,
     path_tokens: &mut Peekable<Iter<PathToken>>,
     callback: F
-  ) -> anyhow::Result<()> where F: FnOnce(&mut ProtobufField) {
+  ) -> anyhow::Result<()> where F: FnOnce(&mut Vec<ProtobufField>, Option<PathToken>) {
     let descriptors = self.descriptors.clone();
     let fields = &mut self.fields;
     if let Some(next) = path_tokens.next() {
       match next {
-        PathToken::Root => Ok(()),
-        PathToken::Field(name) => if let Some(field) = find_field_value(fields, name.as_str()) {
+        PathToken::Root => {},
+        PathToken::Field(name) => return if let Some(field) = find_field_values(fields, name.as_str()) {
           if path_tokens.peek().is_none() {
-            callback(field);
+            callback(field, None);
             Ok(())
           } else {
-            match &mut field.data {
+            // OK to unwrap here, as if the vec was empty, find_field_values would have skipped it.
+            let first_entry = field.first_mut().unwrap();
+            match &mut first_entry.data {
               ProtobufFieldData::Enum(_, _) => Err(anyhow!("Support for dynamically fetching enum values is not supported yet")),
               ProtobufFieldData::Message(data, descriptor) => {
                 let mut buffer = Bytes::copy_from_slice(data);
@@ -230,22 +240,39 @@ impl DynamicMessage {
                   }
                 }
               },
-              _ => {
-                warn!("Ignoring field of type '{}'", field.data.type_name());
-                Ok(())
+              _ => match path_tokens.next() {
+                Some(PathToken::Star) | Some(PathToken::StarIndex) => {
+                  if path_tokens.peek().is_none() {
+                    callback(field, None);
+                    Ok(())
+                  } else {
+                    Err(anyhow!("Path does not match any field in the message (additional path \
+                    segments can only be applied to a child message, but field type is '{}')", first_entry.data.type_name()))
+                  }
+                }
+                Some(PathToken::Index(index)) => if first_entry.repeated_field() && path_tokens.peek().is_none() {
+                  callback(field, Some(PathToken::Index(*index)));
+                  Ok(())
+                } else {
+                  Err(anyhow!("Path segment '{}' can only be applied to repeated fields", index))
+                }
+                Some(segment) => Err(anyhow!("Path segment '{}' can not be applied any field in the message", segment)),
+                None => Err(anyhow!("Path name '{}' does not match any field in the message", name))
               }
             }
           }
         } else {
-          Err(anyhow!("Path '{}' does not match any field int the message", name))
-        }
-        PathToken::Index(_) => Err(anyhow!("Support for index paths is not supported yet")),
-        PathToken::Star => Err(anyhow!("Support for '*' in paths is not supported yet")),
-        PathToken::StarIndex => Err(anyhow!("Support for '[*]' in paths is not supported yet")),
+          Err(anyhow!("Path name '{}' does not match any field in the message", name))
+        },
+        PathToken::Index(_) => return Err(anyhow!("Support for index paths is not supported yet")),
+        PathToken::Star => return Err(anyhow!("Support for '*' in paths is not supported yet")),
+        PathToken::StarIndex => return Err(anyhow!("Support for '[*]' in paths is not supported yet")),
       }
     } else {
-      Err(anyhow!("Path does not match any field int the message"))
+      return Err(anyhow!("Path does not match any field in the message (end of path tokens reached)"))
     }
+
+    Ok(())
   }
 
   /// Mutates the message by applying the generators to any matching message fields
@@ -263,8 +290,31 @@ impl DynamicMessage {
         let value = self.fetch_field_value(&path);
         if let Some(value) = value {
           if generator.corresponds_to_mode(mode) {
-            let generated_value = generator.generate_value(&value.data, &context, &vm_boxed)?;
-            self.set_field_value(&path, generated_value)?;
+            // OK to unwrap here, for if the vec was empty, fetch_field_value would have returned None.
+            let first_entry = value.first().unwrap();
+            match generator.generate_value(&first_entry.data, &context, &vm_boxed) {
+              Ok(generated_value) => {
+                self.set_field_value(&path, generated_value)?;
+              }
+              Err(err) => {
+                warn!("Failed to apply generator '{}' for field {}: {}", path, first_entry, err);
+                if let Some(GeneratorError::ProviderStateValueIsCollection(val)) = err.downcast_ref::<GeneratorError>() {
+                  if first_entry.repeated_field() && val.wrapped.is_array() {
+                    let array = as_array(val)?;
+                    trace!("Applying a array value ({} items) to repeated field '{}'", array.len(), first_entry.field_name);
+                    for (index, dv) in array.iter().enumerate() {
+                      let index_path = path_join_index(path, index);
+                      let pv = data_value_to_proto_value(&first_entry.data, dv)?;
+                      self.set_field_value(&index_path, pv)?;
+                    }
+                  } else {
+                    bail!(err);
+                  }
+                } else {
+                  bail!(err);
+                }
+              }
+            }
           }
         } else {
           warn!("No matching field found for generator '{}'", path);
@@ -276,20 +326,46 @@ impl DynamicMessage {
   }
 }
 
-// TODO: This only supports the first value, needs to deal with repeated fields
-fn find_field_value<'a>(
+// TODO: Replace this with DocPath.join_index when pact_models 1.2.5 is released
+fn path_join_index(path: &DocPath, index: usize) -> DocPath {
+  let mut new_path = path.clone();
+  match path.tokens().last() {
+    Some(PathToken::Root) => { new_path.push_index(index); }
+    Some(PathToken::Field(_)) => { new_path.push_index(index); }
+    Some(PathToken::Index(_)) => { new_path.push_index(index); }
+    Some(PathToken::Star) | Some(PathToken::StarIndex) => {
+      let tokens = new_path.tokens().clone();
+      new_path = DocPath::empty();
+      for token in tokens.iter().dropping_back(1) {
+        new_path.push(token.clone());
+      }
+      new_path.push_index(index);
+    }
+    None => { new_path.push_index(index); }
+  }
+  new_path
+}
+
+fn as_array(data: &DataValue) -> anyhow::Result<Vec<DataValue>> {
+  if let Value::Array(values) = &data.wrapped {
+    Ok(values.iter()
+      .map(|v| DataValue {
+        wrapped: v.clone(),
+        data_type: data.data_type
+      })
+      .collect())
+  } else {
+    Err(anyhow!("Value {} is not an array", data.wrapped))
+  }
+}
+
+fn find_field_values<'a>(
   fields: &'a mut HashMap<u32, Vec<ProtobufField>>,
   field_name: &str
-) -> Option<&'a mut ProtobufField> {
+) -> Option<&'a mut Vec<ProtobufField>> {
   fields.iter_mut()
     .find(|(_, fields)| fields.iter().any(|field| field.field_name == field_name))
-    .map(|(_, fields)| {
-      if fields.len() > 1 {
-        warn!("There is more than one field value");
-      }
-      fields.get_mut(0)
-    })
-    .flatten()
+    .map(|(_, fields)| fields)
 }
 
 #[derive(Debug, Clone)]
@@ -387,7 +463,7 @@ mod tests {
     let descriptor = DescriptorProto::default();
     let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
     let path = DocPath::new("one").unwrap();
-    expect!(message.fetch_field_value(&path)).to(be_some().value(field));
+    expect!(message.fetch_field_value(&path)).to(be_some().value(fields));
   }
 
   #[test]
@@ -406,7 +482,7 @@ mod tests {
     let fields = vec![ field.clone() ];
     let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
     let path = DocPath::new("$.one").unwrap();
-    expect!(message.fetch_field_value(&path)).to(be_some().value(field));
+    expect!(message.fetch_field_value(&path)).to(be_some().value(fields));
   }
 
   #[test]
@@ -483,7 +559,7 @@ mod tests {
     let fields = vec![ field.clone() ];
     let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
     let path = DocPath::new("$.one.two").unwrap();
-    expect!(message.fetch_field_value(&path)).to(be_some().value(child_field));
+    expect!(message.fetch_field_value(&path)).to(be_some().value(vec![child_field]));
   }
 
   #[test]
@@ -605,6 +681,6 @@ mod tests {
     };
 
     expect!(message.apply_generators(Some(&generators), &GeneratorTestMode::Provider, &hashmap!{})).to(be_ok());
-    expect!(message.fetch_field_value(&path).unwrap().data.as_i64().unwrap()).to_not(be_equal_to(100));
+    expect!(message.fetch_field_value(&path).unwrap().first().unwrap().data.as_i64().unwrap()).to_not(be_equal_to(100));
   }
 }
