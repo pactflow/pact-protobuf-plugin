@@ -426,12 +426,13 @@ mod tests {
   use bytes::BytesMut;
   use expectest::prelude::*;
   use maplit::hashmap;
+  use pact_models::generators::Generator::ProviderStateGenerator;
   use pact_models::generators::GeneratorTestMode;
   use pact_models::path_exp::DocPath;
   use pact_models::prelude::Generator::RandomInt;
   use prost::encoding::WireType;
-  use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet};
-
+  use prost_types::{DescriptorProto, field_descriptor_proto, FieldDescriptorProto, FileDescriptorSet};
+  use serde_json::json;
   use crate::dynamic_message::DynamicMessage;
   use crate::message_decoder::{ProtobufField, ProtobufFieldData};
 
@@ -614,7 +615,7 @@ mod tests {
     };
     let fields = vec![ field.clone() ];
     let descriptor = DescriptorProto::default();
-    let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors, );
+    let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
     let generators = hashmap!{
       DocPath::new_unwrap("$.one") => RandomInt(1, 10)
     };
@@ -682,5 +683,100 @@ mod tests {
 
     expect!(message.apply_generators(Some(&generators), &GeneratorTestMode::Provider, &hashmap!{})).to(be_ok());
     expect!(message.fetch_field_value(&path).unwrap().first().unwrap().data.as_i64().unwrap()).to_not(be_equal_to(100));
+  }
+
+  #[test]
+  fn dynamic_message_inject_array_into_repeated_field() {
+    let field_descriptor = FieldDescriptorProto {
+      label: Some(field_descriptor_proto::Label::Repeated as i32),
+      .. FieldDescriptorProto::default()
+    };
+    let field = ProtobufField {
+      field_num: 1,
+      field_name: "one".to_string(),
+      wire_type: WireType::Varint,
+      data: ProtobufFieldData::Integer64(100),
+      descriptor: field_descriptor.clone()
+    };
+    let descriptors = FileDescriptorSet {
+      file: vec![]
+    };
+    let fields = vec![ field.clone() ];
+    let descriptor = DescriptorProto::default();
+    let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
+    let generators = hashmap!{
+      DocPath::new_unwrap("$.one") => ProviderStateGenerator("a".to_string(), None)
+    };
+
+    let context = hashmap!{
+      "a" => json!([1, 2, "3", 4])
+    };
+    expect!(message.apply_generators(Some(&generators), &GeneratorTestMode::Provider, &context)).to(be_ok());
+    expect!(message.proto_fields().len()).to(be_equal_to(4));
+    expect!(message.proto_fields()[0].data.as_i64().unwrap()).to(be_equal_to(1));
+  }
+
+  #[test]
+  fn dynamic_message_inject_array_into_non_repeated_field() {
+    let field_descriptor = FieldDescriptorProto {
+      label: None,
+      .. FieldDescriptorProto::default()
+    };
+    let field = ProtobufField {
+      field_num: 1,
+      field_name: "one".to_string(),
+      wire_type: WireType::Varint,
+      data: ProtobufFieldData::Integer64(100),
+      descriptor: field_descriptor.clone()
+    };
+    let descriptors = FileDescriptorSet {
+      file: vec![]
+    };
+    let fields = vec![ field.clone() ];
+    let descriptor = DescriptorProto::default();
+    let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
+    let generators = hashmap!{
+      DocPath::new_unwrap("$.one") => ProviderStateGenerator("a".to_string(), None)
+    };
+
+    let context = hashmap!{
+      "a" => json!([1, 2, 3, 4])
+    };
+    let result = message.apply_generators(Some(&generators), &GeneratorTestMode::Provider, &context);
+    expect!(result.as_ref()).to(be_err());
+    expect!(result.unwrap_err().to_string()).to(be_equal_to(
+      "Provider state value is a collection (Array or Object), and can not be injected into a single field"));
+  }
+
+  #[test]
+  fn dynamic_message_inject_array_with_incorrect_type() {
+    let field_descriptor = FieldDescriptorProto {
+      label: Some(field_descriptor_proto::Label::Repeated as i32),
+      .. FieldDescriptorProto::default()
+    };
+    let field = ProtobufField {
+      field_num: 1,
+      field_name: "one".to_string(),
+      wire_type: WireType::Varint,
+      data: ProtobufFieldData::Integer64(100),
+      descriptor: field_descriptor.clone()
+    };
+    let descriptors = FileDescriptorSet {
+      file: vec![]
+    };
+    let fields = vec![ field.clone() ];
+    let descriptor = DescriptorProto::default();
+    let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
+    let generators = hashmap!{
+      DocPath::new_unwrap("$.one") => ProviderStateGenerator("a".to_string(), None)
+    };
+
+    let context = hashmap!{
+      "a" => json!([1, 2, "sss", 4])
+    };
+    let result = message.apply_generators(Some(&generators), &GeneratorTestMode::Provider, &context);
+    expect!(result.as_ref()).to(be_err());
+    expect!(result.unwrap_err().to_string()).to(be_equal_to(
+      "i64 can not be generated from 'sss' - invalid digit found in string"));
   }
 }
