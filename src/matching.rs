@@ -1047,6 +1047,7 @@ mod tests {
         field_name: "catalogue".to_string(),
         wire_type: WireType::LengthDelimited,
         data: ProtobufFieldData::Message(vec![8, 0, 18, 4, 116, 101, 115, 116], descriptor.clone()),
+        additional_data: vec![],
         descriptor: catalogue_descriptor.clone()
       }
     ];
@@ -1056,6 +1057,7 @@ mod tests {
           field_name: "catalogue".to_string(),
           wire_type: WireType::LengthDelimited,
           data: ProtobufFieldData::Message(vec![18, 8, 112, 114, 111, 116, 111, 98, 117, 102, 26, 54, 10, 13, 99, 111, 110, 116, 101, 110, 116, 45, 116, 121, 112, 101, 115, 18, 37, 97, 112, 112, 108, 105, 99, 97, 116, 105, 111, 110, 47, 112, 114, 111, 116, 111, 98, 117, 102, 59, 97, 112, 112, 108, 105, 99, 97, 116, 105, 111, 110, 47, 103, 114, 112, 99], descriptor.clone()),
+          additional_data: vec![],
           descriptor: catalogue_descriptor.clone()
         }
     ];
@@ -1100,6 +1102,7 @@ mod tests {
         field_name: "value".to_string(),
         wire_type: WireType::LengthDelimited,
         data: ProtobufFieldData::String("00000000000000000000000000000000".to_string()),
+        additional_data: vec![],
         descriptor: field_descriptor.clone()
       }
     ];
@@ -1109,6 +1112,7 @@ mod tests {
         field_name: "value".to_string(),
         wire_type: WireType::LengthDelimited,
         data: ProtobufFieldData::String("value1".to_string()),
+        additional_data: vec![],
         descriptor: field_descriptor.clone()
       },
       ProtobufField {
@@ -1116,6 +1120,7 @@ mod tests {
         field_name: "value".to_string(),
         wire_type: WireType::LengthDelimited,
         data: ProtobufFieldData::String("value2".to_string()),
+        additional_data: vec![],
         descriptor: field_descriptor.clone()
       }
     ];
@@ -1172,6 +1177,7 @@ mod tests {
         field_name: "groups".to_string(),
         wire_type: WireType::LengthDelimited,
         data: ProtobufFieldData::String("*".to_string()),
+        additional_data: vec![],
         descriptor: field_descriptor.clone()
       }
     ];
@@ -1181,6 +1187,7 @@ mod tests {
         field_name: "groups".to_string(),
         wire_type: WireType::LengthDelimited,
         data: ProtobufFieldData::String("*".to_string()),
+        additional_data: vec![],
         descriptor: field_descriptor.clone()
       },
       ProtobufField {
@@ -1188,6 +1195,7 @@ mod tests {
         field_name: "groups".to_string(),
         wire_type: WireType::LengthDelimited,
         data: ProtobufFieldData::String("*".to_string()),
+        additional_data: vec![],
         descriptor: field_descriptor.clone()
       }
     ];
@@ -1251,6 +1259,7 @@ mod tests {
         field_name: "in".to_string(),
         wire_type: WireType::Varint,
         data: ProtobufFieldData::Boolean(false),
+        additional_data: vec![],
         descriptor: field_descriptor1.clone()
       },
       ProtobufField {
@@ -1258,6 +1267,7 @@ mod tests {
         field_name: "e".to_string(),
         wire_type: WireType::Varint,
         data: ProtobufFieldData::Enum(0, enum_descriptor),
+        additional_data: vec![],
         descriptor: field_descriptor2.clone()
       },
       ProtobufField {
@@ -1265,6 +1275,7 @@ mod tests {
         field_name: "s".to_string(),
         wire_type: WireType::LengthDelimited,
         data: ProtobufFieldData::String("".to_string()),
+        additional_data: vec![],
         descriptor: field_descriptor3.clone()
       }
     ];
@@ -1286,6 +1297,7 @@ mod tests {
         field_name: "in".to_string(),
         wire_type: WireType::Varint,
         data: ProtobufFieldData::Boolean(true),
+        additional_data: vec![],
         descriptor: field_descriptor1.clone()
       }
     ];
@@ -1345,6 +1357,7 @@ mod tests {
         field_name: "in".to_string(),
         wire_type: WireType::Varint,
         data: ProtobufFieldData::Boolean(false),
+        additional_data: vec![],
         descriptor: field_descriptor1.clone()
       },
       ProtobufField {
@@ -1352,6 +1365,7 @@ mod tests {
         field_name: "e".to_string(),
         wire_type: WireType::Varint,
         data: ProtobufFieldData::Enum(0, enum_descriptor),
+        additional_data: vec![],
         descriptor: field_descriptor2.clone()
       }
     ];
@@ -1363,6 +1377,7 @@ mod tests {
         field_name: "in".to_string(),
         wire_type: WireType::Varint,
         data: ProtobufFieldData::Boolean(true),
+        additional_data: vec![],
         descriptor: field_descriptor1.clone()
       },
       ProtobufField {
@@ -1370,6 +1385,7 @@ mod tests {
         field_name: "s".to_string(),
         wire_type: WireType::LengthDelimited,
         data: ProtobufFieldData::String("".to_string()),
+        additional_data: vec![],
         descriptor: field_descriptor3.clone()
       }
     ];
@@ -1389,6 +1405,7 @@ mod tests {
         field_name: "in".to_string(),
         wire_type: WireType::Varint,
         data: ProtobufFieldData::Boolean(true),
+        additional_data: vec![],
         descriptor: field_descriptor1.clone()
       },
       ProtobufField {
@@ -1396,6 +1413,7 @@ mod tests {
         field_name: "s".to_string(),
         wire_type: WireType::LengthDelimited,
         data: ProtobufFieldData::String("not empty".to_string()),
+        additional_data: vec![],
         descriptor: field_descriptor3.clone()
       }
     ];

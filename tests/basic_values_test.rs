@@ -79,6 +79,7 @@ async fn basic_values_test() {
       field_name: "f1".to_string(),
       wire_type: Varint,
       data: Boolean(true),
+      additional_data: vec![],
       descriptor: field_descriptor1.clone()
     },
     ProtobufField {
@@ -86,6 +87,7 @@ async fn basic_values_test() {
       field_name: "f2".to_string(),
       wire_type: Varint,
       data: Integer32(-1122),
+      additional_data: vec![],
       descriptor: field_descriptor2.clone()
     },
     ProtobufField {
@@ -93,6 +95,7 @@ async fn basic_values_test() {
       field_name: "f3".to_string(),
       wire_type: Varint,
       data: UInteger32(1122),
+      additional_data: vec![],
       descriptor: field_descriptor3.clone()
     },
     ProtobufField {
@@ -100,6 +103,7 @@ async fn basic_values_test() {
       field_name: "f4".to_string(),
       wire_type: SixtyFourBit,
       data: Double(1122.33),
+      additional_data: vec![],
       descriptor: field_descriptor4.clone()
     },
     ProtobufField {
@@ -107,6 +111,7 @@ async fn basic_values_test() {
       field_name: "f5".to_string(),
       wire_type: LengthDelimited,
       data: String("1122.33".to_string()),
+      additional_data: vec![],
       descriptor: field_descriptor5.clone()
     }
   ]));

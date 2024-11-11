@@ -455,6 +455,7 @@ mod tests {
       field_name: "one".to_string(),
       wire_type: WireType::Varint,
       data: ProtobufFieldData::Integer64(100),
+      additional_data: vec![],
       descriptor: Default::default()
     };
     let descriptors = FileDescriptorSet {
@@ -474,6 +475,7 @@ mod tests {
       field_name: "one".to_string(),
       wire_type: WireType::Varint,
       data: ProtobufFieldData::Integer64(100),
+      additional_data: vec![],
       descriptor: Default::default()
     };
     let descriptors = FileDescriptorSet {
@@ -534,6 +536,7 @@ mod tests {
       field_name: "two".to_string(),
       wire_type: WireType::Varint,
       data: ProtobufFieldData::Integer64(100),
+      additional_data: vec![],
       descriptor: child_proto_1.clone()
     };
     let child_field2 = ProtobufField {
@@ -541,6 +544,7 @@ mod tests {
       field_name: "three".to_string(),
       wire_type: WireType::Varint,
       data: ProtobufFieldData::Integer64(200),
+      additional_data: vec![],
       descriptor: child_proto_2.clone()
     };
     let descriptors = FileDescriptorSet {
@@ -555,6 +559,7 @@ mod tests {
       field_name: "one".to_string(),
       wire_type: WireType::LengthDelimited,
       data: ProtobufFieldData::Message(buffer.to_vec(), child_descriptor),
+      additional_data: vec![],
       descriptor: child_proto_1.clone()
     };
     let fields = vec![ field.clone() ];
@@ -586,6 +591,7 @@ mod tests {
       field_name: "one".to_string(),
       wire_type: WireType::Varint,
       data: ProtobufFieldData::Integer64(100),
+      additional_data: vec![],
       descriptor: Default::default()
     };
     let descriptors = FileDescriptorSet {
@@ -608,6 +614,7 @@ mod tests {
       field_name: "one".to_string(),
       wire_type: WireType::Varint,
       data: ProtobufFieldData::Integer64(100),
+      additional_data: vec![],
       descriptor: Default::default()
     };
     let descriptors = FileDescriptorSet {
@@ -651,6 +658,7 @@ mod tests {
       field_name: "two".to_string(),
       wire_type: WireType::Varint,
       data: ProtobufFieldData::Integer64(100),
+      additional_data: vec![],
       descriptor: child_proto_1.clone()
     };
     let child_field2 = ProtobufField {
@@ -658,6 +666,7 @@ mod tests {
       field_name: "three".to_string(),
       wire_type: WireType::Varint,
       data: ProtobufFieldData::Integer64(200),
+      additional_data: vec![],
       descriptor: child_proto_2.clone()
     };
     let descriptors = FileDescriptorSet {
@@ -671,6 +680,7 @@ mod tests {
       field_name: "one".to_string(),
       wire_type: WireType::LengthDelimited,
       data: ProtobufFieldData::Message(buffer.to_vec(), child_descriptor),
+      additional_data: vec![],
       descriptor: child_proto_1.clone()
     };
     let fields = vec![ field.clone() ];
@@ -696,6 +706,7 @@ mod tests {
       field_name: "one".to_string(),
       wire_type: WireType::Varint,
       data: ProtobufFieldData::Integer64(100),
+      additional_data: vec![],
       descriptor: field_descriptor.clone()
     };
     let descriptors = FileDescriptorSet {
@@ -714,6 +725,7 @@ mod tests {
     expect!(message.apply_generators(Some(&generators), &GeneratorTestMode::Provider, &context)).to(be_ok());
     expect!(message.proto_fields().len()).to(be_equal_to(4));
     expect!(message.proto_fields()[0].data.as_i64().unwrap()).to(be_equal_to(1));
+    expect!(message.proto_fields()[2].data.as_i64().unwrap()).to(be_equal_to(3));
   }
 
   #[test]
@@ -727,6 +739,7 @@ mod tests {
       field_name: "one".to_string(),
       wire_type: WireType::Varint,
       data: ProtobufFieldData::Integer64(100),
+      additional_data: vec![],
       descriptor: field_descriptor.clone()
     };
     let descriptors = FileDescriptorSet {
@@ -759,6 +772,7 @@ mod tests {
       field_name: "one".to_string(),
       wire_type: WireType::Varint,
       data: ProtobufFieldData::Integer64(100),
+      additional_data: vec![],
       descriptor: field_descriptor.clone()
     };
     let descriptors = FileDescriptorSet {

@@ -66,6 +66,7 @@ async fn repeated_enum_test() {
         field_name: "in".to_string(),
         wire_type: WireType::LengthDelimited,
         data: ProtobufFieldData::Enum(1, enum_descriptor.clone()),
+        additional_data: vec![],
         descriptor: field_descriptor.clone()
       }
     ];
@@ -75,6 +76,7 @@ async fn repeated_enum_test() {
         field_name: "in".to_string(),
         wire_type: WireType::LengthDelimited,
         data: ProtobufFieldData::Enum(1, enum_descriptor.clone()),
+        additional_data: vec![],
         descriptor: field_descriptor.clone()
       },
     ];

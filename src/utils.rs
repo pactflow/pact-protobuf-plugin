@@ -1525,6 +1525,7 @@ pub(crate) mod tests {
           buffer.freeze().to_vec(),
           field_descriptor.clone()
         ),
+        additional_data: vec![],
         descriptor: Default::default()
       },
       ProtobufField {
@@ -1535,6 +1536,7 @@ pub(crate) mod tests {
           buffer2.freeze().to_vec(),
           field_descriptor.clone()
         ),
+        additional_data: vec![],
         descriptor: Default::default()
       },
       ProtobufField {
@@ -1545,6 +1547,7 @@ pub(crate) mod tests {
           buffer3.freeze().to_vec(),
           field_descriptor.clone()
         ),
+        additional_data: vec![],
         descriptor: Default::default()
       }
     ];
@@ -1586,6 +1589,7 @@ pub(crate) mod tests {
           buffer1.freeze().to_vec(),
           field_descriptor.clone()
         ),
+        additional_data: vec![],
         descriptor: Default::default()
       }, ProtobufField {
         field_num: 1,
@@ -1595,6 +1599,7 @@ pub(crate) mod tests {
           buffer2.freeze().to_vec(),
           field_descriptor.clone()
         ),
+        additional_data: vec![],
         descriptor: Default::default()
       }
     ];

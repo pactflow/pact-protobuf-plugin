@@ -29,6 +29,8 @@ pub struct ProtobufField {
   pub wire_type: WireType,
   /// Field data
   pub data: ProtobufFieldData,
+  /// Additional field data (for repeated fields)
+  pub additional_data: Vec<ProtobufFieldData>,
   /// Descriptor for this field
   pub descriptor: FieldDescriptorProto
 }
@@ -41,6 +43,7 @@ impl ProtobufField {
       field_name: self.field_name.clone(),
       wire_type: self.wire_type,
       data: self.data.default_field_value(&self.descriptor),
+      additional_data: vec![],
       descriptor: self.descriptor.clone()
     }
   }
@@ -57,6 +60,7 @@ impl ProtobufField {
         field_name: field_descriptor.name.clone().unwrap_or_default(),
         wire_type: wire_type_for_field(field_descriptor),
         data,
+        additional_data: vec![],
         descriptor: field_descriptor.clone()
       }
     )
@@ -382,7 +386,9 @@ impl Display for ProtobufFieldData {
   }
 }
 
-/// Decodes the Protobuf message using the descriptors
+/// Decodes the Protobuf message using the descriptors and returns an array of ProtobufField values.
+/// This will return a value for each field value in the incoming bytes in the same order, and will
+/// not consolidate repeated fields.
 #[tracing::instrument(ret, skip_all)]
 pub fn decode_message<B>(
   buffer: &mut B,
@@ -505,6 +511,7 @@ pub fn decode_message<B>(
             field_name: field_name.to_string(),
             wire_type,
             data,
+            additional_data: vec![],
             descriptor: field_descriptor.clone()
           });
         }
@@ -536,6 +543,7 @@ pub fn decode_message<B>(
           field_name: "unknown".to_string(),
           wire_type,
           data: ProtobufFieldData::Unknown(data),
+          additional_data: vec![],
           descriptor: Default::default()
         });
       }

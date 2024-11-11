@@ -130,6 +130,7 @@ async fn each_value_matcher() {
     field_name: "value".to_string(),
     wire_type: WireType::LengthDelimited,
     data: ProtobufFieldData::String("value1".to_string()),
+    additional_data: vec![],
     descriptor: field_descriptor.clone()
   };
   let field2 = ProtobufField {
@@ -137,6 +138,7 @@ async fn each_value_matcher() {
     field_name: "value".to_string(),
     wire_type: WireType::LengthDelimited,
     data: ProtobufFieldData::String("value2".to_string()),
+    additional_data: vec![],
     descriptor: field_descriptor.clone()
   };
   let fields = vec![ field, field2 ];
