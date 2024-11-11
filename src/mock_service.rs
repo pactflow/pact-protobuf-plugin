@@ -124,7 +124,7 @@ impl MockService {
                 error!("Failed to encode response message - {}", err);
                 Status::invalid_argument(err.to_string())
               })?;
-            let mut message = DynamicMessage::new(&response_descriptor, &response_message_fields, &self.file_descriptor_set);
+            let mut message = DynamicMessage::new(&response_message_fields, &self.file_descriptor_set);
             self.apply_generators(&mut message, &response_contents).map_err(|err| {
               error!("Failed to generate response message - {}", err);
               Status::invalid_argument(err.to_string())
@@ -364,7 +364,7 @@ mod tests {
     let bytes = BASE64.decode("EgoNAABAQBUAAIBA").unwrap();
     let mut bytes2 = BytesMut::from(bytes.as_slice());
     let fields = decode_message(&mut bytes2, input_message, fds).unwrap();
-    let request = DynamicMessage::new(input_message, fields.as_slice(), &file_descriptor_set);
+    let request = DynamicMessage::new(fields.as_slice(), &file_descriptor_set);
 
     let mock_service = MockService {
       file_descriptor_set: file_descriptor_set.clone(),

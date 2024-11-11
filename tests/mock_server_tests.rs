@@ -142,6 +142,6 @@ async fn each_value_matcher() {
     descriptor: field_descriptor.clone()
   };
   let fields = vec![ field, field2 ];
-  let message = DynamicMessage::new(&input_message, fields.as_slice(), &fds);
+  let message = DynamicMessage::new(fields.as_slice(), &fds);
   grpc.unary(Request::new(message), path, codec).await.unwrap();
 }

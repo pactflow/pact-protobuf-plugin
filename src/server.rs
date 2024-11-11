@@ -613,7 +613,7 @@ fn generate_protobuf_contents(
   all_descriptors: &FileDescriptorSet,
   mode: TestMode
 ) -> anyhow::Result<Body> {
-  let mut message: DynamicMessage = DynamicMessage::new(message_descriptor, fields, all_descriptors);
+  let mut message: DynamicMessage = DynamicMessage::new(fields, all_descriptors);
   let context = hashmap!{};
 
   let mut generator_map = hashmap!{};
@@ -953,7 +953,7 @@ impl PactPlugin for ProtobufPactPlugin {
     let test_context = config.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
     let decoded_body = match decode_message(&mut raw_request_body, &input_message, &all_file_desc) {
       Ok(field_values) => {
-        let mut message = DynamicMessage::new(&input_message, &field_values, &all_file_desc);
+        let mut message = DynamicMessage::new(&field_values, &all_file_desc);
         if let Err(err) = message.apply_generators(
           interaction.request.generators.categories.get(&GeneratorCategory::BODY),
           &GeneratorTestMode::Provider,

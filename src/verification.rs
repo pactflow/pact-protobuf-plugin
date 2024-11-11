@@ -337,7 +337,7 @@ fn build_grpc_request(
   trace!(?body, ?metadata, ?file_desc, ?input_desc, ">> build_grpc_request");
   let mut bytes = body.value().unwrap_or_default();
   let message_fields = decode_message(&mut bytes, input_desc, file_desc)?;
-  let mut request = Request::new(DynamicMessage::new(input_desc, &message_fields, file_desc));
+  let mut request = Request::new(DynamicMessage::new(&message_fields, file_desc));
   let request_metadata = request.metadata_mut();
   for (key, md) in metadata {
     if key != "request-path" {

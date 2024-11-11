@@ -68,43 +68,54 @@ impl Codec for PactCodec {
   }
 }
 
-/// Dynamic message support based on a vector of ProtobufField field values
+/// Dynamic message support based on a vector of ProtobufField field values. Internally, it will
+/// consolidate all fields with the same field number.
 #[derive(Debug, Clone)]
 pub struct DynamicMessage {
-  fields: HashMap<u32, Vec<ProtobufField>>,
-  descriptors: FileDescriptorSet,
-  message_descriptor: DescriptorProto
+  fields: HashMap<u32, ProtobufField>,
+  descriptors: FileDescriptorSet
 }
 
 impl DynamicMessage {
   /// Create a new message from the slice of fields
   pub fn new(
-    message_descriptor: &DescriptorProto,
     field_data: &[ProtobufField],
     descriptors: &FileDescriptorSet
   ) -> DynamicMessage {
+    let fields = field_data.iter()
+      .map(|f| (f.field_num, f.clone()))
+      .into_group_map();
+    let fields = fields.iter()
+      .map(|(field_num, fields)| {
+        let mut fields = fields.clone();
+        let field = fields.iter_mut()
+          .reduce(|field, f| {
+            field.additional_data.push(f.data.clone());
+            field
+          } )
+          .unwrap(); // safe to unwrap, the group by above can't create an empty vector.
+        (*field_num, field.clone())
+      })
+      .collect();
     DynamicMessage {
-      fields: field_data.iter().map(|f| (f.field_num, f.clone())).into_group_map(),
-      message_descriptor: message_descriptor.clone(),
+      fields,
       descriptors: descriptors.clone()
     }
   }
 
   /// Return a vector of the fields
   pub fn proto_fields(&self) -> Vec<ProtobufField> {
-    self.fields.values().flatten().cloned().collect()
+    self.fields.values().cloned().collect()
   }
 
   /// Encode this message to the provided buffer
   pub fn write_to<B>(&self, buffer: &mut B) -> anyhow::Result<()> where B: BufMut {
-    for (field_num, values) in self.fields.iter()
+    for (field_num, field) in self.fields.iter()
       .sorted_by(|(a, _), (b, _)| Ord::cmp(a, b)) {
-      for field in values {
-        Self::write_field(buffer, *field_num, field, &field.data)?;
-        if field.repeated_field() && !field.additional_data.is_empty() {
-          for data in &field.additional_data {
-            Self::write_field(buffer, *field_num, field, data)?;
-          }
+      Self::write_field(buffer, *field_num, field, &field.data)?;
+      if field.repeated_field() && !field.additional_data.is_empty() {
+        for data in &field.additional_data {
+          Self::write_field(buffer, *field_num, field, data)?;
         }
       }
     }
@@ -245,7 +256,7 @@ impl DynamicMessage {
                 let mut buffer = Bytes::copy_from_slice(data);
                 match decode_message(&mut buffer, descriptor, &descriptors) {
                   Ok(fields) => {
-                    let mut message = DynamicMessage::new(descriptor, fields.as_slice(), &descriptors);
+                    let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
                     message.match_path(path_tokens, callback)?;
                     data.clear();
                     message.write_to(data).map_err(|err| {
@@ -376,19 +387,12 @@ fn as_array(data: &DataValue) -> anyhow::Result<Vec<DataValue>> {
 }
 
 fn find_field_value<'a>(
-  fields: &'a mut HashMap<u32, Vec<ProtobufField>>,
+  fields: &'a mut HashMap<u32, ProtobufField>,
   field_name: &str
 ) -> Option<&'a mut ProtobufField> {
   fields.iter_mut()
-    .find(|(_, fields)| fields.iter().any(|field| field.field_name == field_name))
-    .map(|(_, fields)| {
-      if fields.len() > 1 {
-        warn!("There is more than one field value, additional field values should be encoded \
-        into the field's additional_values attribute otherwise they are ignored.");
-      }
-      fields.first_mut()
-    })
-    .flatten()
+    .find(|(_, field)| field.field_name == field_name)
+    .map(|(_, field)| field)
 }
 
 #[derive(Debug, Clone)]
@@ -435,7 +439,7 @@ impl Decoder for DynamicMessageDecoder {
   #[instrument]
   fn decode(&mut self, src: &mut DecodeBuf<'_>) -> Result<Option<Self::Item>, Self::Error> {
     match decode_message(src, &self.descriptor, &self.file_descriptor_set) {
-      Ok(fields) => Ok(Some(DynamicMessage::new(&self.descriptor, fields.as_slice(), &self.file_descriptor_set))),
+      Ok(fields) => Ok(Some(DynamicMessage::new(fields.as_slice(), &self.file_descriptor_set))),
       Err(err) => {
         error!("Failed to decode the message - {err}");
         Err(Status::invalid_argument(format!("Failed to decode the message - {err}")))
@@ -467,8 +471,7 @@ mod tests {
     let descriptors = FileDescriptorSet {
       file: vec![]
     };
-    let descriptor = DescriptorProto::default();
-    let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
+    let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let path = DocPath::new("$.one.two.three").unwrap();
     expect!(message.fetch_field_value(&path)).to(be_none());
   }
@@ -487,8 +490,7 @@ mod tests {
       file: vec![]
     };
     let fields = vec![ field.clone() ];
-    let descriptor = DescriptorProto::default();
-    let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
+    let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let path = DocPath::new("one").unwrap();
     expect!(message.fetch_field_value(&path)).to(be_some().value(field));
   }
@@ -506,9 +508,8 @@ mod tests {
     let descriptors = FileDescriptorSet {
       file: vec![]
     };
-    let descriptor = DescriptorProto::default();
     let fields = vec![ field.clone() ];
-    let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
+    let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let path = DocPath::new("$.one").unwrap();
     expect!(message.fetch_field_value(&path)).to(be_some().value(field));
   }
@@ -575,8 +576,7 @@ mod tests {
     let descriptors = FileDescriptorSet {
       file: vec![]
     };
-    let descriptor = DescriptorProto::default();
-    let child_message = DynamicMessage::new(&child_descriptor, &[child_field.clone(), child_field2], &descriptors);
+    let child_message = DynamicMessage::new(&[child_field.clone(), child_field2], &descriptors);
     let mut buffer = BytesMut::new();
     child_message.write_to(&mut buffer).unwrap();
     let field = ProtobufField {
@@ -588,7 +588,7 @@ mod tests {
       descriptor: child_proto_1.clone()
     };
     let fields = vec![ field.clone() ];
-    let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
+    let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let path = DocPath::new("$.one.two").unwrap();
     expect!(message.fetch_field_value(&path)).to(be_some().value(child_field));
   }
@@ -599,8 +599,7 @@ mod tests {
     let descriptors = FileDescriptorSet {
       file: vec![]
     };
-    let descriptor = DescriptorProto::default();
-    let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
+    let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let path = DocPath::new_unwrap("$.one.two.three");
     let generators = hashmap!{
       path.clone() => RandomInt(1, 10)
@@ -623,8 +622,7 @@ mod tests {
       file: vec![]
     };
     let fields = vec![ field.clone() ];
-    let descriptor = DescriptorProto::default();
-    let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
+    let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let generators = hashmap!{
       DocPath::new_unwrap("$.two") => RandomInt(1, 10)
     };
@@ -646,8 +644,7 @@ mod tests {
       file: vec![]
     };
     let fields = vec![ field.clone() ];
-    let descriptor = DescriptorProto::default();
-    let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
+    let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let generators = hashmap!{
       DocPath::new_unwrap("$.one") => RandomInt(1, 10)
     };
@@ -662,13 +659,13 @@ mod tests {
       name: Some("two".to_string()),
       number: Some(1),
       r#type: Some(3),
-      ..FieldDescriptorProto::default()
+      .. FieldDescriptorProto::default()
     };
     let child_proto_2 = FieldDescriptorProto {
       name: Some("three".to_string()),
       number: Some(2),
       r#type: Some(3),
-      ..FieldDescriptorProto::default()
+      .. FieldDescriptorProto::default()
     };
     let child_descriptor = DescriptorProto {
       name: Some("child".to_string()),
@@ -697,7 +694,7 @@ mod tests {
     let descriptors = FileDescriptorSet {
       file: vec![]
     };
-    let child_message = DynamicMessage::new(&child_descriptor, &[child_field.clone(), child_field2], &descriptors);
+    let child_message = DynamicMessage::new(&[child_field.clone(), child_field2], &descriptors);
     let mut buffer = BytesMut::new();
     child_message.write_to(&mut buffer).unwrap();
     let field = ProtobufField {
@@ -709,8 +706,7 @@ mod tests {
       descriptor: child_proto_1.clone()
     };
     let fields = vec![ field.clone() ];
-    let descriptor = DescriptorProto::default();
-    let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
+    let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let path = DocPath::new_unwrap("$.one.two");
     let generators = hashmap!{
       path.clone() => RandomInt(1, 10)
@@ -738,8 +734,7 @@ mod tests {
       file: vec![]
     };
     let fields = vec![ field.clone() ];
-    let descriptor = DescriptorProto::default();
-    let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
+    let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let generators = hashmap!{
       DocPath::new_unwrap("$.one") => ProviderStateGenerator("a".to_string(), None)
     };
@@ -778,8 +773,7 @@ mod tests {
       file: vec![]
     };
     let fields = vec![ field.clone() ];
-    let descriptor = DescriptorProto::default();
-    let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
+    let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let generators = hashmap!{
       DocPath::new_unwrap("$.one") => ProviderStateGenerator("a".to_string(), None)
     };
@@ -811,8 +805,7 @@ mod tests {
       file: vec![]
     };
     let fields = vec![ field.clone() ];
-    let descriptor = DescriptorProto::default();
-    let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
+    let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let generators = hashmap!{
       DocPath::new_unwrap("$.one") => ProviderStateGenerator("a".to_string(), None)
     };
@@ -853,7 +846,7 @@ mod tests {
       ],
       .. DescriptorProto::default()
     };
-    let message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
+    let message = DynamicMessage::new(fields.as_slice(), &descriptors);
 
     let mut buffer = BytesMut::new();
     message.write_to(&mut buffer).unwrap();
@@ -924,7 +917,7 @@ mod tests {
       ],
       .. DescriptorProto::default()
     };
-    let message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
+    let message = DynamicMessage::new(fields.as_slice(), &descriptors);
 
     let mut buffer = BytesMut::new();
     message.write_to(&mut buffer).unwrap();
@@ -998,7 +991,7 @@ mod tests {
       ]
     };
 
-    let child_message = DynamicMessage::new(&child_descriptor, &[child_field.clone(), child_field2], &descriptors);
+    let child_message = DynamicMessage::new(&[child_field.clone(), child_field2], &descriptors);
     let mut child_buffer = BytesMut::new();
     child_message.write_to(&mut child_buffer).unwrap();
 
@@ -1011,7 +1004,7 @@ mod tests {
       descriptor: field_descriptor.clone()
     };
     let fields = vec![ field.clone() ];
-    let message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
+    let message = DynamicMessage::new(fields.as_slice(), &descriptors);
 
     let mut buffer = BytesMut::new();
     message.write_to(&mut buffer).unwrap();
@@ -1104,7 +1097,7 @@ mod tests {
       ],
       .. DescriptorProto::default()
     };
-    let message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
+    let message = DynamicMessage::new(fields.as_slice(), &descriptors);
 
     let mut buffer = BytesMut::new();
     message.write_to(&mut buffer).unwrap();
@@ -1179,7 +1172,7 @@ mod tests {
       ],
       .. DescriptorProto::default()
     };
-    let message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
+    let message = DynamicMessage::new(fields.as_slice(), &descriptors);
 
     let mut buffer = BytesMut::new();
     message.write_to(&mut buffer).unwrap();
