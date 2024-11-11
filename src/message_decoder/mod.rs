@@ -160,7 +160,7 @@ fn wire_type_for_field(descriptor: &FieldDescriptorProto) -> WireType {
 
 impl Display for ProtobufField {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    write!(f, "{}:({}, {:?}, {}) = {}", self.field_num, self.field_name, self.wire_type, self.data.type_name(), self.data)
+    write!(f, "{}:({}, {:?}, {})", self.field_num, self.field_name, self.wire_type, self.data.type_name())
   }
 }
 
