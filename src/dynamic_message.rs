@@ -179,7 +179,7 @@ impl DynamicMessage {
 
   /// Retrieve the value for a message field using the given path
   #[instrument(ret, skip(self), fields(path = %path))]
-  pub fn fetch_field_value(&mut self, path: &DocPath) -> Option<Vec<ProtobufField>> {
+  pub fn fetch_field_value(&mut self, path: &DocPath) -> Option<ProtobufField> {
     let path_tokens = path.tokens().clone();
     let mut iter = path_tokens.iter().peekable();
     if let Some(PathToken::Root) = iter.peek() {
@@ -206,12 +206,17 @@ impl DynamicMessage {
       iter.next();
       self.match_path(&mut iter, |v, segment| {
         if let Some(PathToken::Index(index)) = segment {
-          if index >= v.len() {
-            v.resize(index + 1, v[0].clone());
+          if index == 0 {
+            v.data = value.clone();
+          } else {
+            let additional_index = index - 1;
+            if additional_index >= v.additional_data.len() {
+              v.additional_data.resize(additional_index + 1, v.data.clone());
+            }
+            v.additional_data[additional_index] = value.clone();
           }
-          v[index].data = value.clone();
         } else {
-          v[0].data = value.clone();
+          v.data = value.clone();
         }
       })
     } else {
@@ -223,20 +228,18 @@ impl DynamicMessage {
     &mut self,
     path_tokens: &mut Peekable<Iter<PathToken>>,
     callback: F
-  ) -> anyhow::Result<()> where F: FnOnce(&mut Vec<ProtobufField>, Option<PathToken>) {
+  ) -> anyhow::Result<()> where F: FnOnce(&mut ProtobufField, Option<PathToken>) {
     let descriptors = self.descriptors.clone();
     let fields = &mut self.fields;
     if let Some(next) = path_tokens.next() {
       match next {
         PathToken::Root => {},
-        PathToken::Field(name) => return if let Some(field) = find_field_values(fields, name.as_str()) {
+        PathToken::Field(name) => return if let Some(field) = find_field_value(fields, name.as_str()) {
           if path_tokens.peek().is_none() {
             callback(field, None);
             Ok(())
           } else {
-            // OK to unwrap here, as if the vec was empty, find_field_values would have skipped it.
-            let first_entry = field.first_mut().unwrap();
-            match &mut first_entry.data {
+            match &mut field.data {
               ProtobufFieldData::Enum(_, _) => Err(anyhow!("Support for dynamically fetching enum values is not supported yet")),
               ProtobufFieldData::Message(data, descriptor) => {
                 let mut buffer = Bytes::copy_from_slice(data);
@@ -262,10 +265,10 @@ impl DynamicMessage {
                     Ok(())
                   } else {
                     Err(anyhow!("Path does not match any field in the message (additional path \
-                    segments can only be applied to a child message, but field type is '{}')", first_entry.data.type_name()))
+                    segments can only be applied to a child message, but field type is '{}')", field.data.type_name()))
                   }
                 }
-                Some(PathToken::Index(index)) => if first_entry.repeated_field() && path_tokens.peek().is_none() {
+                Some(PathToken::Index(index)) => if field.repeated_field() && path_tokens.peek().is_none() {
                   callback(field, Some(PathToken::Index(*index)));
                   Ok(())
                 } else {
@@ -303,23 +306,21 @@ impl DynamicMessage {
 
       for (path, generator) in generators {
         let value = self.fetch_field_value(&path);
-        if let Some(value) = value {
+        if let Some(value) = &value {
           if generator.corresponds_to_mode(mode) {
-            // OK to unwrap here, for if the vec was empty, fetch_field_value would have returned None.
-            let first_entry = value.first().unwrap();
-            match generator.generate_value(&first_entry.data, &context, &vm_boxed) {
+            match generator.generate_value(&value.data, &context, &vm_boxed) {
               Ok(generated_value) => {
                 self.set_field_value(&path, generated_value)?;
               }
               Err(err) => {
-                warn!("Failed to apply generator '{}' for field {}: {}", path, first_entry, err);
+                warn!("Failed to apply generator '{}' for field {}: {}", path, value, err);
                 if let Some(GeneratorError::ProviderStateValueIsCollection(val)) = err.downcast_ref::<GeneratorError>() {
-                  if first_entry.repeated_field() && val.wrapped.is_array() {
+                  if value.repeated_field() && val.wrapped.is_array() {
                     let array = as_array(val)?;
-                    trace!("Applying a array value ({} items) to repeated field '{}'", array.len(), first_entry.field_name);
+                    trace!("Applying a array value ({} items) to repeated field '{}'", array.len(), value.field_name);
                     for (index, dv) in array.iter().enumerate() {
                       let index_path = path_join_index(path, index);
-                      let pv = data_value_to_proto_value(&first_entry.data, dv)?;
+                      let pv = data_value_to_proto_value(&value.data, dv)?;
                       self.set_field_value(&index_path, pv)?;
                     }
                   } else {
@@ -374,13 +375,20 @@ fn as_array(data: &DataValue) -> anyhow::Result<Vec<DataValue>> {
   }
 }
 
-fn find_field_values<'a>(
+fn find_field_value<'a>(
   fields: &'a mut HashMap<u32, Vec<ProtobufField>>,
   field_name: &str
-) -> Option<&'a mut Vec<ProtobufField>> {
+) -> Option<&'a mut ProtobufField> {
   fields.iter_mut()
     .find(|(_, fields)| fields.iter().any(|field| field.field_name == field_name))
-    .map(|(_, fields)| fields)
+    .map(|(_, fields)| {
+      if fields.len() > 1 {
+        warn!("There is more than one field value, additional field values should be encoded \
+        into the field's additional_values attribute otherwise they are ignored.");
+      }
+      fields.first_mut()
+    })
+    .flatten()
 }
 
 #[derive(Debug, Clone)]
@@ -482,7 +490,7 @@ mod tests {
     let descriptor = DescriptorProto::default();
     let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
     let path = DocPath::new("one").unwrap();
-    expect!(message.fetch_field_value(&path)).to(be_some().value(fields));
+    expect!(message.fetch_field_value(&path)).to(be_some().value(field));
   }
 
   #[test]
@@ -502,7 +510,7 @@ mod tests {
     let fields = vec![ field.clone() ];
     let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
     let path = DocPath::new("$.one").unwrap();
-    expect!(message.fetch_field_value(&path)).to(be_some().value(fields));
+    expect!(message.fetch_field_value(&path)).to(be_some().value(field));
   }
 
   #[test]
@@ -582,7 +590,7 @@ mod tests {
     let fields = vec![ field.clone() ];
     let mut message = DynamicMessage::new(&descriptor, fields.as_slice(), &descriptors);
     let path = DocPath::new("$.one.two").unwrap();
-    expect!(message.fetch_field_value(&path)).to(be_some().value(vec![child_field]));
+    expect!(message.fetch_field_value(&path)).to(be_some().value(child_field));
   }
 
   #[test]
@@ -709,7 +717,7 @@ mod tests {
     };
 
     expect!(message.apply_generators(Some(&generators), &GeneratorTestMode::Provider, &hashmap!{})).to(be_ok());
-    expect!(message.fetch_field_value(&path).unwrap().first().unwrap().data.as_i64().unwrap()).to_not(be_equal_to(100));
+    expect!(message.fetch_field_value(&path).unwrap().data.as_i64().unwrap()).to_not(be_equal_to(100));
   }
 
   #[test]
@@ -740,9 +748,16 @@ mod tests {
       "a" => json!([1, 2, "3", 4])
     };
     expect!(message.apply_generators(Some(&generators), &GeneratorTestMode::Provider, &context)).to(be_ok());
-    expect!(message.proto_fields().len()).to(be_equal_to(4));
-    expect!(message.proto_fields()[0].data.as_i64().unwrap()).to(be_equal_to(1));
-    expect!(message.proto_fields()[2].data.as_i64().unwrap()).to(be_equal_to(3));
+
+    let generated_fields = message.proto_fields();
+    expect!(generated_fields.len()).to(be_equal_to(1));
+
+    let resulting_field = &generated_fields[0];
+    expect!(resulting_field.data.as_i64().unwrap()).to(be_equal_to(1));
+    expect!(resulting_field.additional_data.len()).to(be_equal_to(3));
+    expect!(resulting_field.additional_data[0].as_i64().unwrap()).to(be_equal_to(2));
+    expect!(resulting_field.additional_data[1].as_i64().unwrap()).to(be_equal_to(3));
+    expect!(resulting_field.additional_data[2].as_i64().unwrap()).to(be_equal_to(4));
   }
 
   #[test]
