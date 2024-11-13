@@ -30,7 +30,6 @@ use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorProto, Se
 use prost_types::field_descriptor_proto::Type;
 use prost_types::value::Kind;
 use serde_json::{json, Value};
-use serde_json::Value::Object;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tracing::{debug, error, instrument, trace, warn};
@@ -432,28 +431,19 @@ fn construct_protobuf_interaction_for_message(
 
 fn extract_generators(generators: &HashMap<String, Generator>) -> HashMap<String, pact_plugin_driver::proto::Generator> {
   generators.iter().filter_map(|(path, generator)| {
-    if let Some(Object(gen_values)) = generator.to_json() {
-      // TODO: Use generator.name() once pact_models 1.2.4+ is released
-      if let Some(generator_type) = gen_values.get("type") {
-        let gen_values = generator.values();
-        let values = if gen_values.is_empty() {
-          None
-        } else {
-          Some(to_proto_struct(&gen_values.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()))
-        };
-        Some((
-          path.to_string(),
-          pact_plugin_driver::proto::Generator {
-            r#type: generator_type.as_str().unwrap_or_default().to_string(),
-            values
-          }
-        ))
-      } else {
-        None
-      }
-    } else {
+    let gen_values = generator.values();
+    let values = if gen_values.is_empty() {
       None
-    }
+    } else {
+      Some(to_proto_struct(&gen_values.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()))
+    };
+    Some((
+      path.to_string(),
+      pact_plugin_driver::proto::Generator {
+        r#type: generator.name(),
+        values
+      }
+    ))
   }).collect()
 }
 

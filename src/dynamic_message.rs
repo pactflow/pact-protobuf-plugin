@@ -330,7 +330,7 @@ impl DynamicMessage {
                     let array = as_array(val)?;
                     trace!("Applying a array value ({} items) to repeated field '{}'", array.len(), value.field_name);
                     for (index, dv) in array.iter().enumerate() {
-                      let index_path = path_join_index(path, index);
+                      let index_path = path.join_index(index);
                       let pv = data_value_to_proto_value(&value.data, dv)?;
                       self.set_field_value(&index_path, pv)?;
                     }
@@ -351,26 +351,6 @@ impl DynamicMessage {
 
     Ok(())
   }
-}
-
-// TODO: Replace this with DocPath.join_index when pact_models 1.2.5 is released
-fn path_join_index(path: &DocPath, index: usize) -> DocPath {
-  let mut new_path = path.clone();
-  match path.tokens().last() {
-    Some(PathToken::Root) => { new_path.push_index(index); }
-    Some(PathToken::Field(_)) => { new_path.push_index(index); }
-    Some(PathToken::Index(_)) => { new_path.push_index(index); }
-    Some(PathToken::Star) | Some(PathToken::StarIndex) => {
-      let tokens = new_path.tokens().clone();
-      new_path = DocPath::empty();
-      for token in tokens.iter().dropping_back(1) {
-        new_path.push(token.clone());
-      }
-      new_path.push_index(index);
-    }
-    None => { new_path.push_index(index); }
-  }
-  new_path
 }
 
 fn as_array(data: &DataValue) -> anyhow::Result<Vec<DataValue>> {
