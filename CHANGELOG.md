@@ -1,3 +1,19 @@
+# 0.5.3 - Support for injecting an array of values into a repeated field
+
+* ffa56f2 - chore: Upgrade pact_models to 1.2.5 (Ronald Holshausen, Wed Nov 13 11:17:46 2024 +1100)
+* 3d60553 - refactor: Update DynamicMessage to consolidate fields into a single value by field number #73 (Ronald Holshausen, Mon Nov 11 15:55:14 2024 +1100)
+* e2e08c9 - refactor: Update value injection to push additional values into the additional_data attribute #73 (Ronald Holshausen, Mon Nov 11 15:09:38 2024 +1100)
+* 2abbed2 - refactor: Write out the additional field values when serialising a field #73 (Ronald Holshausen, Mon Nov 11 14:15:12 2024 +1100)
+* 47aa5c7 - refactor: Add an attribute to ProtobufField to capture additional values from repeated fields #73 (Ronald Holshausen, Mon Nov 11 11:16:10 2024 +1100)
+* c51337d - feat: Add some tests around injecting an array of values into a repeated field #73 (Ronald Holshausen, Wed Nov 6 16:28:56 2024 +1100)
+* 25ba86a - feat: Support injecting an array of values into a repeated field #73 (Ronald Holshausen, Wed Nov 6 16:12:09 2024 +1100)
+* 1f05ab5 - refactor: Update ProtobufField to also contain the field descriptor for the field #73 (Ronald Holshausen, Fri Nov 1 11:09:58 2024 +1100)
+* e5b9de6 - refactor: Update DynamicMessage fetch_field_value and set_field_value to return a result #73 (Ronald Holshausen, Fri Nov 1 09:39:20 2024 +1100)
+* cfb54b4 - refactor: Update DynamicMessage to store the Protobuf fields as map keyed by field number #73 (Ronald Holshausen, Thu Oct 31 16:56:56 2024 +1100)
+* 8452e25 - refactor: Pass protobuf message descriptor to DynamicMessage::new #73 (Ronald Holshausen, Thu Oct 31 16:28:08 2024 +1100)
+* a7b1218 - chore: Update dependencies (Ronald Holshausen, Thu Oct 31 09:42:30 2024 +1100)
+* 798b345 - bump version to 0.5.3 (Ronald Holshausen, Mon Aug 26 11:39:37 2024 +1000)
+
 # 0.5.2 - Bugfix Release
 
 * 7475c0f - chore: Fix pact verification request (Ronald Holshausen, Mon Aug 26 11:27:33 2024 +1000)
