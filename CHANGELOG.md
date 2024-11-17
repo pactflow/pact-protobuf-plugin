@@ -1,3 +1,8 @@
+# 0.5.4 - Bugfix Release
+
+* d6b1626 - fix: Fixed regression introduced by 0.5.3 release (Ronald Holshausen, Mon Nov 18 10:21:10 2024 +1100)
+* 7abcf38 - bump version to 0.5.4 (Ronald Holshausen, Fri Nov 15 10:36:17 2024 +1100)
+
 # 0.5.3 - Support for injecting an array of values into a repeated field
 
 * ffa56f2 - chore: Upgrade pact_models to 1.2.5 (Ronald Holshausen, Wed Nov 13 11:17:46 2024 +1100)
