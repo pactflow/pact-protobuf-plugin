@@ -5,7 +5,7 @@ use std::iter::Peekable;
 use std::slice::Iter;
 
 use anyhow::{anyhow, bail};
-use bytes::{BufMut, Bytes};
+use bytes::{Buf, BufMut, Bytes};
 use itertools::Itertools;
 use pact_matching::generators::DefaultVariantMatcher;
 use pact_models::expression_parser::DataValue;
@@ -106,6 +106,20 @@ impl DynamicMessage {
   /// Return a vector of the fields
   pub fn proto_fields(&self) -> Vec<ProtobufField> {
     self.fields.values().cloned().collect()
+  }
+
+  /// Return a flattened vector of the fields. This will expand repeated fields.
+  pub fn flatten_fields(&self) -> Vec<ProtobufField> {
+    self.fields.values()
+      .flat_map(|f| {
+        let mut result = vec![ f.clone() ];
+        if f.repeated_field() && !f.additional_data.is_empty() {
+          result.extend(f.additional_data.iter()
+            .map(|d| f.clone_with_data(d)));
+        }
+        result
+      })
+      .collect()
   }
 
   /// Encode this message to the provided buffer
@@ -416,8 +430,9 @@ impl Decoder for DynamicMessageDecoder {
   type Item = DynamicMessage;
   type Error = Status;
 
-  #[instrument]
+  #[instrument(skip_all, fields(bytes = src.remaining()))]
   fn decode(&mut self, src: &mut DecodeBuf<'_>) -> Result<Option<Self::Item>, Self::Error> {
+    trace!("Incoming bytes = {:?}", src);
     match decode_message(src, &self.descriptor, &self.file_descriptor_set) {
       Ok(fields) => Ok(Some(DynamicMessage::new(fields.as_slice(), &self.file_descriptor_set))),
       Err(err) => {

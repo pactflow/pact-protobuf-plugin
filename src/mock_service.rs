@@ -61,10 +61,12 @@ impl MockService {
     response_descriptor: DescriptorProto,
     request_metadata: MetadataMap
   ) -> Result<Response<DynamicMessage>, Status> {
+    trace!(?request, "Handling request message");
     // 1. Compare the incoming message to the request message from the interaction
     let mut expected_message_bytes = self.message.request.contents.value().unwrap_or_default();
     let expected_message = decode_message(&mut expected_message_bytes, &message_descriptor, &self.file_descriptor_set)
       .map_err(|err| Status::invalid_argument(err.to_string()))?;
+    trace!("Expected message has {} fields", expected_message.len());
     let plugin_config = self.pact.plugin_data().iter()
       .map(|pd| {
         (pd.name.clone(), PluginInteractionConfig {
@@ -76,8 +78,14 @@ impl MockService {
     let context = CoreMatchingContext::new(DiffConfig::NoUnexpectedKeys,
       &self.message.request.matching_rules.rules_for_category("body").unwrap_or_default(),
       &plugin_config);
-    let mismatches = compare(&message_descriptor, &expected_message, request.proto_fields().as_slice(), &context,
-                             &expected_message_bytes, &self.file_descriptor_set);
+    let mismatches = compare(
+      &message_descriptor,
+      &expected_message,
+      request.flatten_fields().as_slice(),
+      &context,
+      &expected_message_bytes,
+      &self.file_descriptor_set
+    );
 
     // 2. Compare any metadata from the incoming message
     let md_context = CoreMatchingContext::new(DiffConfig::NoUnexpectedKeys,
@@ -231,6 +239,7 @@ impl Service<Request<DynamicMessage>> for MockService {
 
   fn call(&mut self, req: Request<DynamicMessage>) -> Self::Future {
     let (request_metadata, _, request) = req.into_parts();
+    trace!(?request, "Incoming message received");
     let message_descriptor = self.input_message.clone();
     let response_descriptor = self.output_message.clone();
     let service = self.clone();
@@ -250,7 +259,7 @@ mod tests {
   use prost::Message;
   use prost_types::FileDescriptorSet;
   use serde_json::json;
-  use tonic::metadata::MetadataMap;
+  use tonic::metadata::{MetadataMap, MetadataKey, MetadataValue};
 
   use crate::dynamic_message::DynamicMessage;
   use crate::message_decoder::decode_message;
@@ -384,5 +393,141 @@ mod tests {
     let response_fields = response_message.proto_fields();
     let area = &response_fields[0];
     expect!(area.data.to_string()).to_not(be_equal_to("12"));
+  }
+
+  #[test_log::test(tokio::test)]
+  async fn handle_message_handles_multiple_field_values() {
+    // taken from https://github.com/pact-foundation/pact-plugins/tree/main/examples/gRPC/area_calculator
+    let descriptor_encoded = "CsoHChVhcmVhX2NhbGN1bGF0b3IucHJvdG8SD2FyZWFfY2FsY3VsYXRvciK6Ago\
+    MU2hhcGVNZXNzYWdlEjEKBnNxdWFyZRgBIAEoCzIXLmFyZWFfY2FsY3VsYXRvci5TcXVhcmVIAFIGc3F1YXJlEjoKC\
+    XJlY3RhbmdsZRgCIAEoCzIaLmFyZWFfY2FsY3VsYXRvci5SZWN0YW5nbGVIAFIJcmVjdGFuZ2xlEjEKBmNpcmNsZRg\
+    DIAEoCzIXLmFyZWFfY2FsY3VsYXRvci5DaXJjbGVIAFIGY2lyY2xlEjcKCHRyaWFuZ2xlGAQgASgLMhkuYXJlYV9jY\
+    WxjdWxhdG9yLlRyaWFuZ2xlSABSCHRyaWFuZ2xlEkYKDXBhcmFsbGVsb2dyYW0YBSABKAsyHi5hcmVhX2NhbGN1bGF\
+    0b3IuUGFyYWxsZWxvZ3JhbUgAUg1wYXJhbGxlbG9ncmFtQgcKBXNoYXBlIikKBlNxdWFyZRIfCgtlZGdlX2xlbmd0a\
+    BgBIAEoAlIKZWRnZUxlbmd0aCI5CglSZWN0YW5nbGUSFgoGbGVuZ3RoGAEgASgCUgZsZW5ndGgSFAoFd2lkdGgYAiA\
+    BKAJSBXdpZHRoIiAKBkNpcmNsZRIWCgZyYWRpdXMYASABKAJSBnJhZGl1cyJPCghUcmlhbmdsZRIVCgZlZGdlX2EYAS\
+    ABKAJSBWVkZ2VBEhUKBmVkZ2VfYhgCIAEoAlIFZWRnZUISFQoGZWRnZV9jGAMgASgCUgVlZGdlQyJICg1QYXJhbGxlbG\
+    9ncmFtEh8KC2Jhc2VfbGVuZ3RoGAEgASgCUgpiYXNlTGVuZ3RoEhYKBmhlaWdodBgCIAEoAlIGaGVpZ2h0IkQKC0FyZW\
+    FSZXF1ZXN0EjUKBnNoYXBlcxgBIAMoCzIdLmFyZWFfY2FsY3VsYXRvci5TaGFwZU1lc3NhZ2VSBnNoYXBlcyIkCgxBcm\
+    VhUmVzcG9uc2USFAoFdmFsdWUYASADKAJSBXZhbHVlMq0BCgpDYWxjdWxhdG9yEk4KDGNhbGN1bGF0ZU9uZRIdLmFyZW\
+    FfY2FsY3VsYXRvci5TaGFwZU1lc3NhZ2UaHS5hcmVhX2NhbGN1bGF0b3IuQXJlYVJlc3BvbnNlIgASTwoOY2FsY3VsY\
+    XRlTXVsdGkSHC5hcmVhX2NhbGN1bGF0b3IuQXJlYVJlcXVlc3QaHS5hcmVhX2NhbGN1bGF0b3IuQXJlYVJlc3BvbnNl\
+    IgBCHFoXaW8ucGFjdC9hcmVhX2NhbGN1bGF0b3LQAgFiBnByb3RvMw==";
+    let bytes = BASE64.decode(descriptor_encoded).unwrap();
+    let bytes1 = Bytes::copy_from_slice(bytes.as_slice());
+    let file_descriptor_set = FileDescriptorSet::decode(bytes1).unwrap();
+
+    let ac_desc = file_descriptor_set.file.iter()
+      .find(|ds| ds.name.clone().unwrap_or_default() == "area_calculator.proto")
+      .cloned()
+      .unwrap();
+    let service_desc = ac_desc.service.iter()
+      .find(|sd| sd.name.clone().unwrap_or_default() == "Calculator")
+      .unwrap();
+    let method = service_desc.method.iter()
+      .find(|md| md.name.clone().unwrap_or_default() == "calculateMulti")
+      .unwrap();
+    let input_message = ac_desc.message_type.iter()
+      .find(|md| md.name.clone().unwrap_or_default() == "AreaRequest")
+      .unwrap();
+    let output_message = ac_desc.message_type.iter()
+      .find(|md| md.name.clone().unwrap_or_default() == "AreaResponse")
+      .unwrap();
+
+    let request_bytes: &[u8] = [10, 12, 18, 10, 13, 0, 0, 64, 64, 21, 0, 0, 128, 64, 10, 7, 10, 5, 13, 0, 0, 64, 64].as_slice();
+    let pact_json = json!({
+      "interactions": [
+        {
+          "type": "Synchronous/Messages",
+          "description": "calculate rectangle area request",
+          "request": {
+            "contents": {
+              "content": BASE64.encode(request_bytes),
+              "contentType": "application/protobuf; message=AreaRequest",
+              "contentTypeHint": "BINARY",
+              "encoded": "base64"
+            },
+            "metadata": {
+              "contentType": "application/protobuf;message=.area_calculator.AreaRequest"
+            },
+            "matchingRules": {
+              "body": {
+                "$.shapes[0].rectangle.length": {
+                  "combine": "AND",
+                  "matchers": [
+                    {
+                      "match": "number"
+                    }
+                  ]
+                },
+                "$.shapes[0].rectangle.width": {
+                  "combine": "AND",
+                  "matchers": [
+                    {
+                      "match": "number"
+                    }
+                  ]
+                },
+                "$.shapes[1].square.edge_length": {
+                  "combine": "AND",
+                  "matchers": [
+                    {
+                      "match": "number"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "response": [
+            {
+              "contents": {
+                "content": "CgQAAEBB",
+                "contentType": "application/protobuf; message=.area_calculator.AreaResponse",
+                "contentTypeHint": "BINARY",
+                "encoded": "base64"
+              },
+              "metadata": {
+                "contentType": "application/protobuf;message=.area_calculator.AreaResponse"
+              }
+            }
+          ],
+          "pluginConfiguration": {
+            "protobuf": {
+              "descriptorKey": "d58838959e37498cddf51805bedf4dca",
+              "service": ".area_calculator.Calculator/calculateMulti"
+            }
+          },
+          "transport": "grpc"
+        }
+      ],
+      "metadata": {
+        "pactSpecification": { "version": "4.0" }
+      }
+    });
+
+    let pact = V4Pact::pact_from_json(&pact_json, "<>").unwrap();
+    let message = pact.interactions.first().unwrap();
+
+    let mut bytes2 = Bytes::from(b"\n\x0c\x12\n\r\0\0@@\x15\0\0\x80@\n\x07\n\x05\r\0\0@@".as_slice());
+    let fields = decode_message(&mut bytes2, input_message, &file_descriptor_set).unwrap();
+    let request = DynamicMessage::new(fields.as_slice(), &file_descriptor_set);
+
+    let mock_service = MockService {
+      file_descriptor_set: file_descriptor_set.clone(),
+      service_name: "Calculator".to_string(),
+      message: message.as_v4_sync_message().unwrap(),
+      method_descriptor: method.clone(),
+      input_message: input_message.clone(),
+      output_message: output_message.clone(),
+      server_key: "9876789".to_string(),
+      pact
+    };
+
+    let mut md = MetadataMap::new();
+    md.insert(MetadataKey::from_static("contenttype"), MetadataValue::from_static("application/protobuf;message=.area_calculator.AreaRequest"));
+    let response = mock_service.handle_message(request, input_message.clone(), output_message.clone(),
+      md).await;
+    expect!(response).to(be_ok());
   }
 }

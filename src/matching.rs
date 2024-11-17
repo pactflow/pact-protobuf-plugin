@@ -142,7 +142,7 @@ pub fn match_service(
 }
 
 /// Compare the expected message to the actual one
-#[tracing::instrument(ret, skip_all)]
+#[tracing::instrument(ret, skip_all, fields(expected_fields = expected_message.len(), actual_fields = actual_message.len()) )]
 pub(crate) fn compare(
   message_descriptor: &DescriptorProto,
   expected_message: &[ProtobufField],
@@ -205,7 +205,7 @@ fn should_use_default(descriptor: &FieldDescriptorProto) -> bool {
 /// Compare the fields of the expected and actual messages
 #[tracing::instrument(ret,
   skip_all,
-  fields(%path, expected_message_fields, actual_message_fields)
+  fields(%path, expected_fields = expected_message_fields.len(), actual_fields=actual_message_fields.len())
 )]
 pub fn compare_message(
   path: DocPath,
@@ -565,7 +565,7 @@ fn compare_value<T>(
 }
 
 /// Compare a repeated field
-#[tracing::instrument(ret, skip_all, fields(%path))]
+#[tracing::instrument(ret, skip_all, fields(%path, expected = expected_fields.len(), actual = actual_fields.len()))]
 fn compare_repeated_field(
   path: &DocPath,
   descriptor: &FieldDescriptorProto,
@@ -595,12 +595,12 @@ fn compare_repeated_field(
       }
     }
   } else if expected_fields.is_empty() && !actual_fields.is_empty() {
-    debug!("Expected an empty list, but actual has {} fields", actual_fields.len());
+    debug!("Expected an empty list, but actual has {} field(s)", actual_fields.len());
     result.push(Mismatch::BodyMismatch {
       path: path.to_string(),
       expected: None,
       actual: None,
-      mismatch: format!("Expected repeated field '{}' to be empty but received {} values",
+      mismatch: format!("Expected repeated field '{}' to be empty but received {} value(s)",
         descriptor.name.clone().unwrap_or_else(|| descriptor.number.unwrap_or_default().to_string()),
         actual_fields.len()
       )
@@ -613,10 +613,12 @@ fn compare_repeated_field(
         path: path.to_string(),
         expected: None,
         actual: None,
-        mismatch: format!("Expected repeated field '{}' to have {} values but received {} values",
+        mismatch: format!("Expected repeated field '{}' to have {} value{} but received {} value{}",
           descriptor.name.clone().unwrap_or_else(|| descriptor.number.unwrap_or_default().to_string()),
           expected_fields.len(),
-          actual_fields.len()
+          if expected_fields.len() > 1 { "s" } else { "" },
+          actual_fields.len(),
+          if actual_fields.len() > 1 { "s" } else { "" }
         )
       })
     }

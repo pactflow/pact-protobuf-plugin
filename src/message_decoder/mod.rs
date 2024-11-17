@@ -75,6 +75,15 @@ impl ProtobufField {
   pub fn repeated_field(&self) -> bool {
     is_repeated_field(&self.descriptor)
   }
+
+  /// Creates a new field that is a clone of this one but with the data set
+  pub fn clone_with_data(&self, data: &ProtobufFieldData) -> Self {
+    ProtobufField {
+      data: data.clone(),
+      additional_data: vec![],
+      .. self.clone()
+    }
+  }
 }
 
 fn default_field_data(
@@ -389,7 +398,6 @@ impl Display for ProtobufFieldData {
 /// Decodes the Protobuf message using the descriptors and returns an array of ProtobufField values.
 /// This will return a value for each field value in the incoming bytes in the same order, and will
 /// not consolidate repeated fields.
-#[tracing::instrument(ret, skip_all)]
 pub fn decode_message<B>(
   buffer: &mut B,
   descriptor: &DescriptorProto,
@@ -550,7 +558,13 @@ pub fn decode_message<B>(
     }
   }
 
-  Ok(fields.iter().sorted_by(|a, b| Ord::cmp(&a.field_num, &b.field_num)).cloned().collect())
+  let result = fields.iter()
+    .sorted_by(|a, b| Ord::cmp(&a.field_num, &b.field_num))
+    .cloned()
+    .collect_vec();
+  debug!("Decoded message has {} fields", result.len());
+  trace!("Decoded message = {:?}", result);
+  Ok(result)
 }
 
 fn decode_enum(
