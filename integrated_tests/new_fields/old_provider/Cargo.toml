@@ -6,7 +6,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-fake = "2.9.2"
+fake = "4.0.0"
 prost = "0.13.1"
 prost-types = "0.13.1"
 regex = "1.10.5"
