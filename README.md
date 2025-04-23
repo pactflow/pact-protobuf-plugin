@@ -42,7 +42,7 @@ To support compiling Protocol Buffer proto files requires a version of the [Prot
 
 ## Installation
 
-The executable binaries and plugin manifest file for the plugin can be downloaded from the project [releases page](../releases). There will be an executable for each
+The executable binaries and plugin manifest file for the plugin can be downloaded from the project [releases page](../../releases). There will be an executable for each
 operating system and architecture. If your particular operating system or architecture is not supported, please send
 a request to [support@pactflow.io](support@pactflow.io) with the details.
 
