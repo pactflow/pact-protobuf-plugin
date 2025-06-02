@@ -51,7 +51,7 @@ pact_verifier = "~1.2.4"
 prost = "0.13.1"
 prost-types = "0.13.1"
 rand = "0.8.5"
-rand_regex = "0.17.0"
+rand_regex = "0.18.0"
 regex = "1.10.5"
 regex-syntax = "0.8.4"
 reqwest = { version = "0.12.5", default-features = false, features = ["rustls-tls", "rustls-tls-native-roots", "json", "gzip", "deflate"] }
