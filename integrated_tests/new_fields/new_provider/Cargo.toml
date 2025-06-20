@@ -1,7 +1,5 @@
-[workspace]
-
 [package]
-name = "new_provider"
+name    = "new_provider"
 version = "0.1.0"
 edition = "2021"
 
@@ -14,7 +12,11 @@ tokio = { version = "1.38.1", features = ["full"] }
 tonic = "0.12.1"
 tracing = "0.1.40"
 tracing-core = "0.1.32"
-tracing-subscriber = { version = "0.3.18", features = ["env-filter", "local-time", "tracing-log"] }
+tracing-subscriber = { version = "0.3.18", features = [
+    "env-filter",
+    "local-time",
+    "tracing-log",
+] }
 
 [dev-dependencies]
 test-log = "0.2.15"
