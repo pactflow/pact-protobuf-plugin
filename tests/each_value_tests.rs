@@ -48,10 +48,10 @@ async fn each_value_test() {
   let interaction = pact.interactions.first().unwrap().as_v4_sync_message().unwrap();
   let response = interaction.response.first().unwrap();
 
-  let each_value = MatchingRule::EachValue(MatchingRuleDefinition::new("foo".to_string(), ValueType::Unknown, MatchingRule::Type, None));
+  let each_value = MatchingRule::EachValue(MatchingRuleDefinition::new("foo".to_string(), ValueType::Unknown, MatchingRule::Type, None, String::new()));
   let each_value_groups = MatchingRule::EachValue(MatchingRuleDefinition::new(
     "00000000000000000000000000000000".to_string(), ValueType::Unknown,
-    MatchingRule::Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\\*".to_string()), None));
+    MatchingRule::Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\\*".to_string()), None, String::new()));
   let matching_rules = matchingrules! {
     "body" => {
       "$.resource_permissions.*.resource.application_resource" => [ MatchingRule::Type ],

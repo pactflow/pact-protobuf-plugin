@@ -1567,24 +1567,28 @@ pub(crate) mod tests {
 
     let field = message_builder.fields.get("value");
     expect!(field).to(be_some());
-    let inner = field.unwrap();
-    expect!(inner.values.clone()).to(be_equal_to(vec![
-      MessageFieldValue {
-        name: "value".to_string(),
-        raw_value: Some("00000000000000000000000000000000".to_string()),
-        rtype: RType::String("00000000000000000000000000000000".to_string())
-      }
-    ]));
+        let inner = field.unwrap();
+      assert_eq!(
+          inner.values,
+          vec![MessageFieldValue {
+              name: "value".to_string(),
+              raw_value: Some("00000000000000000000000000000000".to_string()),
+              rtype: RType::String("00000000000000000000000000000000".to_string()),
+          }],
+      );
 
-    expect!(matching_rules).to(be_equal_to(matchingrules_list! {
-      "body";
-      "$.value" => [
-        pact_models::matchingrules::MatchingRule::EachValue(
-          MatchingRuleDefinition::new("00000000000000000000000000000000".to_string(),
-            ValueType::Unknown, pact_models::matchingrules::MatchingRule::Type, None)
-        )
-      ]
-    }));
+        assert_eq!(
+        matching_rules,
+        matchingrules_list! {
+          "body";
+          "$.value" => [
+            pact_models::matchingrules::MatchingRule::EachValue(
+              MatchingRuleDefinition::new("00000000000000000000000000000000".to_string(),
+                ValueType::String, pact_models::matchingrules::MatchingRule::Type, None, "eachValue(matching(type, '00000000000000000000000000000000'))".to_owned())
+            )
+          ]
+        }
+    );
   }
 
   #[test_log::test]

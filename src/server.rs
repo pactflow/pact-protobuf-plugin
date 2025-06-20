@@ -1165,7 +1165,7 @@ fn get_interaction_config(config: &PluginConfiguration) -> anyhow::Result<BTreeM
 
 fn mismatch_to_proto_mismatch(mismatch: &Mismatch) -> proto::ContentMismatch {
   match mismatch {
-    Mismatch::MethodMismatch { expected, actual } => {
+    Mismatch::MethodMismatch { expected, actual, .. } => {
       proto::ContentMismatch {
         expected: Some(expected.as_bytes().to_vec()),
         actual: Some(actual.as_bytes().to_vec()),
