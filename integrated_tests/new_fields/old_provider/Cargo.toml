@@ -17,7 +17,7 @@ tracing-core = "0.1.32"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "local-time", "tracing-log"] }
 
 [dev-dependencies]
-test-log = "0.2.15"
+test-log = "=0.2.15"
 
 [build-dependencies]
 tonic-build = "0.12.1"
