@@ -88,13 +88,13 @@ impl GenerateValue<ProtobufFieldData> for Generator {
         ProtobufFieldData::String(_) => Ok(ProtobufFieldData::String(generate_ascii_string(*size as usize))),
         _ => Err(anyhow!("Could not generate a random string from {}", value))
       },
-      Generator::Regex(ref regex) => match value {
+      Generator::Regex(regex) => match value {
         ProtobufFieldData::String(_) => {
           let mut parser = regex_syntax::ParserBuilder::new().unicode(false).build();
           match parser.parse(regex) {
             Ok(hir) => {
-              let gen = rand_regex::Regex::with_hir(hir, 20).unwrap();
-              Ok(ProtobufFieldData::String(rand::thread_rng().sample::<String, _>(gen)))
+              let gen_regex = rand_regex::Regex::with_hir(hir, 20).unwrap();
+              Ok(ProtobufFieldData::String(rand::thread_rng().sample::<String, _>(gen_regex)))
             },
             Err(err) => {
               warn!("'{}' is not a valid regular expression - {}", regex, err);
@@ -104,7 +104,7 @@ impl GenerateValue<ProtobufFieldData> for Generator {
         }
         _ => Err(anyhow!("Could not generate a random regex from {}", value))
       },
-      Generator::Date(ref format, exp) => {
+      Generator::Date(format, exp) => {
         let base = match context.get("baseDate") {
           None => Local::now(),
           Some(d) => json_to_string(d).parse::<DateTime<Local>>()?
@@ -130,7 +130,7 @@ impl GenerateValue<ProtobufFieldData> for Generator {
           }
         })
       },
-      Generator::Time(ref format, exp) => {
+      Generator::Time(format, exp) => {
         let base = match context.get("baseTime") {
           None => Local::now(),
           Some(d) => json_to_string(d).parse::<DateTime<Local>>()?
@@ -156,7 +156,7 @@ impl GenerateValue<ProtobufFieldData> for Generator {
           }
         })
       },
-      Generator::DateTime(ref format, exp) => {
+      Generator::DateTime(format, exp) => {
         let base = match context.get("baseDateTime") {
           None => Local::now(),
           Some(d) => json_to_string(d).parse::<DateTime<Local>>()?
@@ -183,7 +183,7 @@ impl GenerateValue<ProtobufFieldData> for Generator {
         })
       },
       Generator::RandomBoolean => {
-        let b = thread_rng().gen::<bool>();
+        let b = thread_rng().r#gen::<bool>();
         match value {
           ProtobufFieldData::String(_) => Ok(ProtobufFieldData::String(b.to_string())),
           ProtobufFieldData::Boolean(_) => Ok(ProtobufFieldData::Boolean(b)),
@@ -196,7 +196,7 @@ impl GenerateValue<ProtobufFieldData> for Generator {
           _ => Err(anyhow!("Can not generate a boolean value for a field type {:?}", value))
         }
       },
-      Generator::ProviderStateGenerator(ref exp, ref dt) => {
+      Generator::ProviderStateGenerator(exp, dt) => {
         let provider_state_config = if let Some(Object(psc)) = context.get("providerState") {
           psc
             .iter()

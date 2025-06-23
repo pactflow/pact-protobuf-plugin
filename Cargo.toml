@@ -14,7 +14,7 @@ members = [
 [package]
 name = "pact-protobuf-plugin"
 version = "0.5.5"
-edition = "2021"
+edition = "2024"
 authors = ["Ronald Holshausen <ronald.holshausen@gmail.com>"]
 description = "Pact plugin for Protobufs and gRPC"
 homepage = "http://www.pactflow.io"
