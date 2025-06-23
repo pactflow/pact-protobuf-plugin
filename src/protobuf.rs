@@ -1581,7 +1581,8 @@ pub(crate) mod tests {
       "$.value" => [
         pact_models::matchingrules::MatchingRule::EachValue(
           MatchingRuleDefinition::new("00000000000000000000000000000000".to_string(),
-            ValueType::Unknown, pact_models::matchingrules::MatchingRule::Type, None)
+            ValueType::String, pact_models::matchingrules::MatchingRule::Type, None,
+            "eachValue(matching(type, '00000000000000000000000000000000'))".to_string())
         )
       ]
     }));

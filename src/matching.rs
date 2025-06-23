@@ -1095,7 +1095,7 @@ mod tests {
     let context = CoreMatchingContext::new(DiffConfig::AllowUnexpectedKeys, &matchingrules_list! {
       "body";
       "$.value" => [
-        MatchingRule::EachValue(MatchingRuleDefinition::new("00000000000000000000000000000000".to_string(), ValueType::Unknown, MatchingRule::Type, None))
+        MatchingRule::EachValue(MatchingRuleDefinition::new("00000000000000000000000000000000".to_string(), ValueType::Unknown, MatchingRule::Type, None, "".to_string()))
       ]
     }, &hashmap!{});
     let expected = vec![
@@ -1158,10 +1158,10 @@ mod tests {
       .find(|field| field.name.clone().unwrap_or_default() == "groups")
       .unwrap();
 
-    let each_value = MatchingRule::EachValue(MatchingRuleDefinition::new("foo".to_string(), ValueType::Unknown, MatchingRule::Type, None));
+    let each_value = MatchingRule::EachValue(MatchingRuleDefinition::new("foo".to_string(), ValueType::Unknown, MatchingRule::Type, None, "".to_string()));
     let each_value_groups = MatchingRule::EachValue(MatchingRuleDefinition::new(
       "00000000000000000000000000000000".to_string(), ValueType::Unknown,
-      MatchingRule::Regex(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\*".to_string()), None));
+      MatchingRule::Regex(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\*".to_string()), None, "".to_string()));
     let matching_rules = matchingrules! {
       "body" => {
         "$.resource_permissions.*.resource.application_resource" => [ MatchingRule::Type ],

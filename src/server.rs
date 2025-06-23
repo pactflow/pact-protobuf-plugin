@@ -1053,7 +1053,9 @@ impl PactPlugin for ProtobufPactPlugin {
       None => HashMap::default()
     };
 
-    let config = request.config.as_ref().map(proto_struct_to_map).unwrap_or_default();
+    let config = request.config.as_ref()
+      .map(proto_struct_to_map)
+      .unwrap_or_default();
     match verify_interaction(&pact, &interaction, &body, &metadata, &config).await {
       Ok((result, output)) => {
         let results = result.iter()
@@ -1165,12 +1167,12 @@ fn get_interaction_config(config: &PluginConfiguration) -> anyhow::Result<BTreeM
 
 fn mismatch_to_proto_mismatch(mismatch: &Mismatch) -> proto::ContentMismatch {
   match mismatch {
-    Mismatch::MethodMismatch { expected, actual } => {
+    Mismatch::MethodMismatch { expected, actual, mismatch } => {
       proto::ContentMismatch {
         expected: Some(expected.as_bytes().to_vec()),
         actual: Some(actual.as_bytes().to_vec()),
-        mismatch: "Method mismatch".to_string(),
-        ..proto::ContentMismatch::default()
+        mismatch: mismatch.clone(),
+        .. proto::ContentMismatch::default()
       }
     }
     Mismatch::PathMismatch { expected, actual, mismatch } => {
@@ -1178,7 +1180,7 @@ fn mismatch_to_proto_mismatch(mismatch: &Mismatch) -> proto::ContentMismatch {
         expected: Some(expected.as_bytes().to_vec()),
         actual: Some(actual.as_bytes().to_vec()),
         mismatch: mismatch.clone(),
-        ..proto::ContentMismatch::default()
+        .. proto::ContentMismatch::default()
       }
     }
     Mismatch::StatusMismatch { expected, actual, mismatch } => {
@@ -1186,7 +1188,7 @@ fn mismatch_to_proto_mismatch(mismatch: &Mismatch) -> proto::ContentMismatch {
         expected: Some(expected.to_string().as_bytes().to_vec()),
         actual: Some(actual.to_string().as_bytes().to_vec()),
         mismatch: mismatch.clone(),
-        ..proto::ContentMismatch::default()
+        .. proto::ContentMismatch::default()
       }
     }
     Mismatch::QueryMismatch { expected, actual, mismatch, .. } => {
@@ -1194,7 +1196,7 @@ fn mismatch_to_proto_mismatch(mismatch: &Mismatch) -> proto::ContentMismatch {
         expected: Some(expected.as_bytes().to_vec()),
         actual: Some(actual.as_bytes().to_vec()),
         mismatch: mismatch.clone(),
-        ..proto::ContentMismatch::default()
+        .. proto::ContentMismatch::default()
       }
     }
     Mismatch::HeaderMismatch { expected, actual, mismatch, .. } => {
@@ -1202,7 +1204,7 @@ fn mismatch_to_proto_mismatch(mismatch: &Mismatch) -> proto::ContentMismatch {
         expected: Some(expected.as_bytes().to_vec()),
         actual: Some(actual.as_bytes().to_vec()),
         mismatch: mismatch.clone(),
-        ..proto::ContentMismatch::default()
+        .. proto::ContentMismatch::default()
       }
     }
     Mismatch::BodyTypeMismatch { expected, actual, mismatch, .. } => {
@@ -1210,7 +1212,7 @@ fn mismatch_to_proto_mismatch(mismatch: &Mismatch) -> proto::ContentMismatch {
         expected: Some(expected.as_bytes().to_vec()),
         actual: Some(actual.as_bytes().to_vec()),
         mismatch: mismatch.clone(),
-        ..proto::ContentMismatch::default()
+        .. proto::ContentMismatch::default()
       }
     }
     Mismatch::BodyMismatch { path, expected, actual, mismatch } => {
@@ -1219,7 +1221,7 @@ fn mismatch_to_proto_mismatch(mismatch: &Mismatch) -> proto::ContentMismatch {
         actual: actual.as_ref().map(|v| v.to_vec()),
         mismatch: mismatch.clone(),
         path: path.clone(),
-        ..proto::ContentMismatch::default()
+        .. proto::ContentMismatch::default()
       }
     }
     Mismatch::MetadataMismatch { key, expected, actual, mismatch } => {
@@ -1228,7 +1230,7 @@ fn mismatch_to_proto_mismatch(mismatch: &Mismatch) -> proto::ContentMismatch {
         actual: Some(actual.as_bytes().to_vec()),
         mismatch: mismatch.clone(),
         path: key.clone(),
-        ..proto::ContentMismatch::default()
+        .. proto::ContentMismatch::default()
       }
     }
   }

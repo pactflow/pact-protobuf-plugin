@@ -1,6 +1,6 @@
 //! Module with all the functions to verify a gRPC interaction
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Display, Formatter};
 
 use ansi_term::Colour::{Green, Red};
@@ -63,7 +63,7 @@ pub async fn verify_interaction(
   interaction: &SynchronousMessage,
   request_body: &OptionalBody,
   metadata: &HashMap<String, proto::MetadataValue>,
-  config: &HashMap<String, Value>
+  config: &BTreeMap<String, Value>
 ) -> anyhow::Result<(Vec<VerificationMismatchResult>, Vec<String>)> {
   debug!("Verifying interaction {}", interaction);
   trace!(?interaction, ?metadata, ?config, ?request_body, ?pact);
@@ -289,7 +289,7 @@ fn verify_metadata(
 
 async fn make_grpc_request(
   request: Request<DynamicMessage>,
-  config: &HashMap<String, Value>,
+  config: &BTreeMap<String, Value>,
   metadata: &HashMap<String, proto::MetadataValue>,
   file_desc: &FileDescriptorSet,
   input_desc: &DescriptorProto,
