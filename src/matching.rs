@@ -802,6 +802,7 @@ mod tests {
 
   use crate::message_decoder::ProtobufField;
   use crate::utils::find_enum_by_name;
+  use crate::matching::tests::WireType::Varint;
 
   use super::*;
 
@@ -1482,5 +1483,70 @@ mod tests {
       proto3_optional: None
     };
     expect!(should_use_default(&field)).to(be_false());
+  }
+
+  // Issue https://github.com/pactflow/pact-protobuf-plugin/issues/197
+  #[test_log::test]
+  #[ignore]
+  fn compare_repeated_field_with_no_consumer_expectation() {
+    let path = DocPath::new_unwrap("$.some_enum");
+    let descriptor = FieldDescriptorProto {
+      name: Some("some_enum".to_string()),
+      number: Some(4),
+      label: Some(Label::Repeated as i32),
+      r#type: Some(Type::Enum as i32),
+      type_name: Some(".repeated_enum.SomeEnum".to_string()),
+      json_name: Some("someEnum".to_string()),
+      .. FieldDescriptorProto::default()
+    };
+    let enum_descriptor = EnumDescriptorProto {
+      name: Some("SomeEnum".to_string()),
+      value: vec![
+        EnumValueDescriptorProto {
+          name: Some("SOME_ENUM_UNSPECIFIED".to_string()),
+          number: Some(0),
+          options: None
+        },
+        EnumValueDescriptorProto {
+          name: Some("SOME_ENUM_VALUE_1".to_string()),
+          number: Some(1),
+          options: None
+        },
+        EnumValueDescriptorProto {
+          name: Some("SOME_ENUM_VALUE_2".to_string()),
+          number: Some(2),
+          options: None
+        }
+      ],
+      .. EnumDescriptorProto::default()
+    };
+
+    let expected_fields = vec![];
+    let actual_fields = vec![
+      ProtobufField {
+        field_num: 4,
+        field_name: "some_enum".to_string(),
+        wire_type: Varint,
+        data: ProtobufFieldData::Enum(1, enum_descriptor.clone()),
+        additional_data: vec![],
+        descriptor: descriptor.clone()
+      },
+      ProtobufField {
+        field_num: 4,
+        field_name: "some_enum".to_string(),
+        wire_type: Varint,
+        data: ProtobufFieldData::Enum(2, enum_descriptor.clone()),
+        additional_data: vec![],
+        descriptor: descriptor.clone()
+      }
+    ];
+    let context = CoreMatchingContext::new(DiffConfig::AllowUnexpectedKeys,
+      &MatchingRuleCategory::empty("body"), &hashmap!{});
+    let fds = FileDescriptorSet {
+      file: vec![]
+    };
+
+    let result = compare_repeated_field(&path, &descriptor, expected_fields.as_slice(), actual_fields.as_slice(), &context, &fds);
+    expect!(result).to(be_equal_to(vec![]));
   }
 }

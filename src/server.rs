@@ -716,7 +716,9 @@ impl PactPlugin for ProtobufPactPlugin {
     debug!("Configure interaction request for content type '{}': {:?}", message.content_type, message);
 
     // Check for the "pact:proto" key
-    let fields = message.contents_config.as_ref().map(|config| config.fields.clone()).unwrap_or_default();
+    let fields = message.contents_config.as_ref()
+      .map(|config| config.fields.clone())
+      .unwrap_or_default();
     let proto_file = match fields.get("pact:proto").and_then(proto_value_to_string) {
       Some(pf) => pf,
       None => {

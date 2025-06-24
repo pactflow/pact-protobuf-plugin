@@ -171,10 +171,20 @@ fn configure_protobuf_service(
   construct_protobuf_interaction_for_service(service_descriptor, config, method_name, all_descriptors)
     .map(|(request, response)| {
       let plugin_configuration = Some(PluginConfiguration {
-        interaction_configuration: Some(to_proto_struct(&hashmap! {
-            "service".to_string() => Value::String(service_full_name),
-            "descriptorKey".to_string() => Value::String(descriptor_hash.to_string())
-        })),
+        interaction_configuration: Some(Struct {
+          fields: btreemap!{
+            "service".to_string() => prost_string(service_full_name),
+            "descriptorKey".to_string() => prost_string(descriptor_hash.to_string()),
+            "expectations".to_string() => prost_types::Value {
+              kind: Some(Kind::StructValue(Struct {
+                fields: config.iter()
+                  .filter(|(key, _)| !key.starts_with("pact:"))
+                  .map(|(k, v)| (k.clone(), v.clone()))
+                  .collect()
+              }))
+            }
+          },
+        }),
         pact_configuration: None
       });
       trace!("request = {request:?}");
@@ -318,7 +328,8 @@ fn configure_protobuf_message(
   trace!(">> configure_protobuf_message({}, {:?})", message_name, descriptor_hash);
   debug!("Looking for message '{}' in '{}'", message_name, descriptor.name());
   let message_descriptor = descriptor.message_type
-    .iter().find(|p| p.name() == message_name)
+    .iter()
+    .find(|p| p.name() == message_name)
     .ok_or_else(|| anyhow!("Did not find a descriptor for message '{}' in '{}'", message_name, descriptor.name()))?;
   let message_full_name = to_fully_qualified_name(message_name, descriptor.package())?;
   construct_protobuf_interaction_for_message(message_descriptor, config, "", descriptor, all_descriptors, None)
@@ -409,6 +420,18 @@ fn construct_protobuf_interaction_for_message(
     }
   }
 
+  let expectations = Struct {
+    fields: btreemap!{
+      "expectations".to_string() => prost_types::Value {
+        kind: Some(Kind::StructValue(Struct {
+          fields: config.iter()
+            .filter(|(key, _)| !key.starts_with("pact:"))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+        }))
+      }
+    }
+  };
   Ok(InteractionResponse {
     contents: Some(Body {
       content_type: content_type.clone(),
@@ -425,6 +448,10 @@ fn construct_protobuf_interaction_for_message(
     part_name: message_part.to_string(),
     metadata_rules: metadata.map(|md| extract_rules(&md.matching_rules)).unwrap_or_default(),
     metadata_generators: metadata.map(|md| extract_generators(&md.generators)).unwrap_or_default(),
+    plugin_configuration: Some(PluginConfiguration {
+      interaction_configuration: Some(expectations),
+      pact_configuration: None
+    }),
     .. InteractionResponse::default()
   })
 }
@@ -1309,6 +1336,7 @@ pub(crate) mod tests {
     construct_message_field,
     construct_protobuf_interaction_for_message,
     construct_protobuf_interaction_for_service,
+    configure_protobuf_service,
     request_part,
     response_part,
     value_for_type
@@ -1453,9 +1481,9 @@ pub(crate) mod tests {
       reserved_name: vec![]
     };
     let config = btreemap! {
-      "implementation".to_string() => prost_types::Value { kind: Some(prost_types::value::Kind::StringValue("notEmpty('plugin-driver-rust')".to_string())) },
-      "version".to_string() => prost_types::Value { kind: Some(prost_types::value::Kind::StringValue("matching(semver, '0.0.0')".to_string())) },
-      "hash".to_string() => prost_types::Value { kind: Some(prost_types::value::Kind::StringValue("matching(integer, 1234)".to_string())) }
+      "implementation".to_string() => prost_types::Value { kind: Some(StringValue("notEmpty('plugin-driver-rust')".to_string())) },
+      "version".to_string() => prost_types::Value { kind: Some(StringValue("matching(semver, '0.0.0')".to_string())) },
+      "hash".to_string() => prost_types::Value { kind: Some(StringValue("matching(integer, 1234)".to_string())) }
     };
 
     let result = construct_protobuf_interaction_for_message(&message_descriptor, &config,
@@ -1493,6 +1521,15 @@ pub(crate) mod tests {
       |}
       |```
       |".trim_margin().unwrap()));
+
+    let interaction_config = result.plugin_configuration.unwrap().interaction_configuration.unwrap();
+    expect!(interaction_config.fields).to(be_equal_to(btreemap!{
+      "expectations".to_string() => prost_types::Value {
+        kind: Some(StructValue(Struct {
+          fields: config
+        }))
+      }
+    }));
   }
 
   const DESCRIPTORS_FOR_EACH_VALUE_TEST: [u8; 267] = [
@@ -1810,6 +1847,77 @@ pub(crate) mod tests {
     let result = construct_protobuf_interaction_for_service(
       &service_descriptor, &config, "call", &hashmap!{ "file".to_string() => &file_descriptor });
     expect!(result).to(be_ok());
+  }
+
+  #[test_log::test]
+  fn construct_protobuf_interaction_for_service_stores_the_expectations_against_the_interaction() {
+    let string_descriptor = DescriptorProto {
+      name: Some("StringValue".to_string()),
+      field: vec![
+        FieldDescriptorProto {
+          name: Some("value".to_string()),
+          number: Some(1),
+          r#type: Some(field_descriptor_proto::Type::String as i32),
+          type_name: Some("string".to_string()),
+          .. FieldDescriptorProto::default()
+        }
+      ],
+      .. DescriptorProto::default()
+    };
+    let message_descriptor = DescriptorProto {
+      name: Some("test_message".to_string()),
+      field: vec![
+        FieldDescriptorProto {
+          name: Some("value".to_string()),
+          number: Some(1),
+          r#type: Some(field_descriptor_proto::Type::String as i32),
+          type_name: Some("string".to_string()),
+          .. FieldDescriptorProto::default()
+        }
+      ],
+      .. DescriptorProto::default()
+    };
+
+    let service_descriptor = ServiceDescriptorProto {
+      name: Some("test_service".to_string()),
+      method: vec![
+        MethodDescriptorProto {
+          name: Some("call".to_string()),
+          input_type: Some(".test_package.StringValue".to_string()),
+          output_type: Some(".test_package.test_message".to_string()),
+          .. MethodDescriptorProto::default()
+        }
+      ],
+      .. ServiceDescriptorProto::default()
+    };
+    let file_descriptor = FileDescriptorProto {
+      name: Some("test_file.proto".to_string()),
+      message_type: vec![ string_descriptor, message_descriptor ],
+      service: vec![service_descriptor],
+      package: Some("test_package".to_string()),
+      .. FileDescriptorProto::default()
+    };
+
+    let config = btreemap! {
+      "request".to_string() => prost_types::Value {
+        kind: Some(prost_types::value::Kind::StringValue("true".to_string()))
+      },
+      "response".to_string() => prost_types::Value {
+        kind: Some(prost_types::value::Kind::StringValue("true".to_string()))
+      }
+    };
+
+    let (result, _) = configure_protobuf_service("test_service/call", &config, &file_descriptor,
+      &hashmap!{ "test_file.proto".to_string() => &file_descriptor }, "xxx")
+      .unwrap();
+    let interaction_config = result.unwrap().plugin_configuration.unwrap().interaction_configuration.unwrap();
+    expect!(interaction_config.fields.get("expectations").unwrap()).to(be_equal_to(
+      &prost_types::Value {
+        kind: Some(StructValue(Struct {
+          fields: config
+        }))
+      }
+    ));
   }
 
   lazy_static! {

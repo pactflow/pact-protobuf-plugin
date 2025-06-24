@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package repeated_enum;
+
+enum SomeEnum {
+  SOME_ENUM_UNSPECIFIED = 0;
+  SOME_ENUM_VALUE_1 = 1;
+  SOME_ENUM_VALUE_2 = 2;
+}
+
+message Point {
+  double x = 1;
+  double y = 2;
+}
+
+message Feature {
+  string name = 1;
+  Point location = 2;
+  string description = 3;
+  repeated SomeEnum some_enum = 4;
+}
+
+service FeatureService {
+  rpc GetFeature(Point) returns (Feature);
+}
