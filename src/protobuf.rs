@@ -310,10 +310,7 @@ fn request_part(
         }
       })
     });
-    match config {
-      None => Ok(btreemap!{}),
-      Some(result) => result
-    }
+    config.unwrap_or_else(|| Ok(btreemap! {}))
   }
 }
 

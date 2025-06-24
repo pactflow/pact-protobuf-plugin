@@ -40,7 +40,7 @@ pub(crate) struct MockService {
 
 impl MockService {
   /// Handle the gRPC call. Compare the incoming message to the expected request message, respond with 
-  /// the expected response mesage.
+  /// the expected response message.
   /// 
   /// Stores comparison results in `MOCK_SERVER_STATE` for later retrieval.
   /// 

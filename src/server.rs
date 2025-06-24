@@ -24,7 +24,7 @@ use pact_models::prelude::{ContentType, MatchingRuleCategory, OptionalBody, Rule
 use pact_models::v4::sync_message::SynchronousMessage;
 use pact_plugin_driver::plugin_models::PactPluginManifest;
 use pact_plugin_driver::proto;
-use pact_plugin_driver::proto::{Body, body, CompareContentsRequest, CompareContentsResponse, ConfigureInteractionResponse, GenerateContentRequest, GenerateContentResponse, MetadataValue, MockServerResult, PluginConfiguration, VerificationPreparationResponse};
+use pact_plugin_driver::proto::{Body, body, CompareContentsRequest, CompareContentsResponse, ConfigureInteractionResponse, GenerateContentRequest, GenerateContentResponse, MetadataValue, MockServerResult, PluginConfiguration, StartMockServerResponse, VerificationPreparationResponse, VerifyInteractionResponse};
 use pact_plugin_driver::proto::body::ContentTypeHint;
 use pact_plugin_driver::proto::catalogue_entry::EntryType;
 use pact_plugin_driver::proto::generate_content_request::TestMode;
@@ -584,6 +584,20 @@ impl ProtobufPactPlugin {
       .. ConfigureInteractionResponse::default()
     })
   }
+
+  fn start_mock_server_error<S: Into<String>>(err: S) -> Response<StartMockServerResponse> {
+    tonic::Response::new(proto::StartMockServerResponse {
+      response: Some(proto::start_mock_server_response::Response::Error(err.into())),
+      .. proto::StartMockServerResponse::default()
+    })
+  }
+
+  fn verify_interaction_error<S: Into<String>>(err: S) -> Response<VerifyInteractionResponse> {
+    Response::new(proto::VerifyInteractionResponse {
+      response: Some(proto::verify_interaction_response::Response::Error(err.into())),
+      .. proto::VerifyInteractionResponse::default()
+    })
+  }
 }
 
 /// Generate contents for the interaction
@@ -782,10 +796,7 @@ impl PactPlugin for ProtobufPactPlugin {
     let request = request.get_ref();
     let pact = match parse_pact_from_request_json(request.pact.as_str(), "grpc:start_mock_server") {
       Ok(pact) => pact,
-      Err(err) => return Ok(tonic::Response::new(proto::StartMockServerResponse {
-        response: Some(proto::start_mock_server_response::Response::Error(format!("Failed to parse Pact JSON: {}", err))),
-        ..proto::StartMockServerResponse::default()
-      }))
+      Err(err) => return Ok(Self::start_mock_server_error(format!("Failed to parse Pact JSON: {}", err)))
     };
 
     trace!("Got pact {pact:?}");
@@ -793,10 +804,7 @@ impl PactPlugin for ProtobufPactPlugin {
     let plugin_config = match pact.plugin_data.iter().find(|pd| pd.name == "protobuf") {
       None => {
         error!("Provided Pact file does not have any Protobuf descriptors");
-        return Ok(tonic::Response::new(proto::StartMockServerResponse {
-          response: Some(proto::start_mock_server_response::Response::Error("Provided Pact file does not have any Protobuf descriptors".to_string())),
-          .. proto::StartMockServerResponse::default()
-        }))
+        return Ok(Self::start_mock_server_error("Provided Pact file does not have any Protobuf descriptors".to_string()))
       }
       Some(config) => config.clone()
     };
@@ -825,10 +833,7 @@ impl PactPlugin for ProtobufPactPlugin {
       }
       Err(err) => {
         error!("Failed to start gRPC mock server: {}", err);
-        return Ok(tonic::Response::new(proto::StartMockServerResponse {
-          response: Some(proto::start_mock_server_response::Response::Error(format!("Failed to start gRPC mock server: {}", err))),
-          .. proto::StartMockServerResponse::default()
-        }));
+        return Ok(Self::start_mock_server_error(format!("Failed to start gRPC mock server: {}", err)));
       }
     }
   }
@@ -994,10 +999,7 @@ impl PactPlugin for ProtobufPactPlugin {
 
     let pact = match parse_pact_from_request_json(request.pact.as_str(), "grpc:verify_interaction") {
       Ok(pact) => pact,
-      Err(err) => return Ok(Response::new(proto::VerifyInteractionResponse {
-        response: Some(proto::verify_interaction_response::Response::Error(format!("Failed to parse Pact JSON: {}", err))),
-        .. proto::VerifyInteractionResponse::default()
-      }))
+      Err(err) => return Ok(Self::verify_interaction_error(format!("Failed to parse Pact JSON: {}", err)))
     };
 
     let key = request.interaction_key.as_str();
@@ -1006,19 +1008,11 @@ impl PactPlugin for ProtobufPactPlugin {
     let interaction = match interaction_by_id {
       Some(interaction) => match interaction.as_v4_sync_message() {
         Some(interaction) => interaction,
-        None => return Ok(Response::new(proto::VerifyInteractionResponse {
-          response: Some(proto::verify_interaction_response::Response::Error(format!("gRPC interactions must be of type V4 synchronous message, got {}", interaction.type_of()))),
-          .. proto::VerifyInteractionResponse::default()
-        }))
+        None => return Ok(Self::verify_interaction_error(format!("gRPC interactions must be of type V4 synchronous message, got {}", interaction.type_of())))
       }
       None => {
         error!(?key, "Did not find an interaction that matches the given key");
-        return Ok(Response::new(proto::VerifyInteractionResponse {
-          response: Some(proto::verify_interaction_response::Response::Error(
-            format!("Did not find an interaction that matches the given key '{}'", key)
-          )),
-          ..proto::VerifyInteractionResponse::default()
-        }))
+        return Ok(Self::verify_interaction_error(format!("Did not find an interaction that matches the given key '{}'", key)))
       }
     };
 
@@ -1088,12 +1082,7 @@ impl PactPlugin for ProtobufPactPlugin {
           .. proto::VerifyInteractionResponse::default()
         }))
       }
-      Err(err) => {
-        Ok(Response::new(proto::VerifyInteractionResponse {
-          response: Some(proto::verify_interaction_response::Response::Error(err.to_string())),
-          .. proto::VerifyInteractionResponse::default()
-        }))
-      }
+      Err(err) => Ok(Self::verify_interaction_error(err.to_string()))
     }
   }
 }
