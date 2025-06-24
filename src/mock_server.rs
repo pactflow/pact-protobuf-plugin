@@ -31,7 +31,7 @@ use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::select;
 use tokio::sync::oneshot::{channel, Sender};
-use tonic::body::{BoxBody, empty_body};
+use tonic::body::Body;
 use tonic::metadata::MetadataMap;
 use tower::ServiceBuilder;
 use tower_http::ServiceBuilderExt;
@@ -201,7 +201,7 @@ impl GrpcMockServer
 }
 
 impl Service<Request<Incoming>> for GrpcMockServer  {
-  type Response = Response<BoxBody>;
+  type Response = Response<Body>;
   type Error = hyper::Error;
   type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
@@ -290,34 +290,34 @@ impl Service<Request<Incoming>> for GrpcMockServer  {
   }
 }
 
-fn invalid_media() -> Response<BoxBody> {
+fn invalid_media() -> Response<Body> {
   http::Response::builder()
     .status(415)
-    .body(empty_body())
+    .body(Body::empty())
     .unwrap()
 }
 
-fn invalid_method() -> Response<BoxBody> {
+fn invalid_method() -> Response<Body> {
   http::Response::builder()
     .status(405)
-    .body(empty_body())
+    .body(Body::empty())
     .unwrap()
 }
 
-fn invalid_path() -> Response<BoxBody> {
+fn invalid_path() -> Response<Body> {
   http::Response::builder()
     .status(200)
     .header("grpc-status", "12")
     .header("content-type", "application/grpc")
-    .body(empty_body())
+    .body(Body::empty())
     .unwrap()
 }
 
-fn failed_precondition() -> Response<BoxBody> {
+fn failed_precondition() -> Response<Body> {
   http::Response::builder()
     .status(200)
     .header("grpc-status", "9")
     .header("content-type", "application/grpc")
-    .body(empty_body())
+    .body(Body::empty())
     .unwrap()
 }
