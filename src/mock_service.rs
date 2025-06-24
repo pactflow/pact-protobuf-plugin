@@ -84,7 +84,8 @@ impl MockService {
       request.flatten_fields().as_slice(),
       &context,
       &expected_message_bytes,
-      &self.file_descriptor_set
+      &self.file_descriptor_set,
+      &hashmap!{}
     );
 
     // 2. Compare any metadata from the incoming message

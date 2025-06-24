@@ -88,6 +88,7 @@ async fn repeated_enum_test() {
       &context,
       &message_descriptor,
       &fds,
+      &hashmap!{}
     ).unwrap();
 
     expect!(result).to(be_equal_to(BodyMatchResult::Ok));

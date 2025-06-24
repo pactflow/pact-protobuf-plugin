@@ -36,7 +36,7 @@ mod tests {
               "x": "matching(number, 100)",
               "y": "matching(number, 200)"
             },
-            "description": "matching(type, 'Test Location')",
+            "description": "matching(type, 'Test Location')"
           }
         })).await;
         i

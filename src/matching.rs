@@ -1,6 +1,6 @@
 //! Functions for matching Protobuf messages
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Display, Formatter};
 
 use anyhow::anyhow;
@@ -46,7 +46,8 @@ use crate::utils::{
 /// - `actual_message_bytes` - The actual message as bytes.
 /// - `matching_rules` - Matching rules to use when comparing the messages.
 /// - `allow_unexpected_keys` - If true, allow unexpected keys in the actual message.
-/// 
+/// - `expectations` - Expectations defined in the consumer test.
+///
 /// # Returns
 /// A BodyMatchResult indicating if the messages match or not.
 pub fn match_message(
@@ -55,7 +56,8 @@ pub fn match_message(
   expected_message_bytes: &mut Bytes,
   actual_message_bytes: &mut Bytes,
   matching_rules: &MatchingRuleCategory,
-  allow_unexpected_keys: bool
+  allow_unexpected_keys: bool,
+  expectations: &HashMap<DocPath, String>
 ) -> anyhow::Result<BodyMatchResult> {
   // message_name can be a fully-qualified name (if created with a recent version of the plugin),
   // or not (if created with an older version of the plugin). find_message_descriptor_for_type can handle both.
@@ -76,7 +78,7 @@ pub fn match_message(
   let context = CoreMatchingContext::new(diff_config, matching_rules, &plugin_config);
 
   compare(&message_descriptor, &expected_message, &actual_message, &context,
-          expected_message_bytes, descriptors)
+          expected_message_bytes, descriptors, expectations)
 }
 
 /// Match a Protobuf service call, which has an input and output message.
@@ -138,7 +140,7 @@ pub fn match_service(
   // that includes both the package and the type. match_message expects this kind of input.
   match_message(message_type, descriptors,
                 expected_request, actual_request,
-                rules, allow_unexpected_keys)
+                rules, allow_unexpected_keys, &hashmap!{})
 }
 
 /// Compare the expected message to the actual one
@@ -149,7 +151,8 @@ pub(crate) fn compare(
   actual_message: &[ProtobufField],
   matching_context: &(dyn MatchingContext + Send + Sync),
   expected_message_bytes: &Bytes,
-  descriptors: &FileDescriptorSet
+  descriptors: &FileDescriptorSet,
+  expectations: &HashMap<DocPath, String>
 ) -> anyhow::Result<BodyMatchResult> {
   let actual_fields = populate_default_values(actual_message, message_descriptor, descriptors);
   if expected_message.is_empty() {
@@ -164,7 +167,8 @@ pub(crate) fn compare(
       }]
     }))
   } else {
-    compare_message(DocPath::root(), expected_message, actual_fields.as_slice(), matching_context, message_descriptor, descriptors)
+    compare_message(DocPath::root(), expected_message, actual_fields.as_slice(), matching_context,
+      message_descriptor, descriptors, expectations)
   }
 }
 
@@ -214,6 +218,7 @@ pub fn compare_message(
   matching_context: &(dyn MatchingContext + Send + Sync),
   message_descriptor: &DescriptorProto,
   descriptors: &FileDescriptorSet,
+  expectations: &HashMap<DocPath, String>,
 ) -> anyhow::Result<BodyMatchResult> {
   let mut results = hashmap!{};
 
@@ -248,7 +253,8 @@ pub fn compare_message(
       trace!(%field_name, field_no, "field is a repeated field");
       let e = expected.iter().map(|f| (*f).clone()).collect_vec();
       let a = actual.iter().map(|f| (*f).clone()).collect_vec();
-      let repeated_comparison = compare_repeated_field(&field_path, field_descriptor, &e, &a, matching_context, descriptors);
+      let repeated_comparison = compare_repeated_field(&field_path, field_descriptor,
+        &e, &a, matching_context, descriptors, expectations);
       if !repeated_comparison.is_empty() {
         results.insert(field_path.to_string(), repeated_comparison);
       }
@@ -481,7 +487,8 @@ fn compare_field(
           }
           _ => {
             debug!("Field is a normal message");
-            match compare_message(path.clone(), &expected_message, &actual_message, matching_context, message_descriptor, descriptors) {
+            match compare_message(path.clone(), &expected_message, &actual_message, matching_context,
+              message_descriptor, descriptors, &hashmap!{}) {
               Ok(result) => match result {
                 BodyMatchResult::Ok => vec![],
                 BodyMatchResult::BodyTypeMismatch { message, .. } => vec![
@@ -572,7 +579,8 @@ fn compare_repeated_field(
   expected_fields: &[ProtobufField],
   actual_fields: &[ProtobufField],
   matching_context: &(dyn MatchingContext + Send + Sync),
-  descriptors: &FileDescriptorSet
+  descriptors: &FileDescriptorSet,
+  expectations: &HashMap<DocPath, String>
 ) -> Vec<Mismatch> {
   trace!(">>> compare_repeated_field({}, {:?}, {:?})", path, expected_fields, actual_fields);
 
@@ -594,34 +602,38 @@ fn compare_repeated_field(
         result.extend(comparison.iter().map(CommonMismatch::to_body_mismatch));
       }
     }
-  } else if expected_fields.is_empty() && !actual_fields.is_empty() {
-    debug!("Expected an empty list, but actual has {} field(s)", actual_fields.len());
-    result.push(Mismatch::BodyMismatch {
-      path: path.to_string(),
-      expected: None,
-      actual: None,
-      mismatch: format!("Expected repeated field '{}' to be empty but received {} value(s)",
-        descriptor.name.clone().unwrap_or_else(|| descriptor.number.unwrap_or_default().to_string()),
-        actual_fields.len()
-      )
-    })
-  } else {
-    trace!("Comparing repeated fields as a list");
-    result.extend(compare_list_content(path, descriptor, expected_fields, actual_fields, matching_context, descriptors));
-    if expected_fields.len() != actual_fields.len() {
+  } else if expectations.contains_key(path) {
+    if expected_fields.is_empty() && !actual_fields.is_empty() {
+      debug!("Expected an empty list, but actual has {} field(s)", actual_fields.len());
       result.push(Mismatch::BodyMismatch {
         path: path.to_string(),
         expected: None,
         actual: None,
-        mismatch: format!("Expected repeated field '{}' to have {} value{} but received {} value{}",
-          descriptor.name.clone().unwrap_or_else(|| descriptor.number.unwrap_or_default().to_string()),
-          expected_fields.len(),
-          if expected_fields.len() > 1 { "s" } else { "" },
-          actual_fields.len(),
-          if actual_fields.len() > 1 { "s" } else { "" }
+        mismatch: format!("Expected repeated field '{}' to be empty but received {} value(s)",
+                          descriptor.name.clone().unwrap_or_else(|| descriptor.number.unwrap_or_default().to_string()),
+                          actual_fields.len()
         )
       })
+    } else {
+      trace!("Comparing repeated fields as a list");
+      result.extend(compare_list_content(path, descriptor, expected_fields, actual_fields, matching_context, descriptors));
+      if expected_fields.len() != actual_fields.len() {
+        result.push(Mismatch::BodyMismatch {
+          path: path.to_string(),
+          expected: None,
+          actual: None,
+          mismatch: format!("Expected repeated field '{}' to have {} value{} but received {} value{}",
+                            descriptor.name.clone().unwrap_or_else(|| descriptor.number.unwrap_or_default().to_string()),
+                            expected_fields.len(),
+                            if expected_fields.len() > 1 { "s" } else { "" },
+                            actual_fields.len(),
+                            if actual_fields.len() > 1 { "s" } else { "" }
+          )
+        })
+      }
     }
+  } else {
+    trace!("Ignoring {} as it is not defined in the expectations", path);
   }
 
   result
@@ -1072,6 +1084,7 @@ mod tests {
       &context,
       &message_descriptor,
       &fds,
+      &hashmap!{}
     ).unwrap();
 
     expect!(result).to(be_equal_to(BodyMatchResult::Ok));
@@ -1135,6 +1148,7 @@ mod tests {
       &context,
       &message_descriptor,
       &fds,
+      &hashmap!{}
     ).unwrap();
 
     expect!(result).to(be_equal_to(BodyMatchResult::Ok));
@@ -1211,6 +1225,7 @@ mod tests {
       &context,
       &message_descriptor,
       &fds,
+      &hashmap!{}
     ).unwrap();
 
     expect!(result).to(be_equal_to(BodyMatchResult::Ok));
@@ -1290,7 +1305,8 @@ mod tests {
       &[],
       &context,
       &expected_bytes,
-      &fds
+      &fds,
+      &hashmap!{}
     ).unwrap();
     expect!(result).to(be_equal_to(BodyMatchResult::Ok));
 
@@ -1310,7 +1326,8 @@ mod tests {
       actual,
       &context,
       &expected_bytes,
-      &fds
+      &fds,
+      &hashmap!{}
     ).unwrap();
     expect!(result).to(be_equal_to(BodyMatchResult::Ok));
   }
@@ -1398,7 +1415,8 @@ mod tests {
       actual,
       &context,
       &expected_bytes,
-      &fds
+      &fds,
+      &hashmap!{}
     ).unwrap();
     expect!(result).to(be_equal_to(BodyMatchResult::Ok));
 
@@ -1426,7 +1444,8 @@ mod tests {
       actual,
       &context,
       &expected_bytes,
-      &fds
+      &fds,
+      &hashmap!{}
     ).unwrap();
     expect!(result).to_not(be_equal_to(BodyMatchResult::Ok));
   }
@@ -1487,7 +1506,6 @@ mod tests {
 
   // Issue https://github.com/pactflow/pact-protobuf-plugin/issues/197
   #[test_log::test]
-  #[ignore]
   fn compare_repeated_field_with_no_consumer_expectation() {
     let path = DocPath::new_unwrap("$.some_enum");
     let descriptor = FieldDescriptorProto {
@@ -1546,7 +1564,8 @@ mod tests {
       file: vec![]
     };
 
-    let result = compare_repeated_field(&path, &descriptor, expected_fields.as_slice(), actual_fields.as_slice(), &context, &fds);
+    let result = compare_repeated_field(&path, &descriptor, expected_fields.as_slice(),
+      actual_fields.as_slice(), &context, &fds, &hashmap!{});
     expect!(result).to(be_equal_to(vec![]));
   }
 }

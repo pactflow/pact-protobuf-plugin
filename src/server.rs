@@ -24,18 +24,7 @@ use pact_models::prelude::{ContentType, MatchingRuleCategory, OptionalBody, Rule
 use pact_models::v4::sync_message::SynchronousMessage;
 use pact_plugin_driver::plugin_models::PactPluginManifest;
 use pact_plugin_driver::proto;
-use pact_plugin_driver::proto::{
-  Body,
-  body,
-  CompareContentsRequest,
-  CompareContentsResponse,
-  GenerateContentRequest,
-  GenerateContentResponse,
-  MetadataValue,
-  MockServerResult,
-  PluginConfiguration,
-  VerificationPreparationResponse
-};
+use pact_plugin_driver::proto::{Body, body, CompareContentsRequest, CompareContentsResponse, ConfigureInteractionResponse, GenerateContentRequest, GenerateContentResponse, MetadataValue, MockServerResult, PluginConfiguration, VerificationPreparationResponse};
 use pact_plugin_driver::proto::body::ContentTypeHint;
 use pact_plugin_driver::proto::catalogue_entry::EntryType;
 use pact_plugin_driver::proto::generate_content_request::TestMode;
@@ -285,7 +274,8 @@ impl ProtobufPactPlugin {
         &mut expected_body,
         &mut actual_body,
         &matching_rules,
-        request.allow_unexpected_keys
+        request.allow_unexpected_keys,
+        &hashmap!{}
       )
     } else if let Some(service_name) = service {
       debug!("Received compareContents request for service {}", service_name);
@@ -587,6 +577,13 @@ impl ProtobufPactPlugin {
       }
     }
   }
+
+  fn configure_interaction_error_response<S: Into<String>>(message: S) -> Response<ConfigureInteractionResponse> {
+    Response::new(ConfigureInteractionResponse {
+      error: message.into(),
+      .. ConfigureInteractionResponse::default()
+    })
+  }
 }
 
 /// Generate contents for the interaction
@@ -723,10 +720,7 @@ impl PactPlugin for ProtobufPactPlugin {
       Some(pf) => pf,
       None => {
         error!("Config item with key 'pact:proto' and path to the proto file is required");
-        return Ok(Response::new(proto::ConfigureInteractionResponse {
-          error: "Config item with key 'pact:proto' and path to the proto file is required".to_string(),
-          .. proto::ConfigureInteractionResponse::default()
-        }))
+        return Ok(Self::configure_interaction_error_response("Config item with key 'pact:proto' and path to the proto file is required"))
       }
     };
 
@@ -734,28 +728,19 @@ impl PactPlugin for ProtobufPactPlugin {
     if !fields.contains_key("pact:message-type") && !fields.contains_key("pact:proto-service") {
       let message = "Config item with key 'pact:message-type' and the protobuf message name or 'pact:proto-service' and the service name is required".to_string();
       error!("{}", message);
-      return Ok(Response::new(proto::ConfigureInteractionResponse {
-        error: message,
-        .. proto::ConfigureInteractionResponse::default()
-      }))
+      return Ok(Self::configure_interaction_error_response(message))
     }
 
     let plugin_config = match self.setup_plugin_config(&fields) {
       Ok(config) => config,
-      Err(err) => return Ok(Response::new(proto::ConfigureInteractionResponse {
-        error: err.to_string(),
-        ..proto::ConfigureInteractionResponse::default()
-      }))
+      Err(err) => return Ok(Self::configure_interaction_error_response(err.to_string()))
     };
     // Make sure we can execute the protobuf compiler
     let protoc = match setup_protoc(&plugin_config, &self.additional_includes(&plugin_config)).await {
       Ok(protoc) => protoc,
       Err(err) => {
         error!("Failed to invoke protoc: {}", err);
-        return Ok(tonic::Response::new(proto::ConfigureInteractionResponse {
-          error: format!("Failed to invoke protoc: {}", err),
-          .. proto::ConfigureInteractionResponse::default()
-        }))
+        return Ok(Self::configure_interaction_error_response(format!("Failed to invoke protoc: {}", err)))
       }
     };
 
@@ -770,10 +755,7 @@ impl PactPlugin for ProtobufPactPlugin {
       }
       Err(err) => {
         error!("Failed to process protobuf: {}", err);
-        Ok(Response::new(proto::ConfigureInteractionResponse {
-          error: format!("Failed to process protobuf: {}", err),
-          .. proto::ConfigureInteractionResponse::default()
-        }))
+        Ok(Self::configure_interaction_error_response(format!("Failed to process protobuf: {}", err)))
       }
     }
   }

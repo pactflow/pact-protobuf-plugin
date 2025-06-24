@@ -10,15 +10,17 @@ use bytes::BytesMut;
 use maplit::hashmap;
 use pact_matching::{BodyMatchResult, CoreMatchingContext, DiffConfig, Mismatch};
 use pact_models::json_utils::{json_to_num, json_to_string};
+use pact_models::path_exp::DocPath;
 use pact_models::prelude::OptionalBody;
 use pact_models::prelude::v4::V4Pact;
+use pact_models::v4::interaction::V4Interaction;
 use pact_models::v4::message_parts::MessageContents;
 use pact_models::v4::sync_message::SynchronousMessage;
 use pact_plugin_driver::proto;
 use pact_plugin_driver::utils::proto_value_to_string;
 use pact_verifier::verification_result::VerificationMismatchResult;
 use prost_types::{DescriptorProto, FileDescriptorSet, MethodDescriptorProto};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use tonic::{Request, Response, Status};
 use tonic::metadata::{Ascii, Binary, MetadataKey, MetadataMap, MetadataValue};
 use tower::ServiceExt;
@@ -90,8 +92,10 @@ pub async fn verify_interaction(
         let body = response.get_ref();
         trace!("gRPC metadata: {:?}", response_metadata);
         trace!("gRPC body: {:?}", body);
+        let expectations = build_expectations(interaction, "response");
+        trace!("consumer expectations: {:?}", expectations);
         let (result, verification_output) = verify_response(body, response_metadata, interaction,
-          &all_file_descriptors, &method_desc)?;
+          &all_file_descriptors, &method_desc, &expectations.unwrap_or_default())?;
 
         let status_result = if !result.is_empty() {
           Red.paint("FAILED")
@@ -150,6 +154,52 @@ pub async fn verify_interaction(
   }
 }
 
+fn build_expectations(
+  interaction: &SynchronousMessage,
+  part: &str
+) -> Option<HashMap<DocPath, String>> {
+  interaction.plugin_config()
+    .get("protobuf")
+    .and_then(|config| config.get("expectations"))
+    .and_then(|config| config.as_object())
+    .and_then(|expectations| expectations.get(part))
+    .and_then(|config| config.as_object())
+    .map(|expectations| expectations_from_json(expectations))
+}
+
+fn expectations_from_json(json: &Map<String, Value>) -> HashMap<DocPath, String> {
+  let path = DocPath::root();
+  let mut result = hashmap!{};
+  for (field, value) in json {
+    expectations_from_json_inner(&path.join(field), &mut result, value);
+  }
+  result
+}
+
+fn expectations_from_json_inner(
+  path: &DocPath,
+  acc: &mut HashMap<DocPath, String>,
+  json: &Value
+) {
+  match json {
+    Value::Array(array) => {
+      acc.insert(path.clone(), "".to_string());
+      for (index, item) in array.iter().enumerate() {
+        expectations_from_json_inner(&path.join_index(index), acc, item);
+      }
+    }
+    Value::Object(attrs) => {
+      acc.insert(path.clone(), "".to_string());
+      for (field, value) in attrs {
+        expectations_from_json_inner(&path.join(field), acc, value);
+      }
+    }
+    _ => {
+      acc.insert(path.clone(), json.to_string());
+    }
+  }
+}
+
 #[instrument]
 fn verify_error_response(
   response: &MessageContents,
@@ -201,7 +251,8 @@ fn verify_response(
   response_metadata: &MetadataMap,
   interaction: &SynchronousMessage,
   all_file_descriptors: &FileDescriptorSet,
-  method_descriptor: &MethodDescriptorProto
+  method_descriptor: &MethodDescriptorProto,
+  expectations: &HashMap<DocPath, String>
 ) -> anyhow::Result<(Vec<VerificationMismatchResult>, Vec<String>)> {
   let response = interaction.response.first().cloned()
     .unwrap_or_default();
@@ -223,7 +274,8 @@ fn verify_response(
       &mut expected_body,
       &mut actual_body.freeze(),
       &response.matching_rules.rules_for_category("body").unwrap_or_default(),
-      true
+      true,
+      expectations
     ) {
       Ok(result) => {
         debug!("Match service result: {:?}", result);
@@ -372,4 +424,46 @@ fn build_grpc_request(
     }
   }
   Ok(request)
+}
+
+#[cfg(test)]
+mod tests {
+  use expectest::prelude::*;
+  use maplit::hashmap;
+  use pact_models::path_exp::DocPath;
+  use serde_json::json;
+
+  use crate::verification::expectations_from_json;
+
+  #[test]
+  fn expectations_from_json_test() {
+    let json = json!({});
+    expect!(expectations_from_json(json.as_object().unwrap())).to(be_equal_to(hashmap!{}));
+
+    let json = json!({
+      "request": {
+        "x": "matching(number, 100)",
+        "y": "matching(number, 200)"
+      },
+      "response": {
+        "name": "matching(type, 'TestLocation')",
+        "location": {
+          "x": "matching(number, 100)",
+          "y": "matching(number, 200)"
+        },
+        "description": "matching(type, 'Test Location')"
+      }
+    });
+    expect!(expectations_from_json(json.as_object().unwrap())).to(be_equal_to(hashmap!{
+      DocPath::new_unwrap("$.request") => "".to_string(),
+      DocPath::new_unwrap("$.request.x") => "\"matching(number, 100)\"".to_string(),
+      DocPath::new_unwrap("$.request.y") => "\"matching(number, 200)\"".to_string(),
+      DocPath::new_unwrap("$.response") => "".to_string(),
+      DocPath::new_unwrap("$.response.location") => "".to_string(),
+      DocPath::new_unwrap("$.response.location.x") => "\"matching(number, 100)\"".to_string(),
+      DocPath::new_unwrap("$.response.location.y") => "\"matching(number, 200)\"".to_string(),
+      DocPath::new_unwrap("$.response.name") => "\"matching(type, 'TestLocation')\"".to_string(),
+      DocPath::new_unwrap("$.response.description") => "\"matching(type, 'Test Location')\"".to_string()
+    }));
+  }
 }
