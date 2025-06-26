@@ -31,7 +31,9 @@ async fn each_value_test() {
               "resource": {
                 "application_resource": "matching(type, 'foo')",
                 "permissions": "eachValue(matching(type, 'foo'))",
-                "groups": "eachValue(matching(regex, '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\\*', '00000000000000000000000000000000'))"
+                "groups": "eachValue(matching(regex, '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\\*', '00000000000000000000000000000000'))",
+                "roles": "atLeast(1), atMost(5), eachValue(matching(type, 'admin'))",
+                "tags": "eachValue(matching(type, 'item')), atLeast(0), atMost(3)"
               },
               "effect": {
                 "result": "ENFORCE_EFFECT_ALLOW"
@@ -58,7 +60,11 @@ async fn each_value_test() {
       "$.resource_permissions" => [ MatchingRule::Values ],
       "$.resource_permissions.*" => [ MatchingRule::Type ],
       "$.resource_permissions.*.resource.permissions" => [ each_value ],
-      "$.resource_permissions.*.resource.groups" => [ each_value_groups ]
+      "$.resource_permissions.*.resource.roles" => [ MatchingRule::EachValue(MatchingRuleDefinition::new("admin".to_string(), ValueType::Unknown, MatchingRule::Type, None, "".to_string())) ],
+      "$.resource_permissions.*.resource.roles.*" => [ MatchingRule::MinType(1), MatchingRule::MaxType(5) ],
+      "$.resource_permissions.*.resource.groups" => [ each_value_groups ],
+      "$.resource_permissions.*.resource.tags" => [ MatchingRule::EachValue(MatchingRuleDefinition::new("item".to_string(), ValueType::Unknown, MatchingRule::Type, None, "".to_string())) ],
+      "$.resource_permissions.*.resource.tags.*" => [ MatchingRule::MinType(0), MatchingRule::MaxType(3) ]
     }
   };
   assert_eq!(&matching_rules, &response.matching_rules);
