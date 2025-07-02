@@ -4,13 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio              = { version = "1", features = ["full"] }
-anyhow             = "1.0.43"
-tonic              = "0.12.1"
-prost              = "0.13.1"
-prost-types        = "0.13.1"
-tracing            = { version = "0.1", features = ["log-always"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio   = { version = "1", features = ["full"] }
+tracing = { version = "0.1", features = ["log-always"] }
 
 [dev-dependencies]
 expectest          = "0.12.0"
