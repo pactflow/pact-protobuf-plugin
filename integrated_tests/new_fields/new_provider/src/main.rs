@@ -1,5 +1,5 @@
-use fake::Fake;
 use fake::faker::name::en::{FirstName, LastName};
+use fake::Fake;
 use prost::Message;
 use tonic::transport::Server;
 use tracing::{debug, info};
@@ -19,7 +19,7 @@ pub struct UserService {}
 impl pb::user_service_server::UserService for UserService {
     async fn get_user(
         &self,
-        request: tonic::Request<GetUserRequest>
+        request: tonic::Request<GetUserRequest>,
     ) -> Result<tonic::Response<GetUserResponse>, tonic::Status> {
         let request = request.get_ref();
         info!("Request for user with ID {}", request.id);
@@ -37,7 +37,10 @@ impl pb::user_service_server::UserService for UserService {
             email_verified: true,
             ..GetUserResponse::default()
         };
-        debug!("response bytes = {:?}", response.encode_length_delimited_to_vec());
+        debug!(
+            "response bytes = {:?}",
+            response.encode_length_delimited_to_vec()
+        );
         Ok(tonic::Response::new(response))
     }
 }
@@ -45,9 +48,9 @@ impl pb::user_service_server::UserService for UserService {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let subscriber = FmtSubscriber::builder()
-      .with_env_filter(EnvFilter::from_default_env())
-      .pretty()
-      .finish();
+        .with_env_filter(EnvFilter::from_default_env())
+        .pretty()
+        .finish();
     if let Err(err) = tracing::subscriber::set_global_default(subscriber) {
         eprintln!("WARN: Failed to initialise global tracing subscriber - {err}");
     };
@@ -58,9 +61,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("UserService listening on {}", addr);
 
     Server::builder()
-      .add_service(UserServiceServer::new(service))
-      .serve(addr)
-      .await?;
+        .add_service(UserServiceServer::new(service))
+        .serve(addr)
+        .await?;
 
     Ok(())
 }

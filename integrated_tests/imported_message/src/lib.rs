@@ -17,7 +17,8 @@ mod tests {
     async fn test_proto_client() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let mut pact_builder: PactBuilderAsync = PactBuilderAsync::new_v4("grpc-consumer-rust", "imported_message");
+        let mut pact_builder: PactBuilderAsync =
+            PactBuilderAsync::new_v4("grpc-consumer-rust", "imported_message");
         let mock_server = pact_builder
             .using_plugin("protobuf", None)
             .await

@@ -17,7 +17,8 @@ mod tests {
     async fn test_proto_client() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let mut pact_builder: PactBuilderAsync = PactBuilderAsync::new_v4("grpc-consumer-rust", "imported_message");
+        let mut pact_builder: PactBuilderAsync =
+            PactBuilderAsync::new_v4("grpc-consumer-rust", "imported_message");
         let mock_server = pact_builder
             .using_plugin("protobuf", None)
             .await
@@ -82,10 +83,10 @@ mod tests {
             y: 200,
             width: 10,
             length: 20,
-            tag: Some(Tag{
+            tag: Some(Tag {
                 name: "name".to_string(),
-                value: "value".to_string()
-            })
+                value: "value".to_string(),
+            }),
         };
         let response = client.get_rectangle(request_message.into_request()).await;
         let _response_message = response.unwrap();
