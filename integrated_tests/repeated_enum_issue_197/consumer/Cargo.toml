@@ -1,5 +1,3 @@
-[workspace]
-
 [package]
 name    = "repeated_enum_consumer"
 version = "0.1.0"
