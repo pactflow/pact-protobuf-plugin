@@ -13,6 +13,6 @@ gzip_and_sum() {
     target_file=$2
     digest_file=${3:-$target_file.sha256}
 
-    gzip --stdout --best "$orig_file" > "$target_file"
-    openssl dgst -sha256 -r "$target_file" > "$digest_file"
+    gzip --stdout --best "$orig_file" >"$target_file"
+    openssl dgst -sha256 -r "$target_file" >"$digest_file"
 }
