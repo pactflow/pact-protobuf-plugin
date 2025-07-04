@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+message MessageIn {
+  string id = 1;
+}
+
+message MessageOut {
+  string name = 1;
+}
+
+service Test {
+  rpc GetTest(MessageIn) returns (MessageOut) {}
+}
