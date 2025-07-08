@@ -154,6 +154,7 @@ pub(crate) fn compare(
   descriptors: &FileDescriptorSet,
   expectations: &HashMap<DocPath, String>
 ) -> anyhow::Result<BodyMatchResult> {
+  trace!(?expectations, ">>> compare");
   let actual_fields = populate_default_values(actual_message, message_descriptor, descriptors);
   if expected_message.is_empty() {
     Ok(BodyMatchResult::Ok)
@@ -220,6 +221,7 @@ pub fn compare_message(
   descriptors: &FileDescriptorSet,
   expectations: &HashMap<DocPath, String>,
 ) -> anyhow::Result<BodyMatchResult> {
+  trace!(?expectations, ">>> compare_message");
   let mut results = hashmap!{};
 
   let fields = message_descriptor.field.iter()
@@ -582,7 +584,7 @@ fn compare_repeated_field(
   descriptors: &FileDescriptorSet,
   expectations: &HashMap<DocPath, String>
 ) -> Vec<Mismatch> {
-  trace!(">>> compare_repeated_field({}, {:?}, {:?})", path, expected_fields, actual_fields);
+  trace!(?expectations, ">>> compare_repeated_field({}, {:?}, {:?})", path, expected_fields, actual_fields);
 
   let mut result: Vec<Mismatch> = vec![];
 
@@ -633,7 +635,7 @@ fn compare_repeated_field(
       }
     }
   } else {
-    trace!("Ignoring {} as it is not defined in the expectations", path);
+    trace!(?expectations, "Ignoring {} as it is not defined in the expectations", path);
   }
 
   result

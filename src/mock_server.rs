@@ -1,5 +1,6 @@
 //! gRPC mock server implementation
 
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -26,7 +27,7 @@ use pact_models::plugins::PluginData;
 use pact_models::prelude::v4::V4Pact;
 use pact_models::v4::sync_message::SynchronousMessage;
 use prost::Message;
-use prost_types::{FileDescriptorProto, FileDescriptorSet, MethodDescriptorProto};
+use prost_types::{FileDescriptorSet, MethodDescriptorProto};
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::select;
@@ -41,10 +42,42 @@ use tracing::{debug, error, Instrument, instrument, trace, trace_span};
 use crate::dynamic_message::PactCodec;
 use crate::metadata::MetadataMatchResult;
 use crate::mock_service::MockService;
-use crate::utils::{build_grpc_route, find_message_descriptor_for_type, lookup_service_descriptors_for_interaction, parse_grpc_route, to_fully_qualified_name};
+use crate::utils::{
+  build_grpc_route,
+  find_message_descriptor_for_type,
+  lookup_service_descriptors_for_interaction,
+  parse_grpc_route,
+  to_fully_qualified_name
+};
 
 lazy_static! {
   pub static ref MOCK_SERVER_STATE: Mutex<HashMap<String, (Sender<()>, HashMap<String, (usize, Vec<(BodyMatchResult, MetadataMatchResult)>)>)>> = Mutex::new(hashmap!{});
+}
+
+/// Mock server route that maps a set of Protobuf descriptors to one or more messages
+#[derive(Debug, Clone)]
+pub struct MockServerRoute {
+  /// All descriptors
+  pub fds: FileDescriptorSet,
+  /// Method descriptor for this route
+  pub method_descriptor: MethodDescriptorProto,
+  /// Messages for this route
+  pub messages: Vec<SynchronousMessage>
+}
+
+impl MockServerRoute {
+  /// Convenience function to create a new route
+  pub fn new(
+    file_set: FileDescriptorSet,
+    method: MethodDescriptorProto,
+    i: SynchronousMessage
+  ) -> Self {
+    MockServerRoute {
+      fds: file_set,
+      method_descriptor: method,
+      messages: vec![i]
+    }
+  }
 }
 
 /// Main mock server that will use the provided Pact to provide behaviour
@@ -53,7 +86,7 @@ pub struct GrpcMockServer {
   pact: V4Pact,
   plugin_config: PluginData,
   descriptors: HashMap<String, FileDescriptorSet>,
-  routes: HashMap<String, (FileDescriptorSet, FileDescriptorProto, MethodDescriptorProto, SynchronousMessage)>,
+  routes: HashMap<String, MockServerRoute>,
   /// Server key for this mock server
   pub server_key: String,
   /// test context pass in from the test framework
@@ -106,13 +139,23 @@ impl GrpcMockServer
       match to_fully_qualified_name(service.name(), file.package()) {
         Ok(service_full_name) => {
           match build_grpc_route(service_full_name.as_str(), method.name()) {
-            Ok(route) => Some((route, (file_set.clone(), file.clone(), method.clone(), i.clone()))),
+            Ok(route) => Some((route, MockServerRoute::new(file_set, method, i))),
             Err(_) => None
           }
         },
         Err(_) => None
       }
-    }).collect();
+    }).fold(hashmap!{}, |mut acc, (key, route)| {
+      match acc.entry(key) {
+        Entry::Occupied(entry) => {
+          entry.into_mut().messages.extend_from_slice(&route.messages);
+        }
+        Entry::Vacant(entry) => {
+          entry.insert(route);
+        }
+      }
+      acc
+    });
 
     // Bind to a OS provided port and create a TCP listener
     let interface = if host_interface.is_empty() {
@@ -241,22 +284,22 @@ impl Service<Request<Incoming>> for GrpcMockServer  {
             let request_path = req.uri().path();
             debug!(?request_path, "gRPC request received");
             if let Some((service_full_name, method)) = parse_grpc_route(request_path) {
-              if let Some((file, _file_descriptor, method_descriptor, message)) = routes.get(request_path) {
+              if let Some(route) = routes.get(request_path) &&
+                 let Some(message) = route.messages.first() {
                 trace!(message = message.description.as_str(), "Found route for service call");
                 
                 let service_and_method = format!("{service_full_name}/{method}");  // just for logging
-                let input_name = method_descriptor.input_type.as_ref().expect(format!(
+                let input_name = route.method_descriptor.input_type.as_ref().expect(format!(
                   "Input message name is empty for service {}", service_and_method.as_str()).as_str());
-                let output_name = method_descriptor.output_type.as_ref().expect(format!(
+                let output_name = route.method_descriptor.output_type.as_ref().expect(format!(
                   "Output message name is empty for service {}", service_and_method.as_str()).as_str());
 
-                if let Ok((input_message, _)) = find_message_descriptor_for_type(input_name, &file) {
-                  if let Ok((output_message, _)) = find_message_descriptor_for_type(output_name, &file) {
+                let file = &route.fds;
+                if let Ok((input_message, _)) = find_message_descriptor_for_type(input_name, file) {
+                  if let Ok((output_message, _)) = find_message_descriptor_for_type(output_name, file) {
                     let codec = PactCodec::new(file, &input_message, &output_message, message);
                     let mock_service = MockService::new(file, service_full_name.as_str(),
-                      method_descriptor, &input_message, &output_message, message, server_key.as_str(),
-                      pact
-                    );
+                      route, &input_message, &output_message, server_key.as_str(), pact);
                     let mut grpc = tonic::server::Grpc::new(codec);
                     let response = grpc.unary(mock_service, req).await;
                     trace!(?response, ">> sending response");

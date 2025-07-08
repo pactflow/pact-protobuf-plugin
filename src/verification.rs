@@ -13,14 +13,13 @@ use pact_models::json_utils::{json_to_num, json_to_string};
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::OptionalBody;
 use pact_models::prelude::v4::V4Pact;
-use pact_models::v4::interaction::V4Interaction;
 use pact_models::v4::message_parts::MessageContents;
 use pact_models::v4::sync_message::SynchronousMessage;
 use pact_plugin_driver::proto;
 use pact_plugin_driver::utils::proto_value_to_string;
 use pact_verifier::verification_result::VerificationMismatchResult;
 use prost_types::{DescriptorProto, FileDescriptorSet, MethodDescriptorProto};
-use serde_json::{Map, Value};
+use serde_json::Value;
 use tonic::{Request, Response, Status};
 use tonic::metadata::{Ascii, Binary, MetadataKey, MetadataMap, MetadataValue};
 use tower::ServiceExt;
@@ -30,7 +29,11 @@ use crate::dynamic_message::{DynamicMessage, PactCodec};
 use crate::matching::match_message;
 use crate::message_decoder::decode_message;
 use crate::metadata::{compare_metadata, grpc_status, MetadataMatchResult};
-use crate::utils::{find_message_descriptor_for_type, lookup_service_descriptors_for_interaction};
+use crate::utils::{
+  build_expectations,
+  find_message_descriptor_for_type,
+  lookup_service_descriptors_for_interaction
+};
 
 #[derive(Debug)]
 struct GrpcError {
@@ -150,52 +153,6 @@ pub async fn verify_interaction(
     Err(err) => {
       error!("Failed to build gRPC request: {}", err);
       Err(anyhow!(err))
-    }
-  }
-}
-
-fn build_expectations(
-  interaction: &SynchronousMessage,
-  part: &str
-) -> Option<HashMap<DocPath, String>> {
-  interaction.plugin_config()
-    .get("protobuf")
-    .and_then(|config| config.get("expectations"))
-    .and_then(|config| config.as_object())
-    .and_then(|expectations| expectations.get(part))
-    .and_then(|config| config.as_object())
-    .map(|expectations| expectations_from_json(expectations))
-}
-
-fn expectations_from_json(json: &Map<String, Value>) -> HashMap<DocPath, String> {
-  let path = DocPath::root();
-  let mut result = hashmap!{};
-  for (field, value) in json {
-    expectations_from_json_inner(&path.join(field), &mut result, value);
-  }
-  result
-}
-
-fn expectations_from_json_inner(
-  path: &DocPath,
-  acc: &mut HashMap<DocPath, String>,
-  json: &Value
-) {
-  match json {
-    Value::Array(array) => {
-      acc.insert(path.clone(), "".to_string());
-      for (index, item) in array.iter().enumerate() {
-        expectations_from_json_inner(&path.join_index(index), acc, item);
-      }
-    }
-    Value::Object(attrs) => {
-      acc.insert(path.clone(), "".to_string());
-      for (field, value) in attrs {
-        expectations_from_json_inner(&path.join(field), acc, value);
-      }
-    }
-    _ => {
-      acc.insert(path.clone(), json.to_string());
     }
   }
 }
@@ -433,7 +390,7 @@ mod tests {
   use pact_models::path_exp::DocPath;
   use serde_json::json;
 
-  use crate::verification::expectations_from_json;
+  use crate::utils::expectations_from_json;
 
   #[test]
   fn expectations_from_json_test() {

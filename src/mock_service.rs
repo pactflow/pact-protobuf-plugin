@@ -1,11 +1,12 @@
 //! Module provides the service implementation based on a Pact interaction
 
+use std::cmp::Ordering;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use maplit::hashmap;
-use pact_matching::{CoreMatchingContext, DiffConfig};
+use pact_matching::{BodyMatchResult, CoreMatchingContext, DiffConfig};
 use pact_models::generators::{GeneratorCategory, GeneratorTestMode};
 use pact_models::json_utils::json_to_string;
 use pact_models::pact::Pact;
@@ -13,7 +14,7 @@ use pact_models::prelude::v4::V4Pact;
 use pact_models::v4::message_parts::MessageContents;
 use pact_models::v4::sync_message::SynchronousMessage;
 use pact_plugin_driver::plugin_models::PluginInteractionConfig;
-use prost_types::{DescriptorProto, FileDescriptorSet, MethodDescriptorProto};
+use prost_types::{DescriptorProto, FileDescriptorSet};
 use tonic::{Request, Response, Status};
 use tonic::metadata::{Entry, MetadataMap};
 use tower_service::Service;
@@ -22,16 +23,15 @@ use tracing::{debug, error, info, trace, warn};
 use crate::dynamic_message::DynamicMessage;
 use crate::matching::compare;
 use crate::message_decoder::decode_message;
-use crate::metadata::{compare_metadata, grpc_status};
-use crate::mock_server::MOCK_SERVER_STATE;
-use crate::utils::build_grpc_route;
+use crate::metadata::{compare_metadata, grpc_status, MetadataMatchResult};
+use crate::mock_server::{MOCK_SERVER_STATE, MockServerRoute};
+use crate::utils::{build_expectations, build_grpc_route};
 
 #[derive(Debug, Clone)]
 pub(crate) struct MockService {
   file_descriptor_set: FileDescriptorSet,
   service_name: String,
-  message: SynchronousMessage,
-  method_descriptor: MethodDescriptorProto,
+  route: MockServerRoute,
   input_message: DescriptorProto,
   output_message: DescriptorProto,
   server_key: String,
@@ -62,46 +62,26 @@ impl MockService {
     request_metadata: MetadataMap
   ) -> Result<Response<DynamicMessage>, Status> {
     trace!(?request, "Handling request message");
-    // 1. Compare the incoming message to the request message from the interaction
-    let mut expected_message_bytes = self.message.request.contents.value().unwrap_or_default();
-    let expected_message = decode_message(&mut expected_message_bytes, &message_descriptor, &self.file_descriptor_set)
+
+    // 1. Compare the incoming message to the request messages from the interactions
+    let mut match_results = self.compare_request_to_interactions(request, &message_descriptor, &request_metadata)
       .map_err(|err| Status::invalid_argument(err.to_string()))?;
-    trace!("Expected message has {} fields", expected_message.len());
-    let plugin_config = self.pact.plugin_data().iter()
-      .map(|pd| {
-        (pd.name.clone(), PluginInteractionConfig {
-          pact_configuration: pd.configuration.clone(),
-          interaction_configuration: self.message.plugin_config.get(pd.name.as_str()).cloned().unwrap_or_default()
-        })
-      }).collect();
 
-    let context = CoreMatchingContext::new(DiffConfig::NoUnexpectedKeys,
-      &self.message.request.matching_rules.rules_for_category("body").unwrap_or_default(),
-      &plugin_config);
-    let mismatches = compare(
-      &message_descriptor,
-      &expected_message,
-      request.flatten_fields().as_slice(),
-      &context,
-      &expected_message_bytes,
-      &self.file_descriptor_set,
-      &hashmap!{}
-    );
+    // 2. Find the first result with the least number of mismatches
+    if match_results.len() > 1 {
+      Self::sort_results(&mut match_results);
+    }
+    let match_result = match_results.last().ok_or_else(|| {
+      Status::invalid_argument("No match results were found for the incoming message")
+    })?;
+    trace!("final match result = {:?}, {:?}", match_result.1, match_result.2);
 
-    // 2. Compare any metadata from the incoming message
-    let md_context = CoreMatchingContext::new(DiffConfig::NoUnexpectedKeys,
-      &self.message.request.matching_rules.rules_for_category("metadata").unwrap_or_default(),
-      &plugin_config);
-    let md_mismatches = compare_metadata(&self.message.request.metadata, &request_metadata,
-      &md_context);
-
-    trace!("Comparison result = {:?}", mismatches);
-    match (mismatches, md_mismatches) {
-      (Ok(result), Ok((md_result, _))) => {
+    match match_result {
+      (message, Ok(result), Ok((md_result, _))) => {
         {
           // record the result in the static store
           let mut guard = MOCK_SERVER_STATE.lock().unwrap();
-          let method_name = self.method_descriptor.name.clone().unwrap_or_else(|| "unknown method".into());
+          let method_name = self.route.method_descriptor.name.clone().unwrap_or_else(|| "unknown method".into());
           let key = match build_grpc_route(self.service_name.as_str(), method_name.as_str()) {
             Ok(k) => k,
             Err(err) => Err(Status::internal(err.to_string()))?
@@ -118,7 +98,7 @@ impl MockService {
 
         if result.all_matched() && md_result.all_matched() {
           debug!("Request matched OK");
-          let response_contents = self.message.response.first().cloned().unwrap_or_default();
+          let response_contents = message.response.first().cloned().unwrap_or_default();
           // check for a gRPC status on the response metadata
           if let Some(status) = grpc_status(&response_contents) {
             info!("a gRPC status {} is set for the response, returning that", status);
@@ -150,15 +130,96 @@ impl MockService {
           Err(Status::failed_precondition(format!("Failed to match the request message - {result:?}")))
         }
       }
-      (Err(err), _) => {
+      (_, Err(err), _) => {
         error!("Failed to match the request message - {err}");
         Err(Status::failed_precondition(err.to_string()))
       }
-      (_, Err(err)) => {
+      (_, _, Err(err)) => {
         error!("Failed to match the request message metadata - {err}");
         Err(Status::failed_precondition(err.to_string()))
       }
     }
+  }
+
+  fn sort_results(match_results: &mut Vec<(SynchronousMessage, anyhow::Result<BodyMatchResult>, anyhow::Result<(MetadataMatchResult, Vec<String>)>)>) {
+    match_results.sort_by(|(_, a, md_a), (_, b, md_b)| {
+      match (a, md_a, b, md_b) {
+        (Err(_), Err(_), Err(_), Err(_)) => Ordering::Equal,
+        (Ok(_), Ok(_), Err(_), Err(_)) => Ordering::Less,
+        (Ok(_), Ok(_), Ok(_), Err(_)) => Ordering::Less,
+        (Ok(_), Ok(_), Err(_), Ok(_)) => Ordering::Less,
+        (Err(_), Err(_), Ok(_), Ok(_)) => Ordering::Greater,
+        (Ok(_), Err(_), Ok(_), Ok(_)) => Ordering::Greater,
+        (Ok(_), Err(_), Err(_), _) => Ordering::Greater,
+        (Err(_), Ok(_), Ok(_), Ok(_)) => Ordering::Greater,
+        (Err(_), Ok(_), Ok(_), Err(_)) => Ordering::Greater,
+        (Err(_), Ok(_), Err(_), Err(_)) => Ordering::Less,
+        (Err(_), Err(_), Ok(_), Err(_)) => Ordering::Greater,
+        (Err(_), Err(_), Err(_), Ok(_)) => Ordering::Greater,
+
+        (Ok(a), Ok((md_a, _)), Ok(b), Ok((md_b, _))) => {
+          (b.mismatches().len() + md_b.mismatches.len()).cmp(&(a.mismatches().len() + md_a.mismatches.len()))
+        }
+        (Err(_), Ok((a, _)), Err(_), Ok((b, _))) => {
+          b.mismatches.len().cmp(&a.mismatches.len())
+        }
+        (Ok(a), Err(_), Ok(b), Err(_)) => {
+          b.mismatches().len().cmp(&a.mismatches().len())
+        }
+      }
+    })
+  }
+
+  /// Compares the incoming request message to all the messages from the route, returning a vector
+  /// of results sorted by least number of mismatches
+  fn compare_request_to_interactions(
+    &self,
+    request: DynamicMessage,
+    message_descriptor: &DescriptorProto,
+    request_metadata: &MetadataMap
+  ) -> anyhow::Result<Vec<(SynchronousMessage, anyhow::Result<BodyMatchResult>, anyhow::Result<(MetadataMatchResult, Vec<String>)>)>> {
+    let mut results = vec![];
+
+    for message in &self.route.messages {
+      let mut expected_message_bytes = message.request.contents.value().unwrap_or_default();
+      let expected_message = decode_message(&mut expected_message_bytes, &message_descriptor, &self.file_descriptor_set)?;
+      trace!("Expected message has {} fields", expected_message.len());
+      let plugin_config = self.pact.plugin_data().iter()
+        .map(|pd| {
+          (pd.name.clone(), PluginInteractionConfig {
+            pact_configuration: pd.configuration.clone(),
+            interaction_configuration: message.plugin_config.get(pd.name.as_str()).cloned().unwrap_or_default()
+          })
+        }).collect();
+      trace!("plugin_config={:?}", plugin_config);
+      let context = CoreMatchingContext::new(DiffConfig::NoUnexpectedKeys,
+         &message.request.matching_rules.rules_for_category("body").unwrap_or_default(),
+         &plugin_config);
+
+      let expectations = build_expectations(message, "request").unwrap_or_default();
+      let mismatches = compare(
+        &message_descriptor,
+        &expected_message,
+        request.flatten_fields().as_slice(),
+        &context,
+        &expected_message_bytes,
+        &self.file_descriptor_set,
+        &expectations
+      );
+      trace!("Comparison result = {:?}", mismatches);
+
+      // 2. Compare any metadata from the incoming message
+      let md_context = CoreMatchingContext::new(DiffConfig::NoUnexpectedKeys,
+        &message.request.matching_rules.rules_for_category("metadata").unwrap_or_default(),
+        &plugin_config);
+      let md_mismatches = compare_metadata(&message.request.metadata, &request_metadata,
+        &md_context);
+      trace!("MD Comparison result = {:?}", md_mismatches);
+
+      results.push((message.clone(), mismatches, md_mismatches));
+    }
+
+    Ok(results)
   }
 
   fn set_response_metadata(response_contents: MessageContents, response: &mut Response<DynamicMessage>) {
@@ -199,20 +260,18 @@ impl MockService {
   pub(crate) fn new(
     file_descriptor_set: &FileDescriptorSet,
     service_name: &str,
-    method_descriptor: &MethodDescriptorProto,
+    route: &MockServerRoute,
     input_message: &DescriptorProto,
     output_message: &DescriptorProto,
-    message: &SynchronousMessage,
     server_key: &str,
     pact: V4Pact
   ) -> Self {
     MockService {
       file_descriptor_set: file_descriptor_set.clone(),
       service_name: service_name.to_string(),
-      method_descriptor: method_descriptor.clone(),
+      route: route.clone(),
       input_message: input_message.clone(),
       output_message: output_message.clone(),
-      message: message.clone(),
       server_key: server_key.to_string(),
       pact
     }
@@ -264,6 +323,7 @@ mod tests {
 
   use crate::dynamic_message::DynamicMessage;
   use crate::message_decoder::decode_message;
+  use crate::mock_server::MockServerRoute;
   use crate::mock_service::MockService;
   use crate::protobuf::tests::DESCRIPTOR_BYTES;
 
@@ -369,18 +429,26 @@ mod tests {
       }
     });
     let pact = V4Pact::pact_from_json(&pact_json, "<>").unwrap();
-    let message = pact.interactions.first().unwrap();
+    let message = pact.interactions
+      .first()
+      .unwrap()
+      .as_v4_sync_message()
+      .unwrap();
 
     let bytes = BASE64.decode("EgoNAABAQBUAAIBA").unwrap();
     let mut bytes2 = BytesMut::from(bytes.as_slice());
     let fields = decode_message(&mut bytes2, input_message, fds).unwrap();
     let request = DynamicMessage::new(fields.as_slice(), &file_descriptor_set);
 
+    let route = MockServerRoute {
+      fds: file_descriptor_set.clone(),
+      method_descriptor: method.clone(),
+      messages: vec![message]
+    };
     let mock_service = MockService {
       file_descriptor_set: file_descriptor_set.clone(),
       service_name: "Calculator".to_string(),
-      message: message.as_v4_sync_message().unwrap(),
-      method_descriptor: method.clone(),
+      route,
       input_message: input_message.clone(),
       output_message: output_message.clone(),
       server_key: "1234".to_string(),
@@ -508,17 +576,25 @@ mod tests {
     });
 
     let pact = V4Pact::pact_from_json(&pact_json, "<>").unwrap();
-    let message = pact.interactions.first().unwrap();
+    let message = pact.interactions
+      .first()
+      .unwrap()
+      .as_v4_sync_message()
+      .unwrap();
 
     let mut bytes2 = Bytes::from(b"\n\x0c\x12\n\r\0\0@@\x15\0\0\x80@\n\x07\n\x05\r\0\0@@".as_slice());
     let fields = decode_message(&mut bytes2, input_message, &file_descriptor_set).unwrap();
     let request = DynamicMessage::new(fields.as_slice(), &file_descriptor_set);
 
+    let route = MockServerRoute {
+      fds: file_descriptor_set.clone(),
+      method_descriptor: method.clone(),
+      messages: vec![message]
+    };
     let mock_service = MockService {
       file_descriptor_set: file_descriptor_set.clone(),
       service_name: "Calculator".to_string(),
-      message: message.as_v4_sync_message().unwrap(),
-      method_descriptor: method.clone(),
+      route,
       input_message: input_message.clone(),
       output_message: output_message.clone(),
       server_key: "9876789".to_string(),

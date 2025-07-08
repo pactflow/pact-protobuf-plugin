@@ -9,10 +9,13 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use bytes::{Bytes, BytesMut};
 use field_descriptor_proto::Type;
+use maplit::hashmap;
 use pact_models::json_utils::json_to_string;
 use pact_models::pact::load_pact_from_json;
+use pact_models::path_exp::DocPath;
 use pact_models::prelude::v4::V4Pact;
 use pact_models::v4::interaction::V4Interaction;
+use pact_models::v4::sync_message::SynchronousMessage;
 use prost::Message;
 use prost_types::{
   DescriptorProto,
@@ -818,6 +821,52 @@ fn type_of(kind: &Kind) -> String {
 pub(crate) fn prost_string<S: Into<String>>(s: S) -> Value {
   Value {
     kind: Some(Kind::StringValue(s.into()))
+  }
+}
+
+pub fn build_expectations(
+  interaction: &SynchronousMessage,
+  part: &str
+) -> Option<HashMap<DocPath, String>> {
+  interaction.plugin_config()
+    .get("protobuf")
+    .and_then(|config| config.get("expectations"))
+    .and_then(|config| config.as_object())
+    .and_then(|expectations| expectations.get(part))
+    .and_then(|config| config.as_object())
+    .map(|expectations| expectations_from_json(expectations))
+}
+
+pub fn expectations_from_json(json: &Map<String, serde_json::Value>) -> HashMap<DocPath, String> {
+  let path = DocPath::root();
+  let mut result = hashmap!{};
+  for (field, value) in json {
+    expectations_from_json_inner(&path.join(field), &mut result, value);
+  }
+  result
+}
+
+fn expectations_from_json_inner(
+  path: &DocPath,
+  acc: &mut HashMap<DocPath, String>,
+  json: &serde_json::Value
+) {
+  match json {
+    serde_json::Value::Array(array) => {
+      acc.insert(path.clone(), "".to_string());
+      for (index, item) in array.iter().enumerate() {
+        expectations_from_json_inner(&path.join_index(index), acc, item);
+      }
+    }
+    serde_json::Value::Object(attrs) => {
+      acc.insert(path.clone(), "".to_string());
+      for (field, value) in attrs {
+        expectations_from_json_inner(&path.join(field), acc, value);
+      }
+    }
+    _ => {
+      acc.insert(path.clone(), json.to_string());
+    }
   }
 }
 

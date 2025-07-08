@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package list_appender;
+
+service ListAppender {
+  rpc append (AppendRequest) returns (AppendResponse);
+}
+
+message AppendRequest {
+  int32 start = 1;
+  repeated int64 additional = 2;
+}
+
+message AppendResponse {
+  repeated int64 value = 1;
+}
