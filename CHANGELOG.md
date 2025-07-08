@@ -1,3 +1,10 @@
+# 0.6.1 - Bugfix Release
+
+* 54060e8 - chore: Update other builds to latest Rust stable (Ronald Holshausen, Tue Jul 8 14:00:21 2025 +1000)
+* 0fe97db - chore: Update musl build to Rust 1.88 (Ronald Holshausen, Tue Jul 8 13:54:11 2025 +1000)
+* f348a47 - fix(mock-server): Need to handle the case where there are multiple messages per route #228 (Ronald Holshausen, Tue Jul 8 11:19:44 2025 +1000)
+* 91d0f75 - bump version to 0.6.1 (Ronald Holshausen, Wed Jun 25 10:24:35 2025 +1000)
+
 # 0.6.0 - Fix for always requiring repeated enum field values
 
 * 3bb48cf - chore: DRY up some of the error responses (Ronald Holshausen, Wed Jun 25 09:59:26 2025 +1000)
