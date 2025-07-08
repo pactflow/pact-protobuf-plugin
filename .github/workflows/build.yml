@@ -16,7 +16,7 @@ jobs:
         operating-system: [ ubuntu-latest, windows-latest, macos-13 ]
         rust: [ stable ]
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: ${{ matrix.rust }}
@@ -51,14 +51,17 @@ jobs:
   musl-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@v4
       - run: |
          docker run --rm --user "$(id -u)":"$(id -g)" -v $(pwd):/workspace -w /workspace -t pactfoundation/rust-musl-build:1.88.0 ./scripts/musl-build.sh
 
   pact-verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
       - name: Install Protoc
         uses: arduino/setup-protoc@v1
         with:
@@ -79,7 +82,10 @@ jobs:
   integrated-tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
       - name: Install Protoc
         uses: arduino/setup-protoc@v1
         with:
