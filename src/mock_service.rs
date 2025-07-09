@@ -80,12 +80,12 @@ impl MockService {
       (message, Ok(result), Ok((md_result, _))) => {
         {
           // record the result in the static store
-          let mut guard = MOCK_SERVER_STATE.lock().unwrap();
           let method_name = self.route.method_descriptor.name.clone().unwrap_or_else(|| "unknown method".into());
           let key = match build_grpc_route(self.service_name.as_str(), method_name.as_str()) {
             Ok(k) => k,
             Err(err) => Err(Status::internal(err.to_string()))?
           };
+          let mut guard = MOCK_SERVER_STATE.lock().unwrap();
           if let Some((_, results)) = guard.get_mut(self.server_key.as_str()) {
             let route_results = results.entry(key).or_insert((0, vec![]));
             trace!(store_length = route_results.1.len(), "Adding result to mock server '{}' static store", self.server_key);
