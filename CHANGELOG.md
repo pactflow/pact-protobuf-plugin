@@ -1,3 +1,10 @@
+# 0.6.2 - Maintenance Release
+
+* 3b2a473 - chore: Small optimisation, delay locking the state mutex as late as possible (Ronald Holshausen, Wed Jul 9 10:15:26 2025 +1000)
+* a9bdb80 - test: Test atLeast and atMost first in expression (#226) (Tien Vo Xuan, Wed Jul 9 06:55:59 2025 +0700)
+* 8102970 - feat: Support fromProviderState generator in regex matching expression (#225) (Tien Vo Xuan, Wed Jul 9 06:55:34 2025 +0700)
+* d195949 - bump version to 0.6.2 (Ronald Holshausen, Tue Jul 8 15:57:22 2025 +1000)
+
 # 0.6.1 - Bugfix Release
 
 * 54060e8 - chore: Update other builds to latest Rust stable (Ronald Holshausen, Tue Jul 8 14:00:21 2025 +1000)
