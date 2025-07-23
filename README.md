@@ -42,9 +42,9 @@ To support compiling Protocol Buffer proto files requires a version of the [Prot
 
 ## Installation
 
-The executable binaries and plugin manifest file for the plugin can be downloaded from the project [releases page](../../releases). There will be an executable for each
-operating system and architecture. If your particular operating system or architecture is not supported, please send
-a request to [support@pactflow.io](support@pactflow.io) with the details.
+The executable binaries and plugin manifest file for the plugin can be downloaded from the project [releases page](../../releases). 
+There will be an executable for each operating system and architecture. If your particular operating system or 
+architecture is not supported, please send a request to [support@pactflow.io](support@pactflow.io) with the details.
 
 ### Installing the plugin
 To install the plugin requires the plugin executable binary as well as the plugin manifest file to be unpacked/copied into
@@ -106,7 +106,7 @@ _NOTE: Since 0.1.3, the logging was switched to the Rust tracing crate and a log
 
 The plugin will log to both standard output and two files (log/plugin.log.* and log/plugin.log.json.*) in the plugin 
 installation directory. Each file will be rolled per day and be suffixed with the current date. The JSON log file will
-be formatted in the [bunyan format](https://github.com/trentm/node-bunyan).The log level will be set by the `LOG_LEVEL`
+be formatted in the [bunyan format](https://github.com/trentm/node-bunyan). The log level will be set by the `LOG_LEVEL`
 environment variable that is passed into the plugin process (this should be set by the framework calling it).
 
 ## Configuration
@@ -196,8 +196,8 @@ V4 synchronous message Pact format.
 
 For an overview how asynchronous messages work with Pact, see [Non-HTTP testing (Message Pact)](https://docs.pact.io/getting_started/how_pact_works/#non-http-testing-message-pact).
 
-In this scenario, a message provider writes a Protocol Buffer message to some one-way transport mechanism, like a message queue, and a consumer
-then reads it. With this style of testing, the transport mechanism is abstracted away.
+In this scenario, a message provider writes a Protocol Buffer message to some one-way transport mechanism, like a 
+message queue, and a consumer then reads it. With this style of testing, the transport mechanism is abstracted away.
 
 #### Protocol Buffer message consumer
 
@@ -505,6 +505,29 @@ For example (taken from an [example Java Consumer Test](https://github.com/pact-
 
 This example allows the rectangle length and width to be changed from values from the provider state callback, as well
 as the `Auth` metadata value. You can see an example doing that [here](https://github.com/pact-foundation/pact-plugins/blob/main/examples/gRPC/provider-states/provider-jvm/server/src/test/java/io/pact/example/grpc/provider/PactVerificationTest.java#L54).
+
+### Handling binary non-UTF-8 data
+_Requires 0.6.4+ of the Protobuf plugin._
+
+For byte array fields (`byte` or `.google.protobuf.BytesValue` types), you can specify the values using either a string 
+value (which must be valid UTF-8), an array of unsigned byte values (0-255), or a base 64 encoded string.
+
+For instance:
+```json
+{
+  "request": {
+    "raw_bytes": [1, 2, 3, 4, 5]
+  }
+}
+```
+or
+```json
+{
+  "request": {
+    "raw_bytes": "AQIDBAU="
+  }
+}
+```
 
 ## Running within docker containers
 
