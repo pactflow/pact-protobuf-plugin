@@ -7,7 +7,9 @@ use prost::encoding::WireType::{LengthDelimited, SixtyFourBit, Varint};
 use serde_json::json;
 
 use pact_protobuf_plugin::message_decoder::{decode_message, ProtobufField};
-use pact_protobuf_plugin::message_decoder::ProtobufFieldData::{Boolean, Double, Integer32, String, UInteger32};
+use pact_protobuf_plugin::message_decoder::ProtobufFieldData::{
+  Boolean, Bytes, Double, Integer32, String, UInteger32
+};
 use pact_protobuf_plugin::utils::{find_message_descriptor_for_type, get_descriptors_for_interaction, lookup_interaction_config};
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
@@ -29,7 +31,7 @@ async fn basic_values_test() {
           "f3": 1122,
           "f4": 1122.33,
           "f5": "1122.33",
-          // "f6": [1, 2, 3, 4]
+          "f6": [1, 2, 3, 4]
         },
 
         "response": {
@@ -69,6 +71,9 @@ async fn basic_values_test() {
     .unwrap();
   let field_descriptor5 = message_descriptor.field.iter()
     .find(|field| field.number == Some(5))
+    .unwrap();
+  let field_descriptor6 = message_descriptor.field.iter()
+    .find(|field| field.number == Some(6))
     .unwrap();
   let mut buffer = request.contents.value().unwrap();
 
@@ -113,6 +118,14 @@ async fn basic_values_test() {
       data: String("1122.33".to_string()),
       additional_data: vec![],
       descriptor: field_descriptor5.clone()
+    },
+    ProtobufField {
+      field_num: 6,
+      field_name: "f6".to_string(),
+      wire_type: LengthDelimited,
+      data: Bytes(vec![1, 2, 3, 4]),
+      additional_data: vec![],
+      descriptor: field_descriptor6.clone()
     }
   ]));
 }

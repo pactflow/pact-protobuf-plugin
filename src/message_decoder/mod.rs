@@ -418,6 +418,8 @@ pub fn decode_message<B>(
         let field_name = field_descriptor.name();
         trace!("field_name = {}", field_name);
         let data = match wire_type {
+
+          // Variable Integer types
           WireType::Varint => {
             let varint = decode_varint(buffer)?;
             let t: Type = field_descriptor.r#type();
@@ -441,6 +443,8 @@ pub fn decode_message<B>(
               }
             }
           }
+
+          // Fixed size 64 bit values
           WireType::SixtyFourBit => {
             let t: Type = field_descriptor.r#type();
             match t {
@@ -454,6 +458,8 @@ pub fn decode_message<B>(
               }
             }
           }
+
+          // Length delimited types
           WireType::LengthDelimited => {
             let data_length = decode_varint(buffer)?;
             let mut data_buffer = if buffer.remaining() >= data_length as usize {
@@ -461,10 +467,13 @@ pub fn decode_message<B>(
             } else {
               return Err(anyhow!("Insufficient data remaining ({} bytes) to read {} bytes for field {}", buffer.remaining(), data_length, field_num));
             };
+
             let t: Type = field_descriptor.r#type();
             trace!(field_type = ?t, data_buffer = ?data_buffer);
+
             match t {
               Type::String => vec![ (ProtobufFieldData::String(from_utf8(&data_buffer)?.to_string()), wire_type) ],
+
               Type::Message => {
                 let full_type_name = field_descriptor.type_name();
                 trace!(%full_type_name, "Embedded message");
@@ -483,7 +492,9 @@ pub fn decode_message<B>(
                 })?;
                 vec![ (ProtobufFieldData::Message(data_buffer.to_vec(), message_proto), wire_type) ]
               }
+
               Type::Bytes => vec![ (ProtobufFieldData::Bytes(data_buffer.to_vec()), wire_type) ],
+
               _ => if should_be_packed_type(t) && is_repeated_field(&field_descriptor) {
                 debug!("Reading length delimited field as a packed repeated field");
                 decode_packed_field(field_descriptor, descriptor, descriptors, &mut data_buffer)?
@@ -496,6 +507,8 @@ pub fn decode_message<B>(
               }
             }
           }
+
+          // Fixed size 32 bit values
           WireType::ThirtyTwoBit => {
             let t: Type = field_descriptor.r#type();
             match t {

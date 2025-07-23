@@ -708,12 +708,21 @@ impl MessageFieldValue {
     })
   }
 
-  /// Create a byte array value
-  pub fn bytes(field_name: &str, field_value: &str) -> MessageFieldValue {
+  /// Create a byte array value from a String
+  pub fn str_bytes(field_name: &str, field_value: &str) -> MessageFieldValue {
     MessageFieldValue {
       name: field_name.to_string(),
       raw_value: Some(field_value.to_string()),
       rtype: RType::Bytes(field_value.as_bytes().to_vec())
+    }
+  }
+
+  /// Create a byte array value
+  pub fn bytes(field_name: &str, field_value: &[u8], raw_value: &str) -> MessageFieldValue {
+    MessageFieldValue {
+      name: field_name.to_string(),
+      raw_value: Some(raw_value.to_string()),
+      rtype: RType::Bytes(field_value.to_vec())
     }
   }
 }
