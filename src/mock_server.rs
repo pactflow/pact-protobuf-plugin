@@ -278,7 +278,7 @@ impl Service<Request<Incoming>> for GrpcMockServer  {
       };
 
       match content_type {
-        Ok(content_type) => if content_type.base_type().to_string().starts_with("application/grpc") {
+        Ok(content_type) => if content_type.to_string().starts_with("application/grpc") {
           let method = req.method();
           if method == Method::POST {
             let request_path = req.uri().path();
