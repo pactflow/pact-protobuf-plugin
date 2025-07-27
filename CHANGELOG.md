@@ -1,3 +1,10 @@
+# 0.6.3 - Bugfix Release
+
+* 940ee6b - fix: Only need to check the start of the content type string #32 (Ronald Holshausen, Wed Jul 23 15:43:24 2025 +1000)
+* b76316b - feat: Update readme with a note about byte arrays with non-utf8 data #229 (Ronald Holshausen, Wed Jul 23 11:48:26 2025 +1000)
+* 6f3b414 - feat: Support byte arrays with non-utf8 data #229 (Ronald Holshausen, Wed Jul 23 11:09:57 2025 +1000)
+* 11ee30b - bump version to 0.6.3 (Ronald Holshausen, Thu Jul 17 14:46:02 2025 +1000)
+
 # 0.6.2 - Maintenance Release
 
 * 3b2a473 - chore: Small optimisation, delay locking the state mutex as late as possible (Ronald Holshausen, Wed Jul 9 10:15:26 2025 +1000)
