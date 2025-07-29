@@ -247,7 +247,8 @@ pub fn compare_message(
 
     if is_map_field(message_descriptor, field_descriptor) {
       trace!(%field_name, field_no, "field is a map field");
-      let map_comparison = compare_map_field(&field_path, field_descriptor, expected, actual, matching_context, descriptors);
+      let map_comparison = compare_map_field(&field_path, field_descriptor, expected,
+        actual, matching_context, descriptors, expectations);
       if !map_comparison.is_empty() {
         results.insert(field_path.to_string(), map_comparison);
       }
@@ -310,12 +311,14 @@ pub fn compare_message(
         } else {
           matching_context.clone_with(matching_context.matchers())
         };
-        let comparison = compare_field(&field_path, expected_value, field_descriptor, &actual_value, context.as_ref(), descriptors);
+        let comparison = compare_field(&field_path, expected_value, field_descriptor,
+          &actual_value, context.as_ref(), descriptors, expectations);
         if !comparison.is_empty() {
           results.insert(field_path.to_string(), comparison);
         }
       } else {
-        let comparison = compare_field(&field_path, expected_value, field_descriptor, &actual_value, matching_context, descriptors);
+        let comparison = compare_field(&field_path, expected_value, field_descriptor,
+          &actual_value, matching_context, descriptors, expectations);
         if !comparison.is_empty() {
           results.insert(field_path.to_string(), comparison);
         }
@@ -353,8 +356,10 @@ fn compare_field(
   descriptor: &FieldDescriptorProto,
   actual: &ProtobufField,
   matching_context: &(dyn MatchingContext + Send + Sync),
-  descriptors: &FileDescriptorSet
+  descriptors: &FileDescriptorSet,
+  expectations: &HashMap<DocPath, String>
 ) -> Vec<Mismatch> {
+  trace!(?expectations, ">>> compare_field");
   match (&field.data, &actual.data) {
     (ProtobufFieldData::String(s1), ProtobufFieldData::String(s2)) => {
       trace!("Comparing string values");
@@ -490,7 +495,7 @@ fn compare_field(
           _ => {
             debug!("Field is a normal message");
             match compare_message(path.clone(), &expected_message, &actual_message, matching_context,
-              message_descriptor, descriptors, &hashmap!{}) {
+              message_descriptor, descriptors, expectations) {
               Ok(result) => match result {
                 BodyMatchResult::Ok => vec![],
                 BodyMatchResult::BodyTypeMismatch { message, .. } => vec![
@@ -594,7 +599,8 @@ fn compare_repeated_field(
     for matcher in &rules.rules {
       if let Err(comparison) = compare_lists_with_matchingrule(matcher, path,
         expected_fields, actual_fields, matching_context, rules.cascaded, &mut |field_path, expected, actual, context| {
-          let comparison = compare_field(field_path, expected, descriptor, actual, context, descriptors);
+          let comparison = compare_field(field_path, expected, descriptor, actual,
+            context, descriptors, expectations);
           if comparison.is_empty() {
             Ok(())
           } else {
@@ -618,7 +624,8 @@ fn compare_repeated_field(
       })
     } else {
       trace!("Comparing repeated fields as a list");
-      result.extend(compare_list_content(path, descriptor, expected_fields, actual_fields, matching_context, descriptors));
+      result.extend(compare_list_content(path, descriptor, expected_fields, actual_fields,
+        matching_context, descriptors, expectations));
       if expected_fields.len() != actual_fields.len() {
         result.push(Mismatch::BodyMismatch {
           path: path.to_string(),
@@ -649,9 +656,10 @@ fn compare_map_field(
   expected_fields: Vec<&ProtobufField>,
   actual_fields: Vec<&ProtobufField>,
   matching_context: &(dyn MatchingContext + Send + Sync),
-  descriptors: &FileDescriptorSet
+  descriptors: &FileDescriptorSet,
+  expectations: &HashMap<DocPath, String>
 ) -> Vec<Mismatch> {
-  trace!(">> compare_map_field('{}', {:?}, {:?})", path, expected_fields, actual_fields);
+  trace!(?expectations, ">> compare_map_field('{}', {:?}, {:?})", path, expected_fields, actual_fields);
 
   let mut result: Vec<Mismatch> = vec![];
 
@@ -679,7 +687,8 @@ fn compare_map_field(
       trace!("compare_map_field: matcher = {:?}", matcher);
       if let Err(comparison) = compare_maps_with_matchingrule(matcher, rules.cascaded, path,
         &expected_map, &actual_map, matching_context, &mut |field_path, expected, actual, context| {
-          let field_result = compare_field(field_path, &expected.value, &expected.field_descriptor, &actual.value, context, descriptors);
+          let field_result = compare_field(field_path, &expected.value,
+            &expected.field_descriptor, &actual.value, context, descriptors, expectations);
           if field_result.is_empty() {
             Ok(())
           } else {
@@ -712,7 +721,8 @@ fn compare_map_field(
       for (key, value) in &expected_map {
         let entry_path = path.join(key);
         if let Some(actual) = actual_map.get(key.as_str()) {
-          result.extend(compare_field(&entry_path, &value.value, &value.field_descriptor, &actual.value, matching_context, descriptors));
+          result.extend(compare_field(&entry_path, &value.value, &value.field_descriptor, &actual.value,
+            matching_context, descriptors, expectations));
         } else {
           result.push(BodyMismatch {
             path: path.to_string(),
@@ -772,15 +782,18 @@ fn compare_list_content(
   expected: &[ProtobufField],
   actual: &[ProtobufField],
   matching_context: &(dyn MatchingContext + Send + Sync),
-  descriptors: &FileDescriptorSet
+  descriptors: &FileDescriptorSet,
+  expectations: &HashMap<DocPath, String>
 ) -> Vec<Mismatch> {
+  trace!(?expectations, ">>> compare_list_content");
   let mut result = vec![];
   for (index, value) in expected.iter().enumerate() {
     let ps = index.to_string();
     debug!("Comparing list item {} with value '{:?}' to '{:?}'", index, actual.get(index), value);
     let p = path.join(ps);
     if index < actual.len() {
-      result.extend(compare_field(&p, value, descriptor, actual.get(index).unwrap(), matching_context, descriptors));
+      result.extend(compare_field(&p, value, descriptor, actual.get(index).unwrap(),
+        matching_context, descriptors, expectations));
     } else if !matching_context.matcher_is_defined(&p) {
       result.push(Mismatch::BodyMismatch {
         path: path.to_string(),
