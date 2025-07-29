@@ -1,3 +1,8 @@
+# 0.6.4 - Bugfix Release
+
+* 6d85ac2 - fix: Consumer expectations were not passed down for repeated message fields #231 (Ronald Holshausen, Tue Jul 29 10:49:45 2025 +1000)
+* b13f0d6 - bump version to 0.6.4 (Ronald Holshausen, Mon Jul 28 09:28:55 2025 +1000)
+
 # 0.6.3 - Bugfix Release
 
 * 940ee6b - fix: Only need to check the start of the content type string #32 (Ronald Holshausen, Wed Jul 23 15:43:24 2025 +1000)
