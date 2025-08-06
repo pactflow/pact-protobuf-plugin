@@ -127,11 +127,53 @@ pub fn find_message_type_in_file_descriptor(
   message_name: &str,
   descriptor: &FileDescriptorProto
 ) -> anyhow::Result<DescriptorProto> {
-  descriptor.message_type.iter()
-    .find(|message| message.name() == message_name)
+  trace!("find_message_type_in_file_descriptor: message_name = {}", message_name);
+
+  // Split the message name by dots to handle nested messages
+  let message_parts: Vec<&str> = message_name.split('.').filter(|v| !v.is_empty()).collect();
+
+  if message_parts.is_empty() {
+    return Err(anyhow!("Empty message name"));
+  }
+
+  // Find the first message in the top-level message types
+  let first_message_name = message_parts[0];
+  let message = descriptor.message_type.iter()
+    .find(|msg| msg.name() == first_message_name)
     .cloned()
     .ok_or_else(|| anyhow!("Did not find a message type '{}' in the file descriptor '{}'",
-      message_name, descriptor.name.as_deref().unwrap_or("unknown")))
+      first_message_name, descriptor.name.as_deref().unwrap_or("unknown")))?;
+
+  // If there's only one part, we found the message
+  if message_parts.len() == 1 {
+    return Ok(message);
+  }
+
+  // Recursively find nested messages
+  find_nested_message_recursive(&message, &message_parts[1..])
+}
+
+/// Helper function to recursively find nested messages
+fn find_nested_message_recursive(
+  current_message: &DescriptorProto,
+  remaining_parts: &[&str]
+) -> anyhow::Result<DescriptorProto> {
+  if remaining_parts.is_empty() {
+    return Ok(current_message.clone());
+  }
+
+  let next_message_name = remaining_parts[0];
+  trace!("find_nested_message_recursive: looking for '{}' in message '{}'", next_message_name, current_message.name());
+
+  // Look in the nested types of the current message
+  let nested_message = current_message.nested_type.iter()
+    .find(|msg| msg.name() == next_message_name)
+    .cloned()
+    .ok_or_else(|| anyhow!("Did not find nested message type '{}' in message '{}'",
+      next_message_name, current_message.name()))?;
+
+  // Recursively search for the remaining parts
+  find_nested_message_recursive(&nested_message, &remaining_parts[1..])
 }
 
 // TODO: handle nested types properly
@@ -141,7 +183,6 @@ pub fn find_message_type_in_file_descriptor(
 // while here the package is `.package` and then we need to find message called `Message` and go over it's nested types.
 // To be fair, I don't think this ever worked properly - it was looking across all file descriptors instead of narrowing them down by packages,
 // but it still wasn't looking for nested types.
-
 /// Helper to select a method descriptor by name from a service descriptor.
 pub fn find_method_descriptor_for_service(
   method_name: &str,
@@ -154,6 +195,7 @@ pub fn find_method_descriptor_for_service(
   trace!("Found method descriptor {:?} for method {}", method_descriptor, method_name);
   Ok(method_descriptor)
 }
+
 
 /// Find a descriptor for a given type name, fully qualified or relative.
 /// Type name format is the same as in `type_name` field in field descriptor
@@ -1659,4 +1701,105 @@ pub(crate) mod tests {
       "kind": "general"
     }));
   }
+
+  #[test]
+  fn find_enum_value_by_name_deep_nested_test() {
+    let top_level_enum = EnumDescriptorProto {
+      name: Some("TopLevelEnum".to_string()),
+      value: vec![
+        EnumValueDescriptorProto {
+          name: Some("VALUE_ONE".to_string()),
+          number: Some(1),
+          options: None,
+        },
+      ],
+      .. EnumDescriptorProto::default()
+    };
+
+    let one_level_enum = EnumDescriptorProto {
+      name: Some("OneLevelEnum".to_string()),
+      value: vec![
+        EnumValueDescriptorProto {
+          name: Some("VALUE_A".to_string()),
+          number: Some(1),
+          options: None,
+        },
+      ],
+      .. EnumDescriptorProto::default()
+    };
+
+    let two_level_enum = EnumDescriptorProto {
+      name: Some("TwoLevelEnum".to_string()),
+      value: vec![
+        EnumValueDescriptorProto {
+          name: Some("VALUE_X".to_string()),
+          number: Some(1),
+          options: None,
+        },
+      ],
+      .. EnumDescriptorProto::default()
+    };
+
+    let three_level_enum = EnumDescriptorProto {
+      name: Some("ThreeLevelEnum".to_string()),
+      value: vec![
+        EnumValueDescriptorProto {
+          name: Some("VALUE_DEEP".to_string()),
+          number: Some(1),
+          options: None,
+        },
+      ],
+      .. EnumDescriptorProto::default()
+    };
+
+    let deep_message = DescriptorProto {
+      name: Some("DeepMessage".to_string()),
+      enum_type: vec![three_level_enum.clone()],
+      .. DescriptorProto::default()
+    };
+
+    let inner_message = DescriptorProto {
+      name: Some("InnerMessage".to_string()),
+      enum_type: vec![two_level_enum.clone()],
+      nested_type: vec![deep_message.clone()],
+      .. DescriptorProto::default()
+    };
+
+    let outer_message = DescriptorProto {
+      name: Some("OuterMessage".to_string()),
+      enum_type: vec![one_level_enum.clone()],
+      nested_type: vec![inner_message.clone()],
+      .. DescriptorProto::default()
+    };
+
+    let file_descriptor = FileDescriptorProto {
+      name: Some("nested_enum.proto".to_string()),
+      package: Some("test".to_string()),
+      message_type: vec![outer_message.clone()],
+      enum_type: vec![top_level_enum.clone()],
+      .. FileDescriptorProto::default()
+    };
+
+    let descriptors = hashmap!{
+      "nested_enum.proto".to_string() => &file_descriptor,
+    };
+
+    // 1. Top-level enum (0 levels deep)
+    let result1 = find_enum_value_by_name(&descriptors, ".test.TopLevelEnum", "VALUE_ONE");
+    expect!(result1).to(be_some().value((1, top_level_enum.clone())));
+
+    // 2. One-level nested enum
+    let result2 = find_enum_value_by_name(&descriptors, ".test.OuterMessage.OneLevelEnum", "VALUE_A");
+    expect!(result2).to(be_some().value((1, one_level_enum.clone())));
+
+    // 3. Two-level nested enum
+    let result3 = find_enum_value_by_name(&descriptors, ".test.OuterMessage.InnerMessage.TwoLevelEnum", "VALUE_X");
+    expect!(result3).to(be_some().value((1, two_level_enum.clone())));
+
+    // 4. Three-level nested enum
+    let result4 = find_enum_value_by_name(&descriptors, ".test.OuterMessage.InnerMessage.DeepMessage.ThreeLevelEnum", "VALUE_DEEP");
+    expect!(result4).to(be_some().value((1, three_level_enum.clone())));
+
+  }
 }
+
