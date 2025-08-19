@@ -2480,9 +2480,9 @@ dependencies = [
 
 [[package]]
 name = "pact_verifier"
-version = "1.3.2"
+version = "1.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7664e94cc6ba6b0838c26b42bd7740032fd3bf54f1a306b41fe93d6219c3bd15"
+checksum = "95e5ce9ac40d5c70b1c29fddd57ae5be043960b058dc96653bb249d339231310"
 dependencies = [
  "ansi_term",
  "anyhow",

@@ -7,24 +7,34 @@ use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
 use itertools::{Either, Itertools};
 use maplit::hashmap;
-use pact_matching::{BodyMatchResult, CommonMismatch, CoreMatchingContext, DiffConfig, MatchingContext, Mismatch};
 use pact_matching::json::compare_json;
-use pact_matching::matchers::{match_values, Matches};
-use pact_matching::matchingrules::{compare_lists_with_matchingrule, compare_maps_with_matchingrule};
+use pact_matching::matchingrules::{
+  compare_lists_with_matchingrule,
+  compare_maps_with_matchingrule,
+  match_values,
+  Matches
+};
 use pact_matching::Mismatch::BodyMismatch;
+use pact_matching::{
+  BodyMatchResult,
+  CommonMismatch,
+  CoreMatchingContext,
+  DiffConfig,
+  MatchingContext,
+  Mismatch
+};
 use pact_models::content_types::ContentType;
 use pact_models::matchingrules::{Category, MatchingRule, RuleList, RuleLogic};
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::MatchingRuleCategory;
-use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet};
 use prost_types::field_descriptor_proto::Type;
+use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet};
 use tracing::{debug, instrument, trace, warn};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
 use crate::utils::{
   display_bytes,
   enum_name,
-  struct_field_data_to_json,
   find_message_descriptor_for_type,
   find_message_field_by_name,
   find_method_descriptor_for_service,
@@ -32,7 +42,8 @@ use crate::utils::{
   is_map_field,
   is_repeated_field,
   last_name,
-  split_service_and_method
+  split_service_and_method,
+  struct_field_data_to_json
 };
 
 /// Match a single Protobuf message
@@ -815,21 +826,21 @@ fn find_field_descriptor(field: &ProtobufField, descriptor: &DescriptorProto) ->
 
 #[cfg(test)]
 mod tests {
-  use base64::Engine;
   use base64::engine::general_purpose::STANDARD as BASE64;
+  use base64::Engine;
   use expectest::prelude::*;
   use pact_models::matchingrules::expressions::{MatchingRuleDefinition, ValueType};
   use pact_models::{matchingrules, matchingrules_list};
   use prost::encoding::WireType;
   use prost::Message;
-  use prost_types::{DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto, FieldDescriptorProto, FileDescriptorSet, MessageOptions};
   use prost_types::field_descriptor_proto::Label;
   use prost_types::field_descriptor_proto::Label::{Optional, Repeated};
   use prost_types::field_descriptor_proto::Type::{Enum, String};
+  use prost_types::{DescriptorProto, EnumDescriptorProto, EnumValueDescriptorProto, FieldDescriptorProto, FileDescriptorSet, MessageOptions};
 
+  use crate::matching::tests::WireType::Varint;
   use crate::message_decoder::ProtobufField;
   use crate::utils::find_enum_by_name;
-  use crate::matching::tests::WireType::Varint;
 
   use super::*;
 

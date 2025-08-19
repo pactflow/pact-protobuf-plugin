@@ -7,18 +7,18 @@ use ansi_term::Style;
 use anyhow::anyhow;
 use itertools::{Either, Itertools};
 use maplit::hashmap;
-use pact_matching::{CoreMatchingContext, matchers, MatchingContext, Mismatch};
-use pact_matching::matchers::Matches;
+use pact_matching::matchingrules::Matches;
+use pact_matching::{matchingrules, CoreMatchingContext, MatchingContext, Mismatch};
 use pact_models::generators::Generator;
 use pact_models::json_utils::json_to_string;
+use pact_models::matchingrules::expressions::{is_matcher_def, parse_matcher_def, MatchingRuleDefinition};
 use pact_models::matchingrules::{MatchingRule, MatchingRuleCategory, RuleLogic};
-use pact_models::matchingrules::expressions::{is_matcher_def, MatchingRuleDefinition, parse_matcher_def};
 use pact_models::path_exp::DocPath;
 use pact_models::v4::message_parts::MessageContents;
 use pact_plugin_driver::utils::proto_value_to_string;
 use prost_types::Value;
-use tonic::{Code, Status};
 use tonic::metadata::{Ascii, MetadataMap, MetadataValue};
+use tonic::{Code, Status};
 use tracing::instrument;
 use tracing::log::trace;
 
@@ -189,7 +189,7 @@ fn match_metadata_value(
     Ok(actual) => {
       if context.matcher_is_defined(&path) {
         let matchers = context.select_best_matcher(&path);
-        let result = if let Err(errors) = matchers::match_values(&path, &matchers, &expected, &actual.to_string()) {
+        let result = if let Err(errors) = matchingrules::match_values(&path, &matchers, &expected, &actual.to_string()) {
           for mismatch in errors {
             mismatches.push(Mismatch::MetadataMismatch {
               key: key.clone(),
@@ -355,12 +355,12 @@ mod tests {
   use pact_models::matchingrules::MatchingRule;
   use pact_models::path_exp::DocPath;
   use pact_models::v4::message_parts::MessageContents;
-  use prost_types::{Struct, Value, value};
+  use prost_types::{value, Struct, Value};
   use serde_json::json;
-  use tonic::Code;
   use tonic::metadata::MetadataMap;
+  use tonic::Code;
 
-  use crate::metadata::{compare_metadata, grpc_status, MessageMetadataValue, process_metadata};
+  use crate::metadata::{compare_metadata, grpc_status, process_metadata, MessageMetadataValue};
   use crate::utils::prost_string;
 
   #[test]
