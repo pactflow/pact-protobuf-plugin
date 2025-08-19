@@ -1,3 +1,8 @@
+# 0.6.5 - Maintenance Release
+
+* f0c3abb - fix: finding deeply nested enums (#232) (Eric Muller, Tue Aug 5 17:40:34 2025 -0700)
+* 756150f - bump version to 0.6.5 (Ronald Holshausen, Tue Jul 29 11:07:12 2025 +1000)
+
 # 0.6.4 - Bugfix Release
 
 * 6d85ac2 - fix: Consumer expectations were not passed down for repeated message fields #231 (Ronald Holshausen, Tue Jul 29 10:49:45 2025 +1000)
