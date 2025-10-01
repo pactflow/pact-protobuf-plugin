@@ -12,26 +12,25 @@ use serde_json::{json, Value};
 use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValueType, RType};
 use crate::protobuf::build_field_value;
 use crate::protobuf::tests::DESCRIPTORS_FOR_EACH_VALUE_TEST;
-use crate::utils::find_message_descriptor_for_type;
+use crate::utils::DescriptorCache;
 
 #[test_log::test]
 fn build_field_value_with_message_with_each_value_matcher() {
   let fds = FileDescriptorSet::decode(DESCRIPTORS_FOR_EACH_VALUE_TEST.as_slice()).unwrap();
   let fs = fds.file.first().unwrap();
-  let (message_descriptor, _) = find_message_descriptor_for_type(".ValuesMessageIn", &fds).unwrap();
+  let descriptor_cache = DescriptorCache::new(fds.clone());
+  let (message_descriptor, _) = descriptor_cache.find_message_descriptor_for_type(".ValuesMessageIn").unwrap();
   let field_descriptor = message_descriptor.field.first().unwrap();
   let mut message_builder = MessageBuilder::new(&message_descriptor, "ValuesMessageIn", fs);
   let path = DocPath::new("$.value").unwrap();
   let mut matching_rules = MatchingRuleCategory::empty("body");
   let mut generators = hashmap!{};
-  let file_descriptors: HashMap<String, &FileDescriptorProto> = fds.file
-    .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
-    .collect();
+  let descriptor_cache = DescriptorCache::new(fds.clone());
 
   let result = build_field_value(
     &path, &mut message_builder, MessageFieldValueType::Repeated, field_descriptor,
     "value", &Value::String("eachValue(matching(type, '00000000000000000000000000000000'))".to_string()),
-    &mut matching_rules, &mut generators, &file_descriptors
+    &mut matching_rules, &mut generators, &descriptor_cache
   ).unwrap();
 
   expect!(result.as_ref()).to(be_some());
@@ -89,14 +88,11 @@ fn build_field_value_with_global_enum() {
   let field_config = json!("matching(type, 'VALUE_ONE')");
   let mut matching_rules = MatchingRuleCategory::empty("body");
   let mut generators = hashmap!{};
-  let file_descriptors: HashMap<String, &FileDescriptorProto> = fds.file
-    .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
-    .collect();
-
+  let descriptor_cache = DescriptorCache::new(fds.clone());
 
   let result = build_field_value(&path, &mut message_builder,
     MessageFieldValueType::Normal, field_descriptor, "result", &field_config,
-    &mut matching_rules, &mut generators, &file_descriptors
+    &mut matching_rules, &mut generators, &descriptor_cache
   );
   expect!(result).to(be_ok());
 }
@@ -133,9 +129,7 @@ fn build_field_value_with_bytes_field() {
   let field_config = json!([1, 2, 3, 4, 5]);
   let mut matching_rules = MatchingRuleCategory::empty("body");
   let mut generators = hashmap!{};
-  let file_descriptors: HashMap<String, &FileDescriptorProto> = fds.file
-    .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
-    .collect();
+  let descriptor_cache = DescriptorCache::new(fds.clone());
 
   let result = build_field_value(
     &path,
@@ -146,7 +140,7 @@ fn build_field_value_with_bytes_field() {
     &field_config,
     &mut matching_rules,
     &mut generators,
-    &file_descriptors
+    &descriptor_cache
   );
   expect!(result).to(be_ok().value(Some(MessageFieldValue {
     name: "f6".to_string(),
@@ -164,7 +158,7 @@ fn build_field_value_with_bytes_field() {
     &field_config,
     &mut matching_rules,
     &mut generators,
-    &file_descriptors
+    &descriptor_cache
   );
   expect!(result.unwrap_err().to_string()).to(be_equal_to(
     "Byte arrays can only be constructed from arrays of numbers, got '[1,2,\"3\",4,5]'"));
@@ -179,7 +173,7 @@ fn build_field_value_with_bytes_field() {
     &field_config,
     &mut matching_rules,
     &mut generators,
-    &file_descriptors
+    &descriptor_cache
   );
   expect!(result).to(be_ok().value(Some(MessageFieldValue {
     name: "f6".to_string(),
@@ -197,7 +191,7 @@ fn build_field_value_with_bytes_field() {
     &field_config,
     &mut matching_rules,
     &mut generators,
-    &file_descriptors
+    &descriptor_cache
   );
   expect!(result).to(be_ok().value(Some(MessageFieldValue {
     name: "f6".to_string(),

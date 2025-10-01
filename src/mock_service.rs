@@ -3,6 +3,7 @@
 use std::cmp::Ordering;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use maplit::hashmap;
@@ -14,7 +15,7 @@ use pact_models::prelude::v4::V4Pact;
 use pact_models::v4::message_parts::MessageContents;
 use pact_models::v4::sync_message::SynchronousMessage;
 use pact_plugin_driver::plugin_models::PluginInteractionConfig;
-use prost_types::{DescriptorProto, FileDescriptorSet};
+use prost_types::{DescriptorProto};
 use tonic::{Request, Response, Status};
 use tonic::metadata::{Entry, MetadataMap};
 use tower_service::Service;
@@ -25,11 +26,11 @@ use crate::matching::compare;
 use crate::message_decoder::decode_message;
 use crate::metadata::{compare_metadata, grpc_status, MetadataMatchResult};
 use crate::mock_server::{MOCK_SERVER_STATE, MockServerRoute};
-use crate::utils::{build_expectations, build_grpc_route};
+use crate::utils::{build_expectations, build_grpc_route, DescriptorCache};
 
 #[derive(Debug, Clone)]
 pub(crate) struct MockService {
-  file_descriptor_set: FileDescriptorSet,
+  descriptor_cache: Arc<DescriptorCache>,
   service_name: String,
   route: MockServerRoute,
   input_message: DescriptorProto,
@@ -108,12 +109,12 @@ impl MockService {
             let mut response_bytes = response_contents.contents.value()
               .unwrap_or_default();
             trace!("Response message has {} bytes", response_bytes.len());
-            let response_message_fields = decode_message(&mut response_bytes, &response_descriptor, &self.file_descriptor_set)
+            let response_message_fields = decode_message(&mut response_bytes, &response_descriptor, &self.descriptor_cache)
               .map_err(|err| {
                 error!("Failed to encode response message - {}", err);
                 Status::invalid_argument(err.to_string())
               })?;
-            let mut message = DynamicMessage::new(&response_message_fields, &self.file_descriptor_set);
+            let mut message = DynamicMessage::new(&response_message_fields, &self.descriptor_cache);
             self.apply_generators(&mut message, &response_contents).map_err(|err| {
               error!("Failed to generate response message - {}", err);
               Status::invalid_argument(err.to_string())
@@ -182,7 +183,7 @@ impl MockService {
 
     for message in &self.route.messages {
       let mut expected_message_bytes = message.request.contents.value().unwrap_or_default();
-      let expected_message = decode_message(&mut expected_message_bytes, &message_descriptor, &self.file_descriptor_set)?;
+      let expected_message = decode_message(&mut expected_message_bytes, &message_descriptor, &self.descriptor_cache)?;
       trace!("Expected message has {} fields", expected_message.len());
       let plugin_config = self.pact.plugin_data().iter()
         .map(|pd| {
@@ -203,7 +204,7 @@ impl MockService {
         request.flatten_fields().as_slice(),
         &context,
         &expected_message_bytes,
-        &self.file_descriptor_set,
+        &self.descriptor_cache,
         &expectations
       );
       trace!("Comparison result = {:?}", mismatches);
@@ -258,7 +259,7 @@ impl MockService {
 impl MockService {
   #[allow(clippy::too_many_arguments)]
   pub(crate) fn new(
-    file_descriptor_set: &FileDescriptorSet,
+    descriptor_cache: &Arc<DescriptorCache>,
     service_name: &str,
     route: &MockServerRoute,
     input_message: &DescriptorProto,
@@ -267,7 +268,7 @@ impl MockService {
     pact: V4Pact
   ) -> Self {
     MockService {
-      file_descriptor_set: file_descriptor_set.clone(),
+      descriptor_cache: descriptor_cache.clone(),
       service_name: service_name.to_string(),
       route: route.clone(),
       input_message: input_message.clone(),
@@ -322,6 +323,8 @@ mod tests {
   use tonic::metadata::{MetadataMap, MetadataKey, MetadataValue};
 
   use crate::dynamic_message::DynamicMessage;
+  use std::sync::Arc;
+  use crate::utils::DescriptorCache;
   use crate::message_decoder::decode_message;
   use crate::mock_server::MockServerRoute;
   use crate::mock_service::MockService;
@@ -437,16 +440,17 @@ mod tests {
 
     let bytes = BASE64.decode("EgoNAABAQBUAAIBA").unwrap();
     let mut bytes2 = BytesMut::from(bytes.as_slice());
-    let fields = decode_message(&mut bytes2, input_message, fds).unwrap();
-    let request = DynamicMessage::new(fields.as_slice(), &file_descriptor_set);
+    let descriptor_cache = Arc::new(DescriptorCache::new(file_descriptor_set.clone()));
+    let fields = decode_message(&mut bytes2, input_message, &descriptor_cache).unwrap();
+    let request = DynamicMessage::new(fields.as_slice(), &descriptor_cache);
 
     let route = MockServerRoute {
-      fds: file_descriptor_set.clone(),
+      fds: descriptor_cache.clone(),
       method_descriptor: method.clone(),
       messages: vec![message]
     };
     let mock_service = MockService {
-      file_descriptor_set: file_descriptor_set.clone(),
+      descriptor_cache: descriptor_cache.clone(),
       service_name: "Calculator".to_string(),
       route,
       input_message: input_message.clone(),
@@ -583,16 +587,17 @@ mod tests {
       .unwrap();
 
     let mut bytes2 = Bytes::from(b"\n\x0c\x12\n\r\0\0@@\x15\0\0\x80@\n\x07\n\x05\r\0\0@@".as_slice());
-    let fields = decode_message(&mut bytes2, input_message, &file_descriptor_set).unwrap();
-    let request = DynamicMessage::new(fields.as_slice(), &file_descriptor_set);
+    let descriptor_cache = Arc::new(DescriptorCache::new(file_descriptor_set.clone()));
+    let fields = decode_message(&mut bytes2, input_message, &descriptor_cache).unwrap();
+    let request = DynamicMessage::new(fields.as_slice(), &descriptor_cache);
 
     let route = MockServerRoute {
-      fds: file_descriptor_set.clone(),
+      fds: descriptor_cache.clone(),
       method_descriptor: method.clone(),
       messages: vec![message]
     };
     let mock_service = MockService {
-      file_descriptor_set: file_descriptor_set.clone(),
+      descriptor_cache: descriptor_cache.clone(),
       service_name: "Calculator".to_string(),
       route,
       input_message: input_message.clone(),

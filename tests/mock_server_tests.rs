@@ -1,5 +1,6 @@
 use std::panic::catch_unwind;
 use std::path::Path;
+use std::sync::Arc;
 use base64::Engine;
 
 use expectest::prelude::*;
@@ -13,7 +14,7 @@ use tonic::Request;
 use tower::ServiceExt;
 use pact_protobuf_plugin::dynamic_message::{DynamicMessage, PactCodec};
 use pact_protobuf_plugin::message_decoder::{ProtobufField, ProtobufFieldData};
-use pact_protobuf_plugin::utils::{find_message_descriptor_for_type};
+use pact_protobuf_plugin::utils::DescriptorCache;
 
 async fn mock_server_block() {
   let mut pact_builder = PactBuilderAsync::new_v4("null-and-void", "protobuf-plugin");
@@ -102,6 +103,7 @@ async fn each_value_matcher() {
     ZXNzYWdlSW4aKy5jb20ucGFjdC5wcm90b2J1Zi5leGFtcGxlLlZhbHVlc01lc3NhZ2VPdXQiAGIG\
     cHJvdG8z").unwrap();
   let fds = FileDescriptorSet::decode(descriptors.as_slice()).unwrap();
+  let descriptor_cache = Arc::new(DescriptorCache::new(fds));
 
   let mut conn = tonic::transport::Endpoint::from_shared(url.to_string())
     .unwrap()
@@ -110,15 +112,15 @@ async fn each_value_matcher() {
     .unwrap();
   conn.ready().await.unwrap();
 
-  let (input_message, _) = find_message_descriptor_for_type(".com.pact.protobuf.example.ValuesMessageIn", &fds).unwrap();
+  let (input_message, _) = descriptor_cache.find_message_descriptor_for_type(".com.pact.protobuf.example.ValuesMessageIn").unwrap();
   // searching by name without package next, to confirm we're backwards compatible 
   // (it's verified by unit tests too, but wouldn't hurt to check here as well)
-  let (output_message, _) = find_message_descriptor_for_type("ValuesMessageOut", &fds).unwrap();
+  let (output_message, _) = descriptor_cache.find_message_descriptor_for_type("ValuesMessageOut").unwrap();
   let interaction = pact_builder.build()
     .interactions().first().unwrap()
     .as_v4_sync_message().unwrap();
 
-  let codec = PactCodec::new(&fds, &input_message, &output_message, &interaction);
+  let codec = PactCodec::new(&descriptor_cache, &input_message, &output_message, &interaction);
   let mut grpc = tonic::client::Grpc::new(conn);
   let path = http::uri::PathAndQuery::try_from("/com.pact.protobuf.example.Test/GetValues").unwrap();
 
@@ -142,6 +144,6 @@ async fn each_value_matcher() {
     descriptor: field_descriptor.clone()
   };
   let fields = vec![ field, field2 ];
-  let message = DynamicMessage::new(fields.as_slice(), &fds);
+  let message = DynamicMessage::new(fields.as_slice(), &descriptor_cache);
   grpc.unary(Request::new(message), path, codec).await.unwrap();
 }

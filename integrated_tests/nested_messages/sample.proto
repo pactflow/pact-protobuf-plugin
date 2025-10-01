@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package sample;
+
+service SampleService {
+    rpc GetEntity(GetEntityRequest) returns (GetEntityResponse) {}
+}
+
+message GetEntityRequest {
+    string id = 1;
+}
+
+message GetEntityResponse {
+    Entity entity = 1;
+}
+
+message Entity {
+    message FullName {
+        string first = 1;
+        string last = 2;
+    }
+    message Details {
+        FullName name = 1;
+    }
+
+    string id = 1;
+    Details details = 2;
+}

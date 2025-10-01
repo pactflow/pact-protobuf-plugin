@@ -735,6 +735,7 @@ pub(crate) mod tests {
   use expectest::prelude::*;
   use itertools::Itertools;
   use maplit::{btreemap, hashmap};
+  use crate::utils::DescriptorCache;
   use pact_plugin_driver::proto::{
     Body,
     CompareContentsRequest,
@@ -1586,9 +1587,10 @@ pub(crate) mod tests {
       rtype: RType::Message(Box::new(rule2))
     });
 
-    let encoded_fields = decode_message(&mut encoded_buf, &descriptor, &file_descriptor_set).unwrap();
+    let descriptor_cache = DescriptorCache::new(file_descriptor_set);
+    let encoded_fields = decode_message(&mut encoded_buf, &descriptor, &descriptor_cache).unwrap();
     let mut bytes = message.encode_message().unwrap();
-    let result = decode_message(&mut bytes, &descriptor, &file_descriptor_set).unwrap();
+    let result = decode_message(&mut bytes, &descriptor, &descriptor_cache).unwrap();
 
     expect!(result.len()).to(be_equal_to(encoded_fields.len()));
 

@@ -1,17 +1,14 @@
 //! gRPC mock server implementation
 
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use anyhow::anyhow;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use bytes::Bytes;
 use http::{Method, Request, Response};
 use hyper::body::Incoming;
 use hyper::server::conn::http2::Builder;
@@ -22,12 +19,10 @@ use maplit::hashmap;
 use pact_matching::BodyMatchResult;
 use pact_models::content_types::ContentType;
 use pact_models::generators::generate_hexadecimal;
-use pact_models::json_utils::json_to_string;
 use pact_models::plugins::PluginData;
 use pact_models::prelude::v4::V4Pact;
 use pact_models::v4::sync_message::SynchronousMessage;
-use prost::Message;
-use prost_types::{FileDescriptorSet, MethodDescriptorProto};
+use prost_types::MethodDescriptorProto;
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::select;
@@ -44,11 +39,15 @@ use crate::metadata::MetadataMatchResult;
 use crate::mock_service::MockService;
 use crate::utils::{
   build_grpc_route,
-  find_message_descriptor_for_type,
-  lookup_service_descriptors_for_interaction,
+  get_descriptors_for_interaction,
+  lookup_interaction_config,
+  lookup_plugin_config,
+  lookup_service_and_method_for_interaction,
   parse_grpc_route,
-  to_fully_qualified_name
+  to_fully_qualified_name,
+  DescriptorCache
 };
+use pact_models::json_utils::json_to_string;
 
 lazy_static! {
   pub static ref MOCK_SERVER_STATE: Mutex<HashMap<String, (Sender<()>, HashMap<String, (usize, Vec<(BodyMatchResult, MetadataMatchResult)>)>)>> = Mutex::new(hashmap!{});
@@ -57,8 +56,8 @@ lazy_static! {
 /// Mock server route that maps a set of Protobuf descriptors to one or more messages
 #[derive(Debug, Clone)]
 pub struct MockServerRoute {
-  /// All descriptors
-  pub fds: FileDescriptorSet,
+  /// All descriptors (shared via Arc to avoid cloning the actual data)
+  pub fds: Arc<DescriptorCache>,
   /// Method descriptor for this route
   pub method_descriptor: MethodDescriptorProto,
   /// Messages for this route
@@ -68,12 +67,12 @@ pub struct MockServerRoute {
 impl MockServerRoute {
   /// Convenience function to create a new route
   pub fn new(
-    file_set: FileDescriptorSet,
+    descriptor_cache: Arc<DescriptorCache>,
     method: MethodDescriptorProto,
     i: SynchronousMessage
   ) -> Self {
     MockServerRoute {
-      fds: file_set,
+      fds: descriptor_cache,
       method_descriptor: method,
       messages: vec![i]
     }
@@ -85,7 +84,6 @@ impl MockServerRoute {
 pub struct GrpcMockServer {
   pact: V4Pact,
   plugin_config: PluginData,
-  descriptors: HashMap<String, FileDescriptorSet>,
   routes: HashMap<String, MockServerRoute>,
   /// Server key for this mock server
   pub server_key: String,
@@ -100,7 +98,6 @@ impl GrpcMockServer
     GrpcMockServer {
       pact,
       plugin_config: plugin_config.clone(),
-      descriptors: Default::default(),
       routes: Default::default(),
       server_key: generate_hexadecimal(8),
       test_context
@@ -113,49 +110,88 @@ impl GrpcMockServer
   /// When serving, it allows to easily find the correct descriptors based on the route being called.
   #[instrument(skip(self))]
   pub async fn start_server(mut self, host_interface: &str, port: u32, tls: bool) -> anyhow::Result<SocketAddr> {
-    // Get all the descriptors from the Pact file and parse them
-    for (key, value) in &self.plugin_config.configuration {
-      if let Value::Object(map) = value {
-        if let Some(descriptor) = map.get("protoDescriptors") {
-          let bytes = BASE64.decode(json_to_string(descriptor))?;
-          let buffer = Bytes::from(bytes);
-          let fds = FileDescriptorSet::decode(buffer)?;
-          self.descriptors.insert(key.clone(), fds);
+    // Step 1: Collect all unique descriptor keys from interactions (lightweight - just strings)
+    let descriptor_keys: HashSet<String> = self.pact.interactions.iter()
+      .filter_map(|i| i.as_v4_sync_message())
+      .filter_map(|i| lookup_interaction_config(&i)
+        .and_then(|c| c.get("descriptorKey").map(json_to_string)))
+      .collect();
+    
+    trace!("Collected {} unique descriptor keys: {:?}", descriptor_keys.len(), descriptor_keys);
+    
+    // Step 2: Parse each unique descriptor key once (only parses unique keys!)
+    let plugin_config = lookup_plugin_config(&self.pact)?;
+    let descriptor_caches: HashMap<String, Arc<DescriptorCache>> = descriptor_keys.iter()
+      .filter_map(|key| {
+        match get_descriptors_for_interaction(key, &plugin_config) {
+          Ok(fds) => {
+            trace!("Successfully loaded descriptors for key: {}", key);
+            Some((key.clone(), Arc::new(DescriptorCache::new(fds))))
+          }
+          Err(e) => {
+            error!("Failed to load descriptors for key {}: {}", key, e);
+            None
+          }
         }
-      }
-    }
-
-    if self.descriptors.is_empty() {
+      })
+      .collect();
+    
+    if descriptor_caches.is_empty() {
       return Err(anyhow!("Pact file does not contain any Protobuf descriptors"));
     }
 
-    // Build a map of routes using the interactions in the Pact file
+    trace!("Built {} descriptor caches", descriptor_caches.len());
+    
+    // Step 3: Build routes using pre-built descriptor caches
     self.routes = self.pact.interactions.iter()
-    .filter_map(|i| i.as_v4_sync_message())
-    .filter_map(|i| match lookup_service_descriptors_for_interaction(&i, &self.pact) {
-      Ok((file_set, service, method, file)) => Some((file_set, service, method, file, i.clone())),
-      Err(_) => None
-    }).filter_map(|(file_set, service, method, file, i)| {
-      match to_fully_qualified_name(service.name(), file.package()) {
-        Ok(service_full_name) => {
-          match build_grpc_route(service_full_name.as_str(), method.name()) {
-            Ok(route) => Some((route, MockServerRoute::new(file_set, method, i))),
-            Err(_) => None
+      .filter_map(|i| i.as_v4_sync_message())
+      .filter_map(|i| {
+        // Get descriptor key for this interaction
+        let descriptor_key = lookup_interaction_config(&i)
+          .and_then(|c| c.get("descriptorKey").map(json_to_string))?;
+        
+        // Get the pre-built cache (no parsing here!)
+        let descriptor_cache = descriptor_caches.get(&descriptor_key)?.clone();
+        
+        // Lookup service/method from cache (no loading descriptors from the Pact file!)
+        match lookup_service_and_method_for_interaction(&i, &descriptor_cache) {
+          Ok((service, method, file)) => Some((descriptor_cache, service, method, file, i.clone())),
+          Err(e) => {
+            error!("Failed to lookup service/method for interaction {}: {}", i.description, e);
+            None
           }
-        },
-        Err(_) => None
-      }
-    }).fold(hashmap!{}, |mut acc, (key, route)| {
-      match acc.entry(key) {
-        Entry::Occupied(entry) => {
-          entry.into_mut().messages.extend_from_slice(&route.messages);
         }
-        Entry::Vacant(entry) => {
-          entry.insert(route);
+      })
+      .filter_map(|(descriptor_cache, service, method, file, i)| {
+        match to_fully_qualified_name(service.name(), file.package()) {
+          Ok(service_full_name) => {
+            match build_grpc_route(service_full_name.as_str(), method.name()) {
+              Ok(route) => Some((route, MockServerRoute::new(descriptor_cache, method, i))),
+              Err(e) => {
+                error!("Failed to build gRPC route for service {}, method {}: {}", service.name(), method.name(), e);
+                None
+              }
+            }
+          },
+          Err(e) => {
+            error!("Failed to build fully qualified name for service {}, package {:?}: {}", service.name(), file.package(), e);
+            None
+          }
         }
-      }
-      acc
-    });
+      })
+      .fold(hashmap!{}, |mut acc, (key, route)| {
+        match acc.entry(key) {
+          Entry::Occupied(entry) => {
+            entry.into_mut().messages.extend_from_slice(&route.messages);
+          }
+          Entry::Vacant(entry) => {
+            entry.insert(route);
+          }
+        }
+        acc
+      });
+    
+    trace!("Mock server routes created: {:?}", self.routes.keys().collect::<Vec<_>>());
 
     // Bind to a OS provided port and create a TCP listener
     let interface = if host_interface.is_empty() {
@@ -294,11 +330,11 @@ impl Service<Request<Incoming>> for GrpcMockServer  {
                 let output_name = route.method_descriptor.output_type.as_ref().expect(format!(
                   "Output message name is empty for service {}", service_and_method.as_str()).as_str());
 
-                let file = &route.fds;
-                if let Ok((input_message, _)) = find_message_descriptor_for_type(input_name, file) {
-                  if let Ok((output_message, _)) = find_message_descriptor_for_type(output_name, file) {
-                    let codec = PactCodec::new(file, &input_message, &output_message, message);
-                    let mock_service = MockService::new(file, service_full_name.as_str(),
+                let descriptor_cache = &route.fds;
+                if let Ok((input_message, _)) = descriptor_cache.find_message_descriptor_for_type(input_name) {
+                  if let Ok((output_message, _)) = descriptor_cache.find_message_descriptor_for_type(output_name) {
+                    let codec = PactCodec::new(descriptor_cache, &input_message, &output_message, message);
+                    let mock_service = MockService::new(descriptor_cache, service_full_name.as_str(),
                       route, &input_message, &output_message, server_key.as_str(), pact);
                     let mut grpc = tonic::server::Grpc::new(codec);
                     let response = grpc.unary(mock_service, req).await;

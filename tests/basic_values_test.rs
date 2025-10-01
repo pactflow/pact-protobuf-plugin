@@ -10,7 +10,7 @@ use pact_protobuf_plugin::message_decoder::{decode_message, ProtobufField};
 use pact_protobuf_plugin::message_decoder::ProtobufFieldData::{
   Boolean, Bytes, Double, Integer32, String, UInteger32
 };
-use pact_protobuf_plugin::utils::{find_message_descriptor_for_type, get_descriptors_for_interaction, lookup_interaction_config};
+use pact_protobuf_plugin::utils::{DescriptorCache, get_descriptors_for_interaction, lookup_interaction_config};
 
 #[test_log::test(tokio::test(flavor = "multi_thread"))]
 async fn basic_values_test() {
@@ -55,8 +55,9 @@ async fn basic_values_test() {
   let interaction_config = lookup_interaction_config(&interaction).unwrap();
   let descriptor_key = interaction_config.get("descriptorKey").map(json_to_string).unwrap();
   let fds = get_descriptors_for_interaction(descriptor_key.as_str(), &plugin_config).unwrap();
-  let (message_descriptor, _) = find_message_descriptor_for_type(
-    ".com.pact.protobuf.example.MessageIn", &fds).unwrap();
+  let descriptor_cache = DescriptorCache::new(fds);
+  let (message_descriptor, _) = descriptor_cache.find_message_descriptor_for_type(
+    ".com.pact.protobuf.example.MessageIn").unwrap();
   let field_descriptor1 = message_descriptor.field.iter()
     .find(|field| field.number == Some(1))
     .unwrap();
@@ -77,7 +78,7 @@ async fn basic_values_test() {
     .unwrap();
   let mut buffer = request.contents.value().unwrap();
 
-  let fields = decode_message(&mut buffer, &message_descriptor, &fds).unwrap();
+  let fields = decode_message(&mut buffer, &message_descriptor, &descriptor_cache).unwrap();
   expect!(fields).to(be_equal_to(vec![
     ProtobufField {
       field_num: 1,

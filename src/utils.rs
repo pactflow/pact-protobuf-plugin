@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 use std::panic::RefUnwindSafe;
+use std::sync::{Arc, RwLock};
 
 use anyhow::anyhow;
 use base64::Engine;
@@ -35,13 +36,539 @@ use tracing::{debug, error, instrument, trace, warn};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
 
-pub fn fds_to_map(fds: &FileDescriptorSet) -> HashMap<String, &FileDescriptorProto> {
-  fds.file.iter().map(
-    |des| (des.name.clone().unwrap_or_default(), des)).collect()
+/// A cached descriptor lookup structure that provides efficient access to protobuf descriptors.
+/// Replaces direct usage of FileDescriptorSet and HashMap<String, &FileDescriptorProto> throughout the codebase.
+/// 
+/// Now includes caching for improved lookup performance:
+/// - Package -> File descriptors cache (pre-built)
+/// - FQN -> Message descriptor cache (lazy, populated on demand)
+/// 
+/// Note: Not cloneable due to internal RwLock caches (thread-safe, shared access by reference)
+#[derive(Debug)]
+pub struct DescriptorCache {
+  /// All file descriptors (single source of truth)
+  file_descriptors: Vec<FileDescriptorProto>,
+  /// Map of file name to index in file_descriptors vec (pre-built for O(1) lookup)
+  file_descriptors_map: HashMap<String, usize>,
+  /// Cache: package name -> indices of file descriptors (pre-built for performance)
+  package_cache: HashMap<String, Vec<usize>>,
+  /// Cache: fully qualified name -> (message descriptor, file descriptor) (lazy, uses RwLock for thread-safe interior mutability)
+  message_fqn_cache: RwLock<HashMap<String, (DescriptorProto, FileDescriptorProto)>>,
+  /// Cache: fully qualified name -> (file descriptor, service descriptor) (lazy, uses RwLock for thread-safe interior mutability)
+  service_fqn_cache: RwLock<HashMap<String, (FileDescriptorProto, ServiceDescriptorProto)>>,
+  /// Cache: enum name -> enum descriptor (lazy, uses RwLock for thread-safe interior mutability)
+  enum_fqn_cache: RwLock<HashMap<String, EnumDescriptorProto>>,
 }
 
-fn fds_map_to_vec(descriptors: &HashMap<String, &FileDescriptorProto>) -> Vec<FileDescriptorProto> {
-  descriptors.values().map(|d| *d).cloned().collect()
+impl DescriptorCache {
+  /// Create a new DescriptorCache from a FileDescriptorSet
+  /// Pre-builds index-based maps for fast O(1) lookups
+  pub fn new(fds: FileDescriptorSet) -> Self {
+    let file_descriptors = fds.file;
+    
+    // Build map: filename -> index in file_descriptors vec
+    let file_descriptors_map: HashMap<String, usize> = file_descriptors
+      .iter()
+      .enumerate()
+      .map(|(idx, des)| (des.name.clone().unwrap_or_default(), idx))
+      .collect();
+    
+    // Pre-build package cache: package -> Vec<indices>
+    let package_cache = Self::build_package_cache(&file_descriptors);
+    
+    DescriptorCache {
+      file_descriptors,
+      file_descriptors_map,
+      package_cache,
+      message_fqn_cache: RwLock::new(HashMap::new()),
+      service_fqn_cache: RwLock::new(HashMap::new()),
+      enum_fqn_cache: RwLock::new(HashMap::new()),
+    }
+  }
+
+  /// Build the package cache mapping package names to indices of file descriptors
+  /// Files with no package (package=None) are stored with key ""
+  fn build_package_cache(file_descriptors: &[FileDescriptorProto]) -> HashMap<String, Vec<usize>> {
+    let mut cache: HashMap<String, Vec<usize>> = HashMap::new();
+    
+    for (idx, fd) in file_descriptors.iter().enumerate() {
+      let package_key = fd.package.clone().unwrap_or_else(|| String::from(""));
+      cache.entry(package_key)
+        .or_insert_with(Vec::new)
+        .push(idx);
+    }
+    
+    debug!("Built package cache with {} entries", cache.len());
+    cache
+  }
+
+  /// Split a fully-qualified name and try all package/name combinations.
+  /// For `.package.Message.Nested`, returns iterator of (package, name) tuples:
+  /// - ("", "package.Message.Nested")
+  /// - ("package", "Message.Nested")
+  /// - ("package.Message", "Nested")
+  fn try_package_splits(fqn: &str) -> Vec<(String, String)> {
+    if !fqn.starts_with('.') {
+      // Relative name - no package splitting needed
+      return vec![(String::new(), fqn.to_string())];
+    }
+    
+    let parts: Vec<&str> = fqn[1..].split('.').collect();
+    let mut results = Vec::new();
+    
+    for i in 0..=parts.len() {
+      let (package_parts, name_parts) = parts.split_at(i);
+      let name = name_parts.join(".");
+      
+      if !name.is_empty() {
+        let package = package_parts.join(".");
+        results.push((package, name));
+      }
+    }
+    
+    results
+  }
+
+  /// Tier 1 helper: Try all package/name splits and call Tier 2 lookup for each.
+  /// This eliminates duplication across message, service, and enum Tier 1 lookups.
+  fn try_all_package_splits<T, F>(
+    &self,
+    type_name: &str,
+    descriptor_type: &str,
+    lookup_fn: F
+  ) -> anyhow::Result<T>
+  where
+    F: Fn(&str, Option<&str>) -> anyhow::Result<T>
+  {
+    let mut last_error = anyhow!("{} '{}' not found", descriptor_type, type_name);
+    let is_fqn = type_name.starts_with('.');
+    
+    // Warn about deprecated relative name usage
+    if !is_fqn {
+      warn!(
+        "DEPRECATED: Using relative {} name '{}' without leading dot. \
+         This is supported for backward compatibility with old pact files, \
+         but new pacts should use fully qualified names (e.g., '.package.{}')",
+        descriptor_type.to_lowercase(),
+        type_name,
+        type_name
+      );
+    }
+    
+    for (package, name) in Self::try_package_splits(type_name) {
+      // For FQN: always pass Some(package), even for empty string (empty = no package)
+      // For relative names: pass None to search all files (backward compatibility)
+      let package_opt = if is_fqn {
+        Some(package.as_str())
+      } else {
+        None
+      };
+      
+      match lookup_fn(&name, package_opt) {
+          Ok(result) => return Ok(result),
+          Err(e) => last_error = e
+        }
+      }
+      
+      Err(last_error)
+    }
+
+  /// Tier 2 helper: Search for a descriptor across file descriptors.
+  /// This eliminates duplication across message, service, and enum Tier 2 lookups.
+  fn lookup_in_files<T, F>(
+    &self,
+    name: &str,
+    descriptor_type: &str,
+    package: Option<&str>,
+    search_fn: F
+  ) -> anyhow::Result<T>
+  where
+    F: Fn(&FileDescriptorProto) -> Option<T>
+  {
+    trace!("Looking for {} '{}' in package '{:?}'", descriptor_type, name, package);
+    
+    let file_descriptors = self.find_file_descriptors(package)?;
+    
+    file_descriptors.iter()
+      .find_map(search_fn)
+      .ok_or_else(|| {
+        anyhow!(
+          "{} '{}' not found in package '{:?}' (searched {} file(s))",
+          descriptor_type,
+          name,
+          package,
+          file_descriptors.len()
+        )
+      })
+  }
+  
+  /// Split a descriptor name into parts, filtering empty strings.
+  /// E.g., "Message.Nested" -> ["Message", "Nested"]
+  fn split_name_parts(name: &str) -> Vec<&str> {
+    name.split('.').filter(|v| !v.is_empty()).collect()
+  }
+
+  /// Generic cache wrapper to eliminate cache access duplication.
+  /// Checks cache first, runs lookup function if not cached, then caches result.
+  fn with_cache<K, V, F>(
+    &self,
+    cache: &RwLock<HashMap<K, V>>,
+    key: K,
+    cache_name: &str,
+    lookup_fn: F
+  ) -> anyhow::Result<V>
+  where
+    K: Eq + std::hash::Hash + Clone + std::fmt::Display,
+    V: Clone,
+    F: FnOnce() -> anyhow::Result<V>
+  {
+    // Check cache first
+    let cache_read = cache.read().unwrap();
+    if let Some(cached) = cache_read.get(&key) {
+      trace!("Found {} for '{}' in cache", cache_name, key);
+      return Ok(cached.clone());
+    }
+    drop(cache_read); // Release read lock before doing lookup
+    
+    // Do lookup
+    let result = lookup_fn()?;
+    
+    // Cache the result
+    cache.write().unwrap().insert(key.clone(), result.clone());
+    trace!("Cached {} for '{}'", cache_name, key);
+    
+    Ok(result)
+  }
+
+  // ============================================================================
+  // Message Descriptor Lookup (Three-Tier Architecture)
+  // ============================================================================
+
+  /// Tier 1: Find a message descriptor for a given type name, fully qualified or relative.
+  /// Uses cache and tries all package/name combinations.
+  pub fn find_message_descriptor_for_type(
+    &self,
+    type_name: &str,
+  ) -> anyhow::Result<(DescriptorProto, FileDescriptorProto)> {
+    self.with_cache(
+      &self.message_fqn_cache,
+      type_name.to_string(),
+      "message descriptor",
+      || self.try_all_package_splits(type_name, "Message", 
+           |name, pkg| self.lookup_message_descriptor(name, pkg))
+    )
+  }
+
+  /// Tier 2: Looks up message descriptor across file descriptors for a specific package.
+  /// If package is None, searches all descriptors (for backward compatibility).
+  fn lookup_message_descriptor(
+    &self,
+    message_name: &str,
+    package: Option<&str>,
+  ) -> anyhow::Result<(DescriptorProto, FileDescriptorProto)> {
+    self.lookup_in_files(message_name, "Message", package, |fd| {
+      self.find_message_in_file(message_name, fd)
+        .ok()
+        .map(|msg| (msg, fd.clone()))
+    })
+  }
+
+  /// Tier 3: Find a message within a specific file descriptor, handling nested messages.
+  fn find_message_in_file(
+    &self,
+    message_name: &str,
+    file_descriptor: &FileDescriptorProto
+  ) -> anyhow::Result<DescriptorProto> {
+    let parts = Self::split_name_parts(message_name);
+    
+    if parts.is_empty() {
+      return Err(anyhow!("Empty message name"));
+    }
+    
+    // Find top-level message
+    let first_message = file_descriptor.message_type.iter()
+      .find(|msg| msg.name() == parts[0])
+      .cloned()
+      .ok_or_else(|| anyhow!("Message '{}' not found in file '{}'", 
+        parts[0], file_descriptor.name()))?;
+    
+    if parts.len() == 1 {
+      return Ok(first_message);
+    }
+    
+    // Recursively find nested messages
+    self.find_nested_message_recursive(&first_message, &parts[1..])
+  }
+
+  // ============================================================================
+  // Service Descriptor Lookup (Three-Tier Architecture)
+  // (but service is 2 tiers only because it cannot be nested in a message)
+  // ============================================================================
+
+  /// Tier 1: Find a service descriptor for a given service type name, fully qualified or relative.
+  /// Uses cache and tries all package/name combinations.
+  pub fn find_service_descriptor_for_type(
+    &self,
+    type_name: &str
+  ) -> anyhow::Result<(FileDescriptorProto, ServiceDescriptorProto)> {
+    self.with_cache(
+      &self.service_fqn_cache,
+      type_name.to_string(),
+      "service descriptor",
+      || self.try_all_package_splits(type_name, "Service",
+           |name, pkg| self.lookup_service_descriptor(name, pkg))
+    )
+  }
+
+  /// Tier 2: Looks up service descriptor across file descriptors for a specific package.
+  /// If package is None, searches all descriptors (for backward compatibility).
+  fn lookup_service_descriptor(
+    &self,
+    service_name: &str,
+    package: Option<&str>
+  ) -> anyhow::Result<(FileDescriptorProto, ServiceDescriptorProto)> {
+    self.lookup_in_files(service_name, "Service", package, |fd| {
+      fd.service.iter()
+        .find(|s| s.name() == service_name)
+        .map(|s| (fd.clone(), s.clone()))
+    })
+  }
+
+  // ============================================================================
+  // Enum Descriptor Lookup (Three-Tier Architecture)
+  // ============================================================================
+
+  /// Tier 1: Find an enum by name, fully qualified or relative.
+  /// Uses cache and tries all package/name combinations.
+  pub fn find_enum_by_name(&self, enum_name: &str) -> Option<EnumDescriptorProto> {
+    trace!(">> find_enum_by_name({})", enum_name);
+    
+    // Use with_cache but convert Result to Option
+    self.with_cache(
+      &self.enum_fqn_cache,
+      enum_name.to_string(),
+      "enum descriptor",
+      || self.try_all_package_splits(enum_name, "Enum",
+           |name, pkg| self.lookup_enum_descriptor(name, pkg))
+    ).ok()
+  }
+
+  /// Find an enum value by name. First finds the enum, then looks up the value.
+  /// This is simpler and more efficient than the old approach which duplicated lookup logic.
+  pub fn find_enum_value_by_name(
+    &self,
+    enum_name: &str,
+    enum_value: &str
+  ) -> Option<(i32, EnumDescriptorProto)> {
+    trace!(">> find_enum_value_by_name({}, {})", enum_name, enum_value);
+    
+    // Find the enum descriptor (uses cache)
+    let enum_descriptor = self.find_enum_by_name(enum_name)?;
+    
+    // Find the value in the enum descriptor
+    find_enum_value_in_descriptor(&enum_descriptor, enum_value)
+      .map(|value_num| (value_num, enum_descriptor))
+  }
+
+  /// Tier 2: Looks up enum descriptor across file descriptors for a specific package.
+  fn lookup_enum_descriptor(
+    &self,
+    enum_name: &str,
+    package: Option<&str>
+  ) -> anyhow::Result<EnumDescriptorProto> {
+    self.lookup_in_files(enum_name, "Enum", package, |fd| {
+      self.find_enum_in_file(enum_name, fd)
+    })
+  }
+
+  /// Tier 3: Find an enum within a specific file descriptor.
+  /// Enums can be top-level or nested inside messages.
+  fn find_enum_in_file(
+    &self,
+    enum_name: &str,
+    file_descriptor: &FileDescriptorProto
+  ) -> Option<EnumDescriptorProto> {
+    let parts = Self::split_name_parts(enum_name);
+    
+    if parts.is_empty() {
+      return None;
+    }
+    
+    if parts.len() == 1 {
+      // Top-level enum in file
+      find_enum_by_name_in_message(&file_descriptor.enum_type, enum_name)
+            } else {
+      // Nested in message - last part is enum, rest is message path
+      let message_path = parts[..parts.len()-1].join(".");
+      let enum_simple_name = parts[parts.len()-1];
+      
+      if let Ok(message) = self.find_message_in_file(&message_path, file_descriptor) {
+        find_enum_by_name_in_message(&message.enum_type, enum_simple_name)
+    } else {
+      None
+      }
+    }
+  }
+
+  /// Find file descriptors by package (internal/test use only)
+  pub(crate) fn find_file_descriptors(
+    &self,
+    package: Option<&str>,
+  ) -> anyhow::Result<Vec<FileDescriptorProto>> {
+    match package {
+      Some(pkg) if pkg.is_empty() => {
+        debug!("Looking for file descriptors with no package");
+        self.find_all_file_descriptors_with_no_package()
+      }
+      Some(pkg) => {
+        debug!("Looking for file descriptors with package '{}'", pkg);
+        self.find_all_file_descriptors_for_package(pkg)
+      }
+      None => Ok(self.file_descriptors.clone())
+    }
+  }
+
+  fn find_all_file_descriptors_for_package(
+    &self,
+    package: &str,
+  ) -> anyhow::Result<Vec<FileDescriptorProto>> {
+    let package = if package.starts_with('.') {
+        &package[1..]
+    } else {
+        package
+    };
+    
+    // Use package cache - stores indices, convert to FileDescriptorProto
+    if let Some(indices) = self.package_cache.get(package) {
+      trace!("Found {} file descriptors for package '{}' in cache", indices.len(), package);
+      let descriptors: Vec<FileDescriptorProto> = indices.iter()
+        .map(|&idx| self.file_descriptors[idx].clone())
+        .collect();
+      Ok(descriptors)
+        } else {
+      // Package not in cache means it doesn't exist (cache is complete)
+        Err(anyhow!("Did not find any file descriptors for a package '{}'", package))
+    }
+  }
+
+  fn find_all_file_descriptors_with_no_package(
+    &self
+    ) -> anyhow::Result<Vec<FileDescriptorProto>> {
+    // Files with no package are cached with empty string key
+    if let Some(indices) = self.package_cache.get("") {
+      trace!("Found {} file descriptors with no package in cache", indices.len());
+      let descriptors: Vec<FileDescriptorProto> = indices.iter()
+        .map(|&idx| self.file_descriptors[idx].clone())
+        .collect();
+      Ok(descriptors)
+    } else {
+      // Empty string key not in cache means no files without package
+      Err(anyhow!("Did not find any file descriptors with no package specified"))
+    }
+  }
+
+  // Backward compatibility methods for accessing raw collections
+
+  /// Get all file descriptors as a vector (used for logging/tracing)
+  pub fn get_file_descriptors_vec(&self) -> &Vec<FileDescriptorProto> {
+    &self.file_descriptors
+  }
+
+  /// Get a file descriptor by file name (uses pre-built index map for O(1) lookup)
+  pub fn get_file_descriptor_by_name(&self, file_name: &str) -> Option<&FileDescriptorProto> {
+    self.file_descriptors_map
+      .get(file_name)
+      .map(|&idx| &self.file_descriptors[idx])
+  }
+
+  /// Helper function to recursively find nested messages
+  fn find_nested_message_recursive(
+    &self,
+    current_message: &DescriptorProto,
+    remaining_parts: &[&str]
+  ) -> anyhow::Result<DescriptorProto> {
+    if remaining_parts.is_empty() {
+      return Ok(current_message.clone());
+    }
+
+    let next_message_name = remaining_parts[0];
+    trace!("find_nested_message_recursive: looking for '{}' in message '{}'", next_message_name, current_message.name());
+
+    // Look in the nested types of the current message
+    let nested_message = current_message.nested_type.iter()
+      .find(|msg| msg.name() == next_message_name)
+      .cloned()
+      .ok_or_else(|| anyhow!("Did not find nested message type '{}' in message '{}'",
+        next_message_name, current_message.name()))?;
+
+    // Recursively search for the remaining parts
+    self.find_nested_message_recursive(&nested_message, &remaining_parts[1..])
+  }
+
+  }
+
+  /// Helper to select a method descriptor by name from a service descriptor.
+  pub fn find_method_descriptor_for_service(
+    method_name: &str,
+    service_descriptor: &ServiceDescriptorProto
+  ) -> anyhow::Result<MethodDescriptorProto> {
+    let method_descriptor = service_descriptor.method.iter().find(|method_desc| {
+      method_desc.name() == method_name
+    }).cloned().ok_or_else(|| anyhow!("Did not find the method {} in the Protobuf descriptor for service '{}'", 
+      method_name, service_descriptor.name()))?;
+    trace!("Found method descriptor {:?} for method {}", method_descriptor, method_name);
+    Ok(method_descriptor)
+  }
+
+  /// Find the integer value of the given enum type and name in the message descriptor.
+/// This is a convenience function that combines finding the enum and finding the value within it.
+  #[tracing::instrument(ret, skip_all, fields(%enum_name, %enum_value))]
+pub fn find_enum_value_by_name_in_message(
+    enum_types: &[EnumDescriptorProto],
+    enum_name: &str,
+    enum_value: &str
+  ) -> Option<(i32, EnumDescriptorProto)> {
+  trace!(">> find_enum_value_by_name_in_message({}, {})", enum_name, enum_value);
+  
+  // First find the enum by name, then find the value within it
+  find_enum_by_name_in_message(enum_types, enum_name)
+    .and_then(|enum_desc| {
+      find_enum_value_in_descriptor(&enum_desc, enum_value)
+        .map(|n| (n, enum_desc))
+      })
+  }
+
+  /// Find the enum type by name in the message descriptor.
+  #[tracing::instrument(ret, skip_all, fields(%enum_name))]
+pub fn find_enum_by_name_in_message(
+    enum_types: &[EnumDescriptorProto],
+    enum_name: &str
+  ) -> Option<EnumDescriptorProto> {
+  trace!(">> find_enum_by_name_in_message({})", enum_name);
+    enum_types.iter()
+      .find_map(|enum_descriptor| {
+        trace!("find_enum_by_name_in_message: enum type = {:?}", enum_descriptor.name);
+        if let Some(name) = &enum_descriptor.name {
+          if name == last_name(enum_name) {
+            Some(enum_descriptor.clone())
+          } else {
+            None
+          }
+        } else {
+          None
+        }
+      })
+  }
+
+/// Find the integer value of a given enum value name in an enum descriptor.
+/// This is a simple helper that just looks up the value in the enum's value list.
+pub fn find_enum_value_in_descriptor(
+  enum_descriptor: &EnumDescriptorProto,
+  enum_value: &str
+) -> Option<i32> {
+  enum_descriptor.value.iter()
+    .find(|val| val.name() == enum_value)
+    .and_then(|val| val.number)
 }
 
 /// Return the last name in a dot separated string
@@ -122,255 +649,6 @@ pub fn parse_grpc_route(route_key: &str) -> Option<(String, String)> {
   }
 }
 
-/// Search for a message by type name in the file descriptor
-pub fn find_message_type_in_file_descriptor(
-  message_name: &str,
-  descriptor: &FileDescriptorProto
-) -> anyhow::Result<DescriptorProto> {
-  trace!("find_message_type_in_file_descriptor: message_name = {}", message_name);
-
-  // Split the message name by dots to handle nested messages
-  let message_parts: Vec<&str> = message_name.split('.').filter(|v| !v.is_empty()).collect();
-
-  if message_parts.is_empty() {
-    return Err(anyhow!("Empty message name"));
-  }
-
-  // Find the first message in the top-level message types
-  let first_message_name = message_parts[0];
-  let message = descriptor.message_type.iter()
-    .find(|msg| msg.name() == first_message_name)
-    .cloned()
-    .ok_or_else(|| anyhow!("Did not find a message type '{}' in the file descriptor '{}'",
-      first_message_name, descriptor.name.as_deref().unwrap_or("unknown")))?;
-
-  // If there's only one part, we found the message
-  if message_parts.len() == 1 {
-    return Ok(message);
-  }
-
-  // Recursively find nested messages
-  find_nested_message_recursive(&message, &message_parts[1..])
-}
-
-/// Helper function to recursively find nested messages
-fn find_nested_message_recursive(
-  current_message: &DescriptorProto,
-  remaining_parts: &[&str]
-) -> anyhow::Result<DescriptorProto> {
-  if remaining_parts.is_empty() {
-    return Ok(current_message.clone());
-  }
-
-  let next_message_name = remaining_parts[0];
-  trace!("find_nested_message_recursive: looking for '{}' in message '{}'", next_message_name, current_message.name());
-
-  // Look in the nested types of the current message
-  let nested_message = current_message.nested_type.iter()
-    .find(|msg| msg.name() == next_message_name)
-    .cloned()
-    .ok_or_else(|| anyhow!("Did not find nested message type '{}' in message '{}'",
-      next_message_name, current_message.name()))?;
-
-  // Recursively search for the remaining parts
-  find_nested_message_recursive(&nested_message, &remaining_parts[1..])
-}
-
-// TODO: handle nested types properly
-// current name resolution is dumb - just splits package and message name by a dot
-// but if you have .package.Message.NestedMessage.NestedMessageDeeperLevel this whole structure breaks down
-// because we'll be looking for packages with the name `.package.Message.NestedMessage`
-// while here the package is `.package` and then we need to find message called `Message` and go over it's nested types.
-// To be fair, I don't think this ever worked properly - it was looking across all file descriptors instead of narrowing them down by packages,
-// but it still wasn't looking for nested types.
-/// Helper to select a method descriptor by name from a service descriptor.
-pub fn find_method_descriptor_for_service(
-  method_name: &str,
-  service_descriptor: &ServiceDescriptorProto
-) -> anyhow::Result<MethodDescriptorProto> {
-  let method_descriptor = service_descriptor.method.iter().find(|method_desc| {
-    method_desc.name() == method_name
-  }).cloned().ok_or_else(|| anyhow!("Did not find the method {} in the Protobuf descriptor for service '{}'", 
-    method_name, service_descriptor.name()))?;
-  trace!("Found method descriptor {:?} for method {}", method_descriptor, method_name);
-  Ok(method_descriptor)
-}
-
-
-/// Find a descriptor for a given type name, fully qualified or relative.
-/// Type name format is the same as in `type_name` field in field descriptor
-/// or the `input_type`/`output_type` fields in method descriptor.
-/// 
-/// If type name starts with a dot ('.') it's a fully qualified name, so it is split into package and message names; 
-/// if the package is empty, will only lookup messages which have no package.
-/// 
-/// If type name does not contain a dot, it is a relative type. We'll search all file descriptors then.
-/// This isn't techically correct, since we're supposed to start from the current file, and then search
-/// level by level, but it's good enough for now (and this is how the plugin used to work for all messages anyway)
-pub fn find_message_descriptor_for_type_in_vec(
-  type_name: &str,
-  all_descriptors: &Vec<FileDescriptorProto>
-) -> anyhow::Result<(DescriptorProto, FileDescriptorProto)> {
-  let (message_name, package) = parse_name(type_name);
-  find_message_descriptor(message_name, package, &all_descriptors)
-}
-
-/// Find a descriptor for a given type name, fully qualified or relative.
-/// Type name format is the same as in `type_name` field in field descriptor
-/// or the `input_type`/`output_type` fields in method descriptor.
-/// 
-/// If type name starts with a dot ('.') it's a fully qualified name, so it is split into package and message names; 
-/// if the package is empty, will only lookup messages which have no package.
-/// 
-/// If type name does not contain a dot, it is a relative type. We'll search all file descriptors then.
-/// This isn't techically correct, since we're supposed to start from the current file, and then search
-/// level by level, but it's good enough for now (and this is how the plugin used to work for all messages anyway)
-pub fn find_message_descriptor_for_type_in_map(
-  type_name: &str,
-  descriptors: &HashMap<String, &FileDescriptorProto>,
-) -> anyhow::Result<(DescriptorProto, FileDescriptorProto)> {
-  let values = fds_map_to_vec(descriptors);
-  find_message_descriptor_for_type_in_vec(type_name, &values)
-}
-
-/// Find a descriptor for a given type name, fully qualified or relative.
-/// Type name format is the same as in `type_name` field in field descriptor
-/// or the `input_type`/`output_type` fields in method descriptor.
-/// 
-/// If type name starts with a dot ('.') it's a fully qualified name, so it is split into package and message names; 
-/// if the package is empty, will only lookup messages which have no package.
-/// 
-/// If type name does not contain a dot, it is a relative type. We'll search all file descriptors then.
-/// This isn't techically correct, since we're supposed to start from the current file, and then search
-/// level by level, but it's good enough for now (and this is how the plugin used to work for all messages anyway)
-pub fn find_message_descriptor_for_type(
-  type_name: &str,
-  descriptors: &FileDescriptorSet,
-) -> anyhow::Result<(DescriptorProto, FileDescriptorProto)> {
-  find_message_descriptor_for_type_in_vec(type_name, &descriptors.file)
-}
-
-/// Finds message descriptor in a vector of file descriptors. If the package is not none, it will
-/// search only the descriptors matching the package 
-/// (empty string means descriptors without package, because package is an optional field in proto3). 
-/// If it is none, it will search all descriptors, to support cases where pact was generated by the older
-/// plugin version which didn't record the message package in the interaction config.
-pub(crate) fn find_message_descriptor(
-  message_name: &str,
-  package: Option<&str>,
-  all_descriptors: &Vec<FileDescriptorProto>,
-) -> anyhow::Result<(DescriptorProto, FileDescriptorProto)> {
-  if package.is_some() {
-    trace!("Looking for message descriptor for message '{}' in package '{:?}'", message_name, package);
-  } else {
-    trace!("Looking for message descriptor for message '{}'", message_name);
-  }
-  let descriptors = find_file_descriptors(package, &all_descriptors)?;
-  descriptors.iter()
-    .find_map(|fd| find_message_type_in_file_descriptor(message_name, fd).ok().map(|msg| (msg, fd.clone())))
-    .ok_or_else(|| {
-        anyhow!(
-            "Did not find a message type '{}' in any of the file descriptors '{:?}'", 
-            message_name, 
-            descriptors.iter().map(|d| d.name()).collect::<Vec<_>>())
-    })
-}
-
-/// Find a service descriptor for a given service type name, fully qualified or relative.
-/// 
-/// If type name starts with a dot ('.') it's a fully qualified name, so it is split into package and message names; 
-/// if the package is empty, will only lookup services which have no package.
-/// 
-/// If type name does not contain a dot, it is a relative type. We'll search all file descriptors then.
-/// This isn't techically correct, since we're supposed to start from the current file, and then search
-/// level by level, but it's good enough for now (and this is how the plugin used to work for all services anyway)
-pub(crate) fn find_service_descriptor_for_type(
-  type_name: &str,
-  all_descriptors: &FileDescriptorSet
-) -> anyhow::Result<(FileDescriptorProto, ServiceDescriptorProto)> {
-  let (message_name, package) = parse_name(type_name);
-  find_service_descriptor(message_name, package, all_descriptors)
-}
-
-pub(crate) fn find_service_descriptor(
-  service_name: &str,
-  package: Option<&str>,
-  descriptors: &FileDescriptorSet
-) -> anyhow::Result<(FileDescriptorProto, ServiceDescriptorProto)> {
-  if package.is_some() {
-    debug!("Looking for service '{}' with package '{:?}'", service_name, package);
-  } else {
-    debug!("Looking for service '{}'", service_name);
-  }
-  let file_descriptors = find_file_descriptors(package, &descriptors.file)?;
-  file_descriptors.iter().filter_map(|descriptor| {
-    descriptor.service.iter()
-      .find(|p| p.name() == service_name)
-      .map(|p| {
-        trace!("Found service descriptor with name {:?}", p.name);
-        (descriptor.clone(), p.clone())
-      })
-  })
-    .next()
-    .ok_or_else(|| anyhow!("Did not find a descriptor for service '{}'", service_name))
-}
-
-pub fn find_file_descriptors(
-  package: Option<&str>,
-  all_descriptors: &Vec<FileDescriptorProto>,
-) -> anyhow::Result<Vec<FileDescriptorProto>> {
-  match package {
-    Some(pkg) if pkg.is_empty() => {
-      debug!("Looking for file descriptors with no package");
-      find_all_file_descriptors_with_no_package(all_descriptors)
-    }
-    Some(pkg) => {
-      debug!("Looking for file descriptors with package '{}'", pkg);
-      find_all_file_descriptors_for_package(pkg, all_descriptors)
-    }
-    None => Ok(all_descriptors.clone())
-  }
-}
-
-fn find_all_file_descriptors_for_package(
-  package: &str,
-  all_descriptors: &Vec<FileDescriptorProto>,
-) -> anyhow::Result<Vec<FileDescriptorProto>> {
-  let package = if package.starts_with('.') {
-      &package[1..]
-  } else {
-      package
-  };
-  let found: Vec<_> = all_descriptors.iter().filter(|descriptor| {
-      trace!("Checking file descriptor '{:?}' with package '{:?}' while looking for package '{}'", 
-        descriptor.name, descriptor.package, package);
-      if let Some(descriptor_package) = &descriptor.package {
-          debug!("Found file descriptor '{:?}' with package '{:?}'", descriptor.name, descriptor_package);
-          descriptor_package == package
-      } else {
-          false
-      }
-  }).cloned().collect();
-  if found.is_empty() {
-      Err(anyhow!("Did not find any file descriptors for a package '{}'", package))
-  } else {
-      debug!("Found {} file descriptors for package '{}'", found.len(), package);
-      Ok(found)
-  }
-}
-
-fn find_all_file_descriptors_with_no_package(
-  all_descriptors: &Vec<FileDescriptorProto>
-  ) -> anyhow::Result<Vec<FileDescriptorProto>> {
-  let found: Vec<_> = all_descriptors.iter().filter(|d| d.package.is_none()).cloned().collect();
-  if found.is_empty() {
-      Err(anyhow!("Did not find any file descriptors with no package specified"))
-  } else {
-      debug!("Found {} file descriptors with no package", found.len());
-      Ok(found)
-  }
-}
-
 /// If the field is a map field. A field will be a map field if it is a repeated field, the field
 /// type is a message and the nested type has the map flag set on the message options.
 pub fn is_map_field(message_descriptor: &DescriptorProto, field: &FieldDescriptorProto) -> bool {
@@ -446,151 +724,12 @@ pub fn enum_name(enum_value: i32, descriptor: &EnumDescriptorProto) -> String {
     .unwrap_or_else(|| format!("Unknown enum {}", enum_value))
 }
 
-/// Find the integer value of the given enum type and name in the message descriptor.
-#[tracing::instrument(ret, skip_all, fields(%enum_name, %enum_value))]
-pub fn find_enum_value_by_name_in_message(
-  enum_types: &[EnumDescriptorProto],
-  enum_name: &str,
-  enum_value: &str
-) -> Option<(i32, EnumDescriptorProto)> {
-  trace!(">> find_enum_value_by_name_in_message({}, {})",enum_name, enum_value);
-  enum_types.iter()
-    .find_map(|enum_descriptor| {
-      trace!("find_enum_value_by_name_in_message: enum type = {:?}", enum_descriptor.name);
-      if let Some(name) = &enum_descriptor.name {
-        if name == last_name(enum_name) {
-          enum_descriptor.value.iter().find_map(|val| {
-            if let Some(name) = &val.name {
-              if name == enum_value {
-                val.number.map(|n| (n, enum_descriptor.clone()))
-              } else {
-                None
-              }
-            } else {
-              None
-            }
-          })
-        } else {
-          None
-        }
-      } else {
-        None
-      }
-    })
-}
-
-/// Find the enum type by name in the message descriptor.
-#[tracing::instrument(ret, skip_all, fields(%enum_name))]
-pub fn find_enum_by_name_in_message(
-  enum_types: &[EnumDescriptorProto],
-  enum_name: &str
-) -> Option<EnumDescriptorProto> {
-  trace!(">> find_enum_by_name_in_message({})",enum_name);
-  enum_types.iter()
-    .find_map(|enum_descriptor| {
-      trace!("find_enum_by_name_in_message: enum type = {:?}", enum_descriptor.name);
-      if let Some(name) = &enum_descriptor.name {
-        if name == last_name(enum_name) {
-          Some(enum_descriptor.clone())
-        } else {
-          None
-        }
-      } else {
-        None
-      }
-    })
-}
-
-/// Find the integer value of the given enum type and name in all the descriptors.
-#[tracing::instrument(ret, skip_all, fields(%enum_name, %enum_value))]
-pub fn find_enum_value_by_name(
-  descriptors: &HashMap<String, &FileDescriptorProto>,
-  enum_name: &str,
-  enum_value: &str
-) -> Option<(i32, EnumDescriptorProto)> {
-  trace!(">> find_enum_value_by_name({}, {})", enum_name, enum_value);
-  let enum_name_full = enum_name.split('.').filter(|v| !v.is_empty()).collect::<Vec<_>>().join(".");
-  let result = descriptors.values()
-        .find_map(|fd| {
-          let package = fd.package();
-          if enum_name_full.starts_with(package) {
-            let enum_name_short = enum_name_full.replace(package, "");
-            let enum_name_parts = enum_name_short.split('.').filter(|v| !v.is_empty()).collect::<Vec<_>>();
-            if let Some((_name, message_name)) = enum_name_parts.split_last() {
-              if message_name.is_empty() {
-                find_enum_value_by_name_in_message(&fd.enum_type, enum_name, enum_value)
-              } else {
-                let message_name = message_name.join(".");
-                if let Ok(message_descriptor) = find_message_type_in_file_descriptor(&message_name, fd) {
-                  find_enum_value_by_name_in_message(&message_descriptor.enum_type, enum_name, enum_value)
-                } else {
-                  None
-                }
-              }
-            } else {
-              None
-            }
-          } else {
-            None
-          }
-        });
-  if result.is_some() {
-    result
-  } else {
-    None
-  }
-}
-
-/// Find the given enum type by name in all the descriptors.
-#[tracing::instrument(ret, skip_all, fields(%enum_name))]
-pub fn find_enum_by_name(
-  descriptors: &FileDescriptorSet,
-  enum_name: &str
-) -> Option<EnumDescriptorProto> {
-  trace!(">> find_enum_by_name({})", enum_name);
-  // TODO: unify this name split logic with the one in split_name
-  let enum_name_full = enum_name.split('.').filter(|v| !v.is_empty()).collect::<Vec<_>>().join(".");
-  let result = descriptors.file.iter()
-        .find_map(|fd| {
-          // TODO: combine this with the rest of the package search logic;
-          // this one actually supports nested enum types,
-          // but starts_with check is not always correct (need to split by dots)
-          // and I don't think it recurses inside message-in-message
-          let package = fd.package();
-          if enum_name_full.starts_with(package) {
-            let enum_name_short = enum_name_full.replace(package, "");
-            let enum_name_parts = enum_name_short.split('.').filter(|v| !v.is_empty()).collect::<Vec<_>>();
-            if let Some((_name, message_name)) = enum_name_parts.split_last() {
-              if message_name.is_empty() {
-                find_enum_by_name_in_message(&fd.enum_type, enum_name)
-              } else {
-                let message_name = message_name.join(".");
-                if let Ok(message_descriptor) = find_message_type_in_file_descriptor(&message_name, fd) {
-                  find_enum_by_name_in_message(&message_descriptor.enum_type, enum_name)
-                } else {
-                  None
-                }
-              }
-            } else {
-              None
-            }
-          } else {
-            None
-          }
-        });
-  if result.is_some() {
-    result
-  } else {
-    None
-  }
-}
-
 /// Convert the Google Struct field data into a JSON value
-#[instrument(level = "trace", skip(descriptors))]
+#[instrument(level = "trace", skip(descriptor_cache))]
 pub fn struct_field_data_to_json(
   field_data: Vec<ProtobufField>,
   descriptor: &DescriptorProto,
-  descriptors: &FileDescriptorSet
+  descriptor_cache: &DescriptorCache
 ) -> anyhow::Result<serde_json::Value> {
   let mut object = Map::new();
 
@@ -598,7 +737,7 @@ pub fn struct_field_data_to_json(
     if let ProtobufFieldData::Message(b, entry_descriptor) = &field.data {
       trace!(name = ?entry_descriptor.name, ?b, "constructing entry");
       let mut bytes = BytesMut::from(b.as_slice());
-      let message_data = decode_message(&mut bytes, entry_descriptor, descriptors)?;
+      let message_data = decode_message(&mut bytes, entry_descriptor, descriptor_cache)?;
       trace!(?message_data, "decoded entry");
       if message_data.len() == 2 {
         let key_field = message_data.iter().find(|f| f.field_name == "key")
@@ -610,7 +749,7 @@ pub fn struct_field_data_to_json(
         } else {
           return Err(anyhow!("Key for {} must be a String, but got {}", entry_descriptor.name(), key_field.data.type_name()));
         };
-        let value = proto_value_to_json(descriptors, value_field)?;
+        let value = proto_value_to_json(descriptor_cache, value_field)?;
         object.insert(key, value);
       } else {
         return Err(anyhow!("Was expecting 2 values (key, value) for the entry with field number {}, but got {:?}", field.field_num, message_data));
@@ -623,15 +762,15 @@ pub fn struct_field_data_to_json(
   Ok(serde_json::Value::Object(object))
 }
 
-#[instrument(level = "trace", skip(descriptors))]
+#[instrument(level = "trace", skip(descriptor_cache))]
 fn proto_value_to_json(
-  descriptors: &FileDescriptorSet,
+  descriptor_cache: &DescriptorCache,
   value_field: &ProtobufField
 ) -> anyhow::Result<serde_json::Value> {
   match &value_field.data {
     ProtobufFieldData::Message(m, d) => {
       let mut bytes = BytesMut::from(m.as_slice());
-      let message_data = decode_message(&mut bytes, d, descriptors)?;
+      let message_data = decode_message(&mut bytes, d, descriptor_cache)?;
       trace!(?message_data, "decoded value");
       if let Some(field_data) = message_data.first() {
         match &field_data.data {
@@ -646,18 +785,18 @@ fn proto_value_to_json(
           ProtobufFieldData::Message(m, desc) => {
             if desc.name() == "ListValue" {
               let mut list_bytes = BytesMut::from(m.as_slice());
-              let list_data = decode_message(&mut list_bytes, desc, descriptors)?;
+              let list_data = decode_message(&mut list_bytes, desc, descriptor_cache)?;
               trace!(?list_data, "decoded list");
               let mut items = vec![];
               for field in &list_data {
-                items.push(proto_value_to_json(descriptors, field)?);
+                items.push(proto_value_to_json(descriptor_cache, field)?);
               }
               Ok(serde_json::Value::Array(items))
             } else if desc.name() == "Struct" {
               let mut struct_bytes = BytesMut::from(m.as_slice());
-              let struct_data = decode_message(&mut struct_bytes, desc, descriptors)?;
+              let struct_data = decode_message(&mut struct_bytes, desc, descriptor_cache)?;
               trace!(?struct_data, "decoded struct");
-              struct_field_data_to_json(struct_data, desc, descriptors)
+              struct_field_data_to_json(struct_data, desc, descriptor_cache)
             } else {
               Err(anyhow!("{} is not a valid value for a Struct entry", field_data.data.type_name()))
             }
@@ -742,32 +881,25 @@ pub fn lookup_plugin_config(pact: &V4Pact) -> anyhow::Result<BTreeMap<String, se
   Ok(plugin_config)
 }
 
-/// Returns the service descriptors for the given interaction.
-/// Will load all descriptors from the pact file using `descriptorKey` from interaction config,
-/// and then find the correct file, service and method descriptors using `service` value from
-/// the interaction config.
+/// Lookup service and method descriptors for an interaction using a pre-built cache.
+/// This function does NOT parse descriptors - it expects the cache to already exist.
 /// 
 /// # Arguments
-/// - `interaction` - A specific interaction from the pact
-/// - `pact` - Pact (contains this interaction too)
+/// * `interaction` - The V4 interaction to lookup descriptors for
+/// * `descriptor_cache` - Pre-built descriptor cache to use for lookups
 /// 
 /// # Returns
 /// A tuple of:
-/// - FileDescriptorSet - all available file descriptors
 /// - ServiceDescriptorProto - the service descriptor for this gRPC service
 /// - MethodDescriptorProto - the method descriptor for this gRPC service
 /// - FileDescriptorProto - the file descriptor containing this gRPC service
-pub(crate) fn lookup_service_descriptors_for_interaction(
+pub(crate) fn lookup_service_and_method_for_interaction(
   interaction: &dyn V4Interaction,
-  pact: &V4Pact
-) -> anyhow::Result<(FileDescriptorSet, ServiceDescriptorProto, MethodDescriptorProto, FileDescriptorProto)> {
-  // TODO: a similar flow happens in server::compare_contents, can it be refactored to a common function?
-  // compare_contents works with both service and message, while this one only works with the service.
+  descriptor_cache: &Arc<DescriptorCache>
+) -> anyhow::Result<(ServiceDescriptorProto, MethodDescriptorProto, FileDescriptorProto)> {
   let interaction_config = lookup_interaction_config(interaction)
     .ok_or_else(|| anyhow!("Interaction does not have any Protobuf configuration"))?;
-  let descriptor_key = interaction_config.get("descriptorKey")
-    .map(json_to_string)
-    .ok_or_else(|| anyhow!("Interaction descriptorKey was missing in Pact file"))?;
+  
   let service = interaction_config.get("service")
     .map(json_to_string)
     .ok_or_else(|| anyhow!("Interaction gRPC service was missing in Pact file"))?;
@@ -775,13 +907,49 @@ pub(crate) fn lookup_service_descriptors_for_interaction(
   let (service_with_package, method_name) = split_service_and_method(service.as_str())?;
   trace!("gRPC service for interaction: {}", service_with_package);
   
-  let plugin_config = lookup_plugin_config(pact)?;
-  let descriptors = get_descriptors_for_interaction(descriptor_key.as_str(), &plugin_config)?;
-  trace!("file descriptors for interaction {:?}", descriptors);
+  let (file_descriptor, service_descriptor) = descriptor_cache.find_service_descriptor_for_type(service_with_package)?;
+  let method_descriptor = find_method_descriptor_for_service(method_name, &service_descriptor)?;
   
-  let (file_descriptor, service_descriptor) = find_service_descriptor_for_type(service_with_package, &descriptors)?;
-  let method_descriptor = find_method_descriptor_for_service( method_name, &service_descriptor)?;
-  Ok((descriptors.clone(), service_descriptor.clone(), method_descriptor.clone(), file_descriptor.clone()))
+  Ok((service_descriptor.clone(), method_descriptor.clone(), file_descriptor.clone()))
+}
+
+/// Lookup service and method descriptors for an interaction, parsing descriptors from the pact.
+/// This function parses the descriptors from the pact and creates a new cache.
+/// For performance-critical scenarios with multiple interactions, consider pre-parsing descriptors
+/// and using `lookup_service_and_method_for_interaction` instead.
+/// 
+/// # Arguments
+/// * `interaction` - The V4 interaction to lookup descriptors for
+/// * `pact` - The V4 pact containing the descriptor configuration
+/// 
+/// # Returns
+/// A tuple of:
+/// - DescriptorCache - cached descriptor lookup structure (wrapped in Arc)
+/// - ServiceDescriptorProto - the service descriptor for this gRPC service
+/// - MethodDescriptorProto - the method descriptor for this gRPC service
+/// - FileDescriptorProto - the file descriptor containing this gRPC service
+pub(crate) fn lookup_service_descriptors_for_interaction(
+  interaction: &dyn V4Interaction,
+  pact: &V4Pact
+) -> anyhow::Result<(Arc<DescriptorCache>, ServiceDescriptorProto, MethodDescriptorProto, FileDescriptorProto)> {
+  // TODO: a similar flow happens in server::compare_contents, can it be refactored to a common function?
+  // compare_contents works with both service and message, while this one only works with the service.
+  let interaction_config = lookup_interaction_config(interaction)
+    .ok_or_else(|| anyhow!("Interaction does not have any Protobuf configuration"))?;
+  let descriptor_key = interaction_config.get("descriptorKey")
+    .map(json_to_string)
+    .ok_or_else(|| anyhow!("Interaction descriptorKey was missing in Pact file"))?;
+  
+  let plugin_config = lookup_plugin_config(pact)?;
+  let fds = get_descriptors_for_interaction(descriptor_key.as_str(), &plugin_config)?;
+  let descriptor_cache = Arc::new(DescriptorCache::new(fds));
+  trace!("file descriptors for interaction {:?}", descriptor_cache.get_file_descriptors_vec());
+  
+  // Use the new function to do the actual lookup
+  let (service_descriptor, method_descriptor, file_descriptor) = 
+    lookup_service_and_method_for_interaction(interaction, &descriptor_cache)?;
+  
+  Ok((descriptor_cache, service_descriptor, method_descriptor, file_descriptor))
 }
 
 fn get_descriptor_config<'a>(
@@ -940,13 +1108,10 @@ pub(crate) mod tests {
   use prost_types::field_descriptor_proto::Label::Optional;
   use serde_json::json;
   use crate::message_decoder::{ProtobufField, ProtobufFieldData};
-  use crate::utils::{as_hex, struct_field_data_to_json, find_enum_value_by_name, find_nested_type, is_map_field, last_name, parse_name, to_fully_qualified_name};
+  use crate::utils::{as_hex, struct_field_data_to_json, find_nested_type, is_map_field, last_name, parse_name, to_fully_qualified_name, DescriptorCache};
   use super::{
     build_grpc_route,
-    find_file_descriptors,
-    find_message_descriptor_for_type,
     find_method_descriptor_for_service,
-    find_service_descriptor_for_type,
     parse_grpc_route,
     split_service_and_method
   };
@@ -1069,14 +1234,15 @@ pub(crate) mod tests {
     let bytes: &[u8] = &DESCRIPTOR_WITH_EXT_MESSAGE;
     let buffer = Bytes::from(bytes);
     let fds = FileDescriptorSet::decode(buffer).unwrap();
+    let descriptor_cache = DescriptorCache::new(fds);
 
-    expect!(find_message_descriptor_for_type("", &fds)).to(be_err());
-    expect!(find_message_descriptor_for_type("Does not exist", &fds)).to(be_err());
+    expect!(descriptor_cache.find_message_descriptor_for_type("")).to(be_err());
+    expect!(descriptor_cache.find_message_descriptor_for_type("Does not exist")).to(be_err());
 
-    let (result, _) = find_message_descriptor_for_type("AdBreakRequest", &fds).unwrap();
+    let (result, _) = descriptor_cache.find_message_descriptor_for_type("AdBreakRequest").unwrap();
     expect!(result.name).to(be_some().value("AdBreakRequest"));
 
-    let (result, file_descriptor) = find_message_descriptor_for_type(".area_calculator.Value.AdBreakContext", &fds).unwrap();
+    let (result, file_descriptor) = descriptor_cache.find_message_descriptor_for_type(".area_calculator.Value.AdBreakContext").unwrap();
     expect!(result.name).to(be_some().value("AdBreakContext"));
     expect!(file_descriptor.package).to(be_some().value("area_calculator.Value"));
   }
@@ -1301,23 +1467,21 @@ pub(crate) mod tests {
       ],
       .. FileDescriptorProto::default()
     };
-    let descriptors = hashmap!{
-      "test_enum.proto".to_string() => &fds,
-      "test_enum2.proto".to_string() => &fds2,
-      "test_enum3.proto".to_string() => &fds3,
-      "test_enum4.proto".to_string() => &fds4
+    let file_descriptor_set = FileDescriptorSet {
+      file: vec![fds.clone(), fds2.clone(), fds3.clone(), fds4.clone()]
     };
+    let descriptor_cache = DescriptorCache::new(file_descriptor_set);
 
-    let result = find_enum_value_by_name(&descriptors, ".routeguide.v2.TestEnum", "VALUE_ONE");
+    let result = descriptor_cache.find_enum_value_by_name(".routeguide.v2.TestEnum", "VALUE_ONE");
     expect!(result).to(be_some().value((1, enum1.clone())));
 
-    let result2 = find_enum_value_by_name(&descriptors, ".routeguide.TestEnum", "VALUE_ONE");
+    let result2 = descriptor_cache.find_enum_value_by_name(".routeguide.TestEnum", "VALUE_ONE");
     expect!(result2).to(be_some().value((1, enum1.clone())));
 
-    let result3 = find_enum_value_by_name(&descriptors, ".TestEnum", "VALUE_TWO");
+    let result3 = descriptor_cache.find_enum_value_by_name(".TestEnum", "VALUE_TWO");
     expect!(result3).to(be_some().value((2, enum1.clone())));
 
-    let result4 = find_enum_value_by_name(&descriptors, ".routeguide.v3.Feature.TestEnum", "VALUE_ONE");
+    let result4 = descriptor_cache.find_enum_value_by_name(".routeguide.v3.Feature.TestEnum", "VALUE_ONE");
     expect!(result4).to(be_some().value((1, enum1.clone())));
   }
 
@@ -1349,27 +1513,262 @@ pub(crate) mod tests {
       .. FileDescriptorProto::default()
     };
     let all_descriptors = FileDescriptorSet{file: vec!{request_file.clone(), request_file2.clone()}};
+    let descriptor_cache = DescriptorCache::new(all_descriptors);
+    
     // fully qualified name
-    let (md, fd) = find_message_descriptor_for_type(".service.Request", &all_descriptors).unwrap();
+    let (md, fd) = descriptor_cache.find_message_descriptor_for_type(".service.Request").unwrap();
     expect!(&md).to(be_equal_to(&request_msg));
     expect!(&fd).to(be_equal_to(&request_file));
 
     // relative name
-    let (md, fd) = find_message_descriptor_for_type("AnotherRequest", &all_descriptors).unwrap();
+    let (md, fd) = descriptor_cache.find_message_descriptor_for_type("AnotherRequest").unwrap();
     expect!(&md).to(be_equal_to(&another_request_msg));
     expect!(&fd).to(be_equal_to(&request_file));
 
     // package not found error
-    let result_err = find_message_descriptor_for_type(".missing.MissingType", &all_descriptors);
+    let result_err = descriptor_cache.find_message_descriptor_for_type(".missing.MissingType");
     expect!(result_err.as_ref()).to(be_err());
     expect!(&result_err.unwrap_err().to_string()).to(be_equal_to(
       "Did not find any file descriptors for a package 'missing'"));
     // message not found error
-    let result_err = find_message_descriptor_for_type(".service.MissingType", &all_descriptors);
+    let result_err = descriptor_cache.find_message_descriptor_for_type(".service.MissingType");
     expect!(result_err.as_ref()).to(be_err());
     let error_msg = result_err.unwrap_err().to_string();
-    expect!(error_msg.starts_with(
-      "Did not find a message type 'MissingType' in any of the file descriptors")).to(be_true());
+    // Error message changed after refactoring - now shows which package was searched
+    expect!(error_msg.contains("MissingType")).to(be_true());
+    expect!(error_msg.contains("not found")).to(be_true());
+  }
+
+  #[test]
+  fn find_message_descriptor_for_type_with_nested_messages_test() {
+    // Test the new functionality that correctly handles nested messages
+    // like .package.Message.NestedMessage by trying all possible package/message splits
+    
+    // Create a nested message structure: Entity.FullName and Entity.Details
+    let full_name_msg = DescriptorProto {
+      name: Some("FullName".to_string()),
+      field: vec![
+        FieldDescriptorProto {
+          name: Some("first".to_string()),
+          number: Some(1),
+          r#type: Some(Type::String as i32),
+          .. FieldDescriptorProto::default()
+        },
+        FieldDescriptorProto {
+          name: Some("last".to_string()),
+          number: Some(2),
+          r#type: Some(Type::String as i32),
+          .. FieldDescriptorProto::default()
+        },
+      ],
+      .. DescriptorProto::default()
+    };
+    
+    let details_msg = DescriptorProto {
+      name: Some("Details".to_string()),
+      field: vec![
+        FieldDescriptorProto {
+          name: Some("name".to_string()),
+          number: Some(1),
+          r#type: Some(Type::Message as i32),
+          type_name: Some(".sample.Entity.FullName".to_string()),
+          .. FieldDescriptorProto::default()
+        },
+      ],
+      nested_type: vec![full_name_msg.clone()],
+      .. DescriptorProto::default()
+    };
+    
+    let entity_msg = DescriptorProto {
+      name: Some("Entity".to_string()),
+      field: vec![
+        FieldDescriptorProto {
+          name: Some("id".to_string()),
+          number: Some(1),
+          r#type: Some(Type::String as i32),
+          .. FieldDescriptorProto::default()
+        },
+      ],
+      nested_type: vec![details_msg.clone(), full_name_msg.clone()],
+      .. DescriptorProto::default()
+    };
+    
+    let request_msg = DescriptorProto {
+      name: Some("GetEntityRequest".to_string()),
+      field: vec![
+        FieldDescriptorProto {
+          name: Some("id".to_string()),
+          number: Some(1),
+          r#type: Some(Type::String as i32),
+          .. FieldDescriptorProto::default()
+        },
+      ],
+      .. DescriptorProto::default()
+    };
+    
+    let file_descriptor = FileDescriptorProto {
+      name: Some("sample.proto".to_string()),
+      package: Some("sample".to_string()),
+      message_type: vec![entity_msg.clone(), request_msg.clone()],
+      .. FileDescriptorProto::default()
+    };
+    
+    let fds = FileDescriptorSet { file: vec![file_descriptor.clone()] };
+    let descriptor_cache = DescriptorCache::new(fds);
+    
+    // Test 1: Find top-level message with fully qualified name
+    let (md, fd) = descriptor_cache.find_message_descriptor_for_type(".sample.Entity").unwrap();
+    expect!(md.name()).to(be_equal_to("Entity"));
+    expect!(fd.package()).to(be_equal_to("sample"));
+    
+    // Test 2: Find top-level message with relative name
+    let (md, _) = descriptor_cache.find_message_descriptor_for_type("GetEntityRequest").unwrap();
+    expect!(md.name()).to(be_equal_to("GetEntityRequest"));
+    
+    // Test 3: Find nested message with fully qualified name - this is the key test!
+    // This used to fail because it would split at the last dot: package=".sample.Entity", message="FullName"
+    // Now it tries all combinations and finds: package="sample", message="Entity.FullName"
+    let (md, fd) = descriptor_cache.find_message_descriptor_for_type(".sample.Entity.FullName").unwrap();
+    expect!(md.name()).to(be_equal_to("FullName"));
+    expect!(fd.package()).to(be_equal_to("sample"));
+    
+    // Test 4: Find doubly nested message
+    let (md, fd) = descriptor_cache.find_message_descriptor_for_type(".sample.Entity.Details").unwrap();
+    expect!(md.name()).to(be_equal_to("Details"));
+    expect!(fd.package()).to(be_equal_to("sample"));
+    
+    // Test 5: Relative name for nested message (should work by searching all files)
+    let (md, _) = descriptor_cache.find_message_descriptor_for_type("Entity.FullName").unwrap();
+    expect!(md.name()).to(be_equal_to("FullName"));
+    
+    // Test 6: Error case - message doesn't exist
+    let result = descriptor_cache.find_message_descriptor_for_type(".sample.Entity.NonExistent");
+    expect!(result).to(be_err());
+    
+    // Test 7: Error case - package doesn't exist
+    let result = descriptor_cache.find_message_descriptor_for_type(".nonexistent.Entity");
+    expect!(result).to(be_err());
+  }
+
+  #[test]
+  fn find_message_descriptor_for_type_with_multiple_packages_and_nested_messages_test() {
+    // Test with multiple packages to ensure the algorithm tries all combinations correctly
+    
+    let nested_msg = DescriptorProto {
+      name: Some("Nested".to_string()),
+      .. DescriptorProto::default()
+    };
+    
+    let outer_msg = DescriptorProto {
+      name: Some("Outer".to_string()),
+      nested_type: vec![nested_msg.clone()],
+      .. DescriptorProto::default()
+    };
+    
+    // File 1: package "a.b" with message "Outer" containing "Nested"
+    let file1 = FileDescriptorProto {
+      name: Some("file1.proto".to_string()),
+      package: Some("a.b".to_string()),
+      message_type: vec![outer_msg.clone()],
+      .. FileDescriptorProto::default()
+    };
+    
+    // File 2: package "a" with a different message
+    let other_msg = DescriptorProto {
+      name: Some("Other".to_string()),
+      .. DescriptorProto::default()
+    };
+    
+    let file2 = FileDescriptorProto {
+      name: Some("file2.proto".to_string()),
+      package: Some("a".to_string()),
+      message_type: vec![other_msg.clone()],
+      .. FileDescriptorProto::default()
+    };
+    
+    let fds = FileDescriptorSet { file: vec![file1.clone(), file2.clone()] };
+    let descriptor_cache = DescriptorCache::new(fds);
+    
+    // Should find Outer in package "a.b"
+    let (md, fd) = descriptor_cache.find_message_descriptor_for_type(".a.b.Outer").unwrap();
+    expect!(md.name()).to(be_equal_to("Outer"));
+    expect!(fd.package()).to(be_equal_to("a.b"));
+    
+    // Should find Nested as a nested message in Outer within package "a.b"
+    // This tests the algorithm tries: package="a.b", message="Outer.Nested"
+    let (md, fd) = descriptor_cache.find_message_descriptor_for_type(".a.b.Outer.Nested").unwrap();
+    expect!(md.name()).to(be_equal_to("Nested"));
+    expect!(fd.package()).to(be_equal_to("a.b"));
+    
+    // Should find Other in package "a"
+    let (md, fd) = descriptor_cache.find_message_descriptor_for_type(".a.Other").unwrap();
+    expect!(md.name()).to(be_equal_to("Other"));
+    expect!(fd.package()).to(be_equal_to("a"));
+  }
+
+  #[test]
+  fn find_message_descriptor_for_type_edge_cases_test() {
+    // Test edge cases for the new algorithm
+    
+    // Edge case 1: Empty package
+    let msg_no_package = DescriptorProto {
+      name: Some("NoPackageMessage".to_string()),
+      .. DescriptorProto::default()
+    };
+    
+    let file_no_package = FileDescriptorProto {
+      name: Some("no_package.proto".to_string()),
+      package: None,
+      message_type: vec![msg_no_package.clone()],
+      .. FileDescriptorProto::default()
+    };
+    
+    let fds = FileDescriptorSet { file: vec![file_no_package.clone()] };
+    let descriptor_cache = DescriptorCache::new(fds);
+    
+    // Should find message with relative name
+    let (md, _) = descriptor_cache.find_message_descriptor_for_type("NoPackageMessage").unwrap();
+    expect!(md.name()).to(be_equal_to("NoPackageMessage"));
+    
+    // Should find message with fully qualified name starting with dot (empty package)
+    let (md, _) = descriptor_cache.find_message_descriptor_for_type(".NoPackageMessage").unwrap();
+    expect!(md.name()).to(be_equal_to("NoPackageMessage"));
+    
+    // Edge case 2: Deep nesting
+    let level3_msg = DescriptorProto {
+      name: Some("Level3".to_string()),
+      .. DescriptorProto::default()
+    };
+    
+    let level2_msg = DescriptorProto {
+      name: Some("Level2".to_string()),
+      nested_type: vec![level3_msg.clone()],
+      .. DescriptorProto::default()
+    };
+    
+    let level1_msg = DescriptorProto {
+      name: Some("Level1".to_string()),
+      nested_type: vec![level2_msg.clone()],
+      .. DescriptorProto::default()
+    };
+    
+    let deep_file = FileDescriptorProto {
+      name: Some("deep.proto".to_string()),
+      package: Some("pkg".to_string()),
+      message_type: vec![level1_msg.clone()],
+      .. FileDescriptorProto::default()
+    };
+    
+    let fds = FileDescriptorSet { file: vec![deep_file.clone()] };
+    let descriptor_cache = DescriptorCache::new(fds);
+    
+    // Should find deeply nested message
+    let (md, _) = descriptor_cache.find_message_descriptor_for_type(".pkg.Level1.Level2.Level3").unwrap();
+    expect!(md.name()).to(be_equal_to("Level3"));
+    
+    // Should also work with relative name
+    let (md, _) = descriptor_cache.find_message_descriptor_for_type("Level1.Level2.Level3").unwrap();
+    expect!(md.name()).to(be_equal_to("Level3"));
   }
 
   #[test]
@@ -1407,25 +1806,28 @@ pub(crate) mod tests {
       .. FileDescriptorProto::default()
     };
     let all_descriptors = FileDescriptorSet { file: vec!{service.clone(), service2.clone()} };
+    let descriptor_cache = DescriptorCache::new(all_descriptors);
 
-    let (fd, sd) = find_service_descriptor_for_type(".service.Service", &all_descriptors).unwrap();
+    let (fd, sd) = descriptor_cache.find_service_descriptor_for_type(".service.Service").unwrap();
     expect!(fd).to(be_equal_to(service));
     expect!(sd).to(be_equal_to(service_desc));
 
-    let (fd, sd) = find_service_descriptor_for_type("RelativeNameService", &all_descriptors).unwrap();
+    let (fd, sd) = descriptor_cache.find_service_descriptor_for_type("RelativeNameService").unwrap();
     expect!(fd).to(be_equal_to(service2));
     expect!(sd).to(be_equal_to(relative_name_service));
 
     // missing package case
-    let result_err = find_service_descriptor_for_type(".missing.MissingService", &all_descriptors);
+    let result_err = descriptor_cache.find_service_descriptor_for_type(".missing.MissingService");
     expect!(result_err.as_ref()).to(be_err());
     expect!(&result_err.unwrap_err().to_string()).to(be_equal_to(
       "Did not find any file descriptors for a package 'missing'"));
     // missing service case
-    let result_err = find_service_descriptor_for_type(".service.MissingService", &all_descriptors);
+    let result_err = descriptor_cache.find_service_descriptor_for_type(".service.MissingService");
     expect!(result_err.as_ref()).to(be_err());
-    expect!(&result_err.unwrap_err().to_string()).to(be_equal_to(
-      "Did not find a descriptor for service 'MissingService'"));
+    let error_msg = result_err.unwrap_err().to_string();
+    // Error message changed after refactoring - now shows which package was searched
+    expect!(error_msg.contains("MissingService")).to(be_true());
+    expect!(error_msg.contains("not found")).to(be_true());
   }
 
   #[test]
@@ -1463,34 +1865,41 @@ pub(crate) mod tests {
       "response_no_package.proto".to_string()
     };
     let all_descriptors = vec!{request, response, request_no_package, response_no_package};
+    
+    let fds = FileDescriptorSet { file: all_descriptors.clone() };
+    let descriptor_cache = DescriptorCache::new(fds);
+    
     // explicitly provide package name
-    _check_find_file_descriptors(Some("service"), &all_descriptors_with_package_names, &all_descriptors);
+    _check_find_file_descriptors(Some("service"), &all_descriptors_with_package_names, &descriptor_cache);
 
     // same but with a dot
-    _check_find_file_descriptors(Some(".service"), &all_descriptors_with_package_names, &all_descriptors);
+    _check_find_file_descriptors(Some(".service"), &all_descriptors_with_package_names, &descriptor_cache);
 
     // empty package means return descriptors without packages only
-    _check_find_file_descriptors(Some(""), &all_descriptors_with_no_pacakge_names, &all_descriptors);
+    _check_find_file_descriptors(Some(""), &all_descriptors_with_no_pacakge_names, &descriptor_cache);
 
     // none package means return all descriptors
-    _check_find_file_descriptors(None, &all_descritptor_names, &all_descriptors);
+    _check_find_file_descriptors(None, &all_descritptor_names, &descriptor_cache);
 
     // Errors
     // did not find any file descriptor with specified package
-    let result = find_file_descriptors(Some("missing"), &all_descriptors);
+    let result = descriptor_cache.find_file_descriptors(Some("missing"));
     expect!(result.as_ref()).to(be_err());
     expect!(&result.unwrap_err().to_string()).to(be_equal_to("Did not find any file descriptors for a package 'missing'"));
+    
     // did not find any file descriptors with no package
-    let result = find_file_descriptors(Some(""), &vec!{});
+    let empty_fds = FileDescriptorSet { file: vec![] };
+    let empty_cache = DescriptorCache::new(empty_fds);
+    let result = empty_cache.find_file_descriptors(Some(""));
     expect!(&result.unwrap_err().to_string()).to(be_equal_to("Did not find any file descriptors with no package specified"));
   }
 
   fn _check_find_file_descriptors(
     package: Option<&str>,
     expected: &HashSet<String>,
-    all_descriptors: &Vec<FileDescriptorProto>
+    descriptor_cache: &DescriptorCache
   ) {
-    let actual = find_file_descriptors(package, all_descriptors).unwrap().iter()
+    let actual = descriptor_cache.find_file_descriptors(package).unwrap().iter()
       .map(|d: &FileDescriptorProto| d.name.clone().unwrap_or_default()).collect::<HashSet<String>>();
     expect!(&actual).to(be_equal_to(expected));
   }
@@ -1546,6 +1955,7 @@ pub(crate) mod tests {
     let bytes = BASE64.decode(desc).unwrap();
     let bytes1 = Bytes::copy_from_slice(bytes.as_slice());
     let fds: FileDescriptorSet = FileDescriptorSet::decode(bytes1).unwrap();
+    let descriptor_cache = DescriptorCache::new(fds);
 
     let key_descriptor = FieldDescriptorProto {
       name: Some("key".to_string()),
@@ -1643,7 +2053,7 @@ pub(crate) mod tests {
       }
     ];
 
-    let result = struct_field_data_to_json(field_data, &field_descriptor, &fds).unwrap();
+    let result = struct_field_data_to_json(field_data, &field_descriptor, &descriptor_cache).unwrap();
     assert_eq!(result, json!({
       "n": null,
       "b": true,
@@ -1695,7 +2105,7 @@ pub(crate) mod tests {
       }
     ];
 
-    let result = struct_field_data_to_json(field_data, &field_descriptor, &fds).unwrap();
+    let result = struct_field_data_to_json(field_data, &field_descriptor, &descriptor_cache).unwrap();
     assert_eq!(result, json!({
       "message": "test",
       "kind": "general"
@@ -1780,26 +2190,109 @@ pub(crate) mod tests {
       .. FileDescriptorProto::default()
     };
 
-    let descriptors = hashmap!{
-      "nested_enum.proto".to_string() => &file_descriptor,
+    let file_descriptor_set = FileDescriptorSet {
+      file: vec![file_descriptor.clone()]
     };
+    let descriptor_cache = DescriptorCache::new(file_descriptor_set);
 
     // 1. Top-level enum (0 levels deep)
-    let result1 = find_enum_value_by_name(&descriptors, ".test.TopLevelEnum", "VALUE_ONE");
+    let result1 = descriptor_cache.find_enum_value_by_name(".test.TopLevelEnum", "VALUE_ONE");
     expect!(result1).to(be_some().value((1, top_level_enum.clone())));
 
     // 2. One-level nested enum
-    let result2 = find_enum_value_by_name(&descriptors, ".test.OuterMessage.OneLevelEnum", "VALUE_A");
+    let result2 = descriptor_cache.find_enum_value_by_name(".test.OuterMessage.OneLevelEnum", "VALUE_A");
     expect!(result2).to(be_some().value((1, one_level_enum.clone())));
 
     // 3. Two-level nested enum
-    let result3 = find_enum_value_by_name(&descriptors, ".test.OuterMessage.InnerMessage.TwoLevelEnum", "VALUE_X");
+    let result3 = descriptor_cache.find_enum_value_by_name(".test.OuterMessage.InnerMessage.TwoLevelEnum", "VALUE_X");
     expect!(result3).to(be_some().value((1, two_level_enum.clone())));
 
     // 4. Three-level nested enum
-    let result4 = find_enum_value_by_name(&descriptors, ".test.OuterMessage.InnerMessage.DeepMessage.ThreeLevelEnum", "VALUE_DEEP");
+    let result4 = descriptor_cache.find_enum_value_by_name(".test.OuterMessage.InnerMessage.DeepMessage.ThreeLevelEnum", "VALUE_DEEP");
     expect!(result4).to(be_some().value((1, three_level_enum.clone())));
 
+  }
+
+  #[test]
+  fn test_message_name_collision_with_and_without_package() {
+    // This test reproduces the imported_without_package integration test scenario:
+    // Two messages with the same simple name "Tag", but different FQNs:
+    // - .imported.Tag (has package "imported")
+    // - .Tag (NO package, empty string)
+    
+    // Create Tag message in the "imported" package
+    let imported_tag_message = DescriptorProto {
+      name: Some("Tag".to_string()),
+      field: vec![
+        FieldDescriptorProto {
+          name: Some("some_value".to_string()),
+          number: Some(1),
+          r#type: Some(Type::String as i32),
+          .. FieldDescriptorProto::default()
+        },
+        FieldDescriptorProto {
+          name: Some("some_bool".to_string()),
+          number: Some(2),
+          r#type: Some(Type::Bool as i32),
+          .. FieldDescriptorProto::default()
+        },
+      ],
+      .. DescriptorProto::default()
+    };
+    
+    // Create Tag message with NO package
+    let no_package_tag_message = DescriptorProto {
+      name: Some("Tag".to_string()),
+      field: vec![
+        FieldDescriptorProto {
+          name: Some("name".to_string()),
+          number: Some(1),
+          r#type: Some(Type::String as i32),
+          .. FieldDescriptorProto::default()
+        },
+        FieldDescriptorProto {
+          name: Some("value".to_string()),
+          number: Some(2),
+          r#type: Some(Type::String as i32),
+          .. FieldDescriptorProto::default()
+        },
+      ],
+      .. DescriptorProto::default()
+    };
+    
+    // File descriptor for imported.proto (has package)
+    let imported_file = FileDescriptorProto {
+      name: Some("imported/imported.proto".to_string()),
+      package: Some("imported".to_string()),
+      message_type: vec![imported_tag_message.clone()],
+      .. FileDescriptorProto::default()
+    };
+    
+    // File descriptor for tag.proto (NO package)
+    let no_package_file = FileDescriptorProto {
+      name: Some("no_package/tag.proto".to_string()),
+      package: None, // No package!
+      message_type: vec![no_package_tag_message.clone()],
+      .. FileDescriptorProto::default()
+    };
+    
+    let file_descriptor_set = FileDescriptorSet {
+      file: vec![imported_file.clone(), no_package_file.clone()]
+    };
+    let descriptor_cache = DescriptorCache::new(file_descriptor_set);
+    
+    // Test 1: Looking up .imported.Tag should find the message with "some_value" and "some_bool"
+    let (message_desc, _) = descriptor_cache.find_message_descriptor_for_type(".imported.Tag").unwrap();
+    expect!(message_desc.field.len()).to(be_equal_to(2));
+    expect!(message_desc.field[0].name.as_ref().unwrap().as_str()).to(be_equal_to("some_value"));
+    expect!(message_desc.field[1].name.as_ref().unwrap().as_str()).to(be_equal_to("some_bool"));
+    
+    // Test 2: Looking up .Tag (no package) should find the message with "name" and "value"
+    // THIS IS THE CRITICAL TEST - it should find the Tag from no_package, not from imported!
+    let (message_desc, _) = descriptor_cache.find_message_descriptor_for_type(".Tag").unwrap();
+    expect!(message_desc.field.len()).to(be_equal_to(2));
+    expect!(message_desc.field[0].name.as_ref().unwrap().as_str()).to(be_equal_to("name"));
+    expect!(message_desc.field[1].name.as_ref().unwrap().as_str()).to(be_equal_to("value"));
   }
 }
 

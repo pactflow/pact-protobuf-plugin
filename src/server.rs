@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::collections::hash_map::Entry;
 use std::fs::File;
 use std::io::BufReader;
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail};
 use bytes::{Bytes, BytesMut};
@@ -37,7 +38,7 @@ use pact_plugin_driver::utils::{
   to_proto_value
 };
 use pact_verifier::verification_result::VerificationMismatchResult;
-use prost_types::{DescriptorProto, FileDescriptorProto, FileDescriptorSet, MethodDescriptorProto, ServiceDescriptorProto};
+use prost_types::{DescriptorProto, FileDescriptorProto, MethodDescriptorProto, ServiceDescriptorProto};
 use prost_types::value::Kind;
 use serde_json::Value;
 use tonic::{Request, Response, Status};
@@ -53,7 +54,7 @@ use crate::protobuf::process_proto;
 use crate::protoc::setup_protoc;
 use crate::utils::{
   build_grpc_route,
-  find_message_descriptor_for_type,
+  DescriptorCache,
   get_descriptors_for_interaction,
   lookup_interaction_by_id,
   lookup_service_descriptors_for_interaction,
@@ -326,14 +327,15 @@ impl ProtobufPactPlugin {
     }
   }
 
-  fn lookup_descriptors(plugin_configuration: PluginConfiguration, message_key: String) -> anyhow::Result<FileDescriptorSet> {
+  fn lookup_descriptors(plugin_configuration: PluginConfiguration, message_key: String) -> anyhow::Result<Arc<DescriptorCache>> {
     let pact_configuration = plugin_configuration.pact_configuration.unwrap_or_default();
     debug!("Pact level configuration keys: {:?}", pact_configuration.fields.keys());
 
     let config_for_interaction = pact_configuration.fields.iter()
       .map(|(key, config)| (key.clone(), proto_value_to_json(config)))
       .collect();
-    get_descriptors_for_interaction(message_key.as_str(), &config_for_interaction)
+    let fds = get_descriptors_for_interaction(message_key.as_str(), &config_for_interaction)?;
+    Ok(Arc::new(DescriptorCache::new(fds)))
   }
 
   fn lookup_message_and_service(
@@ -446,7 +448,7 @@ impl ProtobufPactPlugin {
       let content_type = ContentType::parse(contents.content_type.as_str())?;
       match content_type.attributes.get("message") {
         Some(message_type) => {
-          let (message_descriptor, _) = find_message_descriptor_for_type(message_type, &descriptors)?;
+          let (message_descriptor, _) = descriptors.find_message_descriptor_for_type(message_type)?;
           let mut body = contents.content.clone().map(Bytes::from).unwrap_or_default();
           if body.is_empty() {
             Ok(GenerateContentResponse::default())
@@ -621,7 +623,7 @@ fn generate_protobuf_contents(
   fields: &Vec<ProtobufField>,
   content_type: &ContentType,
   generators: &HashMap<String, proto::Generator>,
-  all_descriptors: &FileDescriptorSet,
+  all_descriptors: &Arc<DescriptorCache>,
   mode: TestMode
 ) -> anyhow::Result<Body> {
   let mut message: DynamicMessage = DynamicMessage::new(fields, all_descriptors);
@@ -923,7 +925,7 @@ impl PactPlugin for ProtobufPactPlugin {
       }
     };
 
-    let (all_file_desc, service_desc, method_desc, file_desc) = match lookup_service_descriptors_for_interaction(&interaction, &pact) {
+    let (descriptor_cache, service_desc, method_desc, file_desc) = match lookup_service_descriptors_for_interaction(&interaction, &pact) {
       Ok(values) => values,
       Err(err) => {
         return Ok(Self::verification_preparation_error_response(err.to_string()))
@@ -931,7 +933,7 @@ impl PactPlugin for ProtobufPactPlugin {
     };
 
     let mut raw_request_body = interaction.request.contents.value().unwrap_or_default();
-    let input_message = match find_message_descriptor_for_type(method_desc.input_type(), &all_file_desc) {
+    let input_message = match descriptor_cache.find_message_descriptor_for_type(method_desc.input_type()) {
       Ok((message, _)) => message,
       Err(err) => {
         return Ok(Self::verification_preparation_error_response(err.to_string()))
@@ -940,9 +942,9 @@ impl PactPlugin for ProtobufPactPlugin {
 
     let config = proto_struct_to_map(&request.config.clone().unwrap_or_default());
     let test_context = config.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
-    let decoded_body = match decode_message(&mut raw_request_body, &input_message, &all_file_desc) {
+    let decoded_body = match decode_message(&mut raw_request_body, &input_message, &descriptor_cache) {
       Ok(field_values) => {
-        let mut message = DynamicMessage::new(&field_values, &all_file_desc);
+        let mut message = DynamicMessage::new(&field_values, &descriptor_cache);
         if let Err(err) = message.apply_generators(
           interaction.request.generators.categories.get(&GeneratorCategory::BODY),
           &GeneratorTestMode::Provider,
