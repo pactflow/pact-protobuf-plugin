@@ -1,3 +1,12 @@
+# 0.7.0 - Fix nested message lookups + proto descriptor caching
+
+* 18e6500 - chore: Cleanup some compiler warnings (Ronald Holshausen, Mon Oct 6 12:08:41 2025 +1100)
+* 67533d1 - chore: Bump minor version (Ronald Holshausen, Mon Oct 6 11:45:40 2025 +1100)
+* 73051a0 - chore: Update dependencies (Ronald Holshausen, Mon Oct 6 11:44:37 2025 +1100)
+* e82e656 - feat: Fix nested message lookups; introduce proto descriptor caching; refactor (#235) (Stanislav Vodetskyi, Sun Oct 5 17:23:01 2025 -0700)
+* 658e7af - fix: Upgrading pact_matching to 2.0.1 broke some imports (Ronald Holshausen, Wed Aug 20 09:45:38 2025 +1000)
+* 538d381 - bump version to 0.6.6 (Ronald Holshausen, Wed Aug 20 09:32:58 2025 +1000)
+
 # 0.6.5 - Maintenance Release
 
 * f0c3abb - fix: finding deeply nested enums (#232) (Eric Muller, Tue Aug 5 17:40:34 2025 -0700)
