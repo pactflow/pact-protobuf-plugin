@@ -39,7 +39,15 @@ use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValu
 use crate::metadata::{MessageMetadata, process_metadata};
 use crate::protoc::Protoc;
 use crate::utils::{
-  to_fully_qualified_name, find_enum_value_by_name_in_message, find_enum_value_in_descriptor, find_nested_type, is_map_field, is_repeated_field, last_name, prost_string, split_service_and_method, DescriptorCache
+  to_fully_qualified_name,
+  find_enum_value_by_name_in_message,
+  find_nested_type,
+  is_map_field,
+  is_repeated_field,
+  last_name,
+  prost_string,
+  split_service_and_method,
+  DescriptorCache
 };
 
 /// Converts user-provided configuration and .proto files into a pact interaction.

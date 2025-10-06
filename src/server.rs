@@ -803,7 +803,7 @@ impl PactPlugin for ProtobufPactPlugin {
 
     trace!("Got pact {pact:?}");
     // Check for the plugin specific configuration for the Protobuf descriptors
-    let plugin_config = match pact.plugin_data.iter().find(|pd| pd.name == "protobuf") {
+    let _plugin_config = match pact.plugin_data.iter().find(|pd| pd.name == "protobuf") {
       None => {
         error!("Provided Pact file does not have any Protobuf descriptors");
         return Ok(Self::start_mock_server_error("Provided Pact file does not have any Protobuf descriptors".to_string()))
@@ -820,7 +820,7 @@ impl PactPlugin for ProtobufPactPlugin {
       _ => hashmap!{}
     };
 
-    let grpc_mock_server = GrpcMockServer::new(pact, &plugin_config, test_context);
+    let grpc_mock_server = GrpcMockServer::new(pact, test_context);
     let server_key = grpc_mock_server.server_key.clone();
     match grpc_mock_server.start_server(request.host_interface.as_str(), request.port, request.tls).await {
       Ok(address) => {

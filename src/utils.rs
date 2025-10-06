@@ -1089,7 +1089,7 @@ pub(crate) mod tests {
   use base64::engine::general_purpose::STANDARD as BASE64;
   use bytes::{BufMut, Bytes, BytesMut};
   use expectest::prelude::*;
-  use maplit::{hashmap, hashset};
+  use maplit::hashset;
   use pretty_assertions::assert_eq;
   use prost::encoding::WireType::LengthDelimited;
   use prost::Message;

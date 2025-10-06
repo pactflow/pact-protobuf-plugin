@@ -19,7 +19,6 @@ use maplit::hashmap;
 use pact_matching::BodyMatchResult;
 use pact_models::content_types::ContentType;
 use pact_models::generators::generate_hexadecimal;
-use pact_models::plugins::PluginData;
 use pact_models::prelude::v4::V4Pact;
 use pact_models::v4::sync_message::SynchronousMessage;
 use prost_types::MethodDescriptorProto;
@@ -83,7 +82,6 @@ impl MockServerRoute {
 #[derive(Debug, Clone)]
 pub struct GrpcMockServer {
   pact: V4Pact,
-  plugin_config: PluginData,
   routes: HashMap<String, MockServerRoute>,
   /// Server key for this mock server
   pub server_key: String,
@@ -94,10 +92,9 @@ pub struct GrpcMockServer {
 impl GrpcMockServer
 {
   /// Create a new mock server
-  pub fn new(pact: V4Pact, plugin_config: &PluginData, test_context: HashMap<String, Value>) -> Self {
+  pub fn new(pact: V4Pact, test_context: HashMap<String, Value>) -> Self {
     GrpcMockServer {
       pact,
-      plugin_config: plugin_config.clone(),
       routes: Default::default(),
       server_key: generate_hexadecimal(8),
       test_context

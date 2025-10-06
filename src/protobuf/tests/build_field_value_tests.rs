@@ -1,12 +1,10 @@
-use std::collections::HashMap;
-
 use bytes::Bytes;
 use expectest::prelude::*;
 use maplit::hashmap;
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::*;
 use prost::Message;
-use prost_types::{FileDescriptorProto, FileDescriptorSet};
+use prost_types::FileDescriptorSet;
 use serde_json::{json, Value};
 
 use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValueType, RType};
