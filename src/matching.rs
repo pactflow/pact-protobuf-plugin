@@ -28,17 +28,16 @@ use pact_models::matchingrules::{Category, MatchingRule, RuleList, RuleLogic};
 use pact_models::path_exp::DocPath;
 use pact_models::prelude::MatchingRuleCategory;
 use prost_types::field_descriptor_proto::Type;
-use prost_types::{DescriptorProto, FieldDescriptorProto, FileDescriptorSet};
+use prost_types::{DescriptorProto, FieldDescriptorProto};
 use tracing::{debug, instrument, trace, warn};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
 use crate::utils::{
   display_bytes,
   enum_name,
-  find_message_descriptor_for_type,
+  DescriptorCache,
   find_message_field_by_name,
   find_method_descriptor_for_service,
-  find_service_descriptor_for_type,
   is_map_field,
   is_repeated_field,
   last_name,
@@ -63,7 +62,7 @@ use crate::utils::{
 /// A BodyMatchResult indicating if the messages match or not.
 pub fn match_message(
   message_name: &str,
-  descriptors: &FileDescriptorSet,
+  descriptor_cache: &DescriptorCache,
   expected_message_bytes: &mut Bytes,
   actual_message_bytes: &mut Bytes,
   matching_rules: &MatchingRuleCategory,
@@ -71,13 +70,13 @@ pub fn match_message(
   expectations: &HashMap<DocPath, String>
 ) -> anyhow::Result<BodyMatchResult> {
   // message_name can be a fully-qualified name (if created with a recent version of the plugin),
-  // or not (if created with an older version of the plugin). find_message_descriptor_for_type can handle both.
-  let (message_descriptor, _) = find_message_descriptor_for_type(message_name, &descriptors)?;
+  // or not (if created with an older version of the plugin). descriptor_cache can handle both.
+  let (message_descriptor, _) = descriptor_cache.find_message_descriptor_for_type(message_name)?;
 
-  let expected_message = decode_message(expected_message_bytes, &message_descriptor, descriptors)?;
+  let expected_message = decode_message(expected_message_bytes, &message_descriptor, descriptor_cache)?;
   debug!("expected message = {:?}", expected_message);
 
-  let actual_message = decode_message(actual_message_bytes, &message_descriptor, descriptors)?;
+  let actual_message = decode_message(actual_message_bytes, &message_descriptor, descriptor_cache)?;
   debug!("actual message = {:?}", actual_message);
 
   let plugin_config = hashmap!{};
@@ -89,7 +88,7 @@ pub fn match_message(
   let context = CoreMatchingContext::new(diff_config, matching_rules, &plugin_config);
 
   compare(&message_descriptor, &expected_message, &actual_message, &context,
-          expected_message_bytes, descriptors, expectations)
+          expected_message_bytes, descriptor_cache, expectations)
 }
 
 /// Match a Protobuf service call, which has an input and output message.
@@ -106,19 +105,19 @@ pub fn match_message(
 /// In any other case we compare the response message.
 pub fn match_service(
   service: &str,
-  descriptors: &FileDescriptorSet,
+  descriptor_cache: &DescriptorCache,
   expected_request: &mut Bytes,
   actual_request: &mut Bytes,
   rules: &MatchingRuleCategory,
   allow_unexpected_keys: bool,
   content_type: &ContentType
 ) -> anyhow::Result<BodyMatchResult> {
-  trace!(service, ?descriptors, allow_unexpected_keys, ?rules, ?content_type, ">> match_service");
+  trace!(service, allow_unexpected_keys, ?rules, ?content_type, ">> match_service");
   
   let (service_name, method_name) = split_service_and_method(service)?;
   // service_name can be a fully-qualified name (if created with a recent version of the plugin),
-  // or not (if created with an older version of the plugin). find_service_descriptor_for_type can handle both.
-  let (_, service_descriptor) = find_service_descriptor_for_type(service_name, descriptors)?;
+  // or not (if created with an older version of the plugin). descriptor_cache can handle both.
+  let (_, service_descriptor) = descriptor_cache.find_service_descriptor_for_type(service_name)?;
 
   let (method_name, service_part) = if method_name.contains(':') {
     method_name.split_once(':').unwrap_or((method_name, ""))
@@ -149,7 +148,7 @@ pub fn match_service(
   trace!("Message type = {}", message_type);
   // message_type is the value of method_descriptor.input/output_type field, which is usually a fully-qualified name
   // that includes both the package and the type. match_message expects this kind of input.
-  match_message(message_type, descriptors,
+  match_message(message_type, descriptor_cache,
                 expected_request, actual_request,
                 rules, allow_unexpected_keys, &hashmap!{})
 }
@@ -162,11 +161,11 @@ pub(crate) fn compare(
   actual_message: &[ProtobufField],
   matching_context: &(dyn MatchingContext + Send + Sync),
   expected_message_bytes: &Bytes,
-  descriptors: &FileDescriptorSet,
+  descriptor_cache: &DescriptorCache,
   expectations: &HashMap<DocPath, String>
 ) -> anyhow::Result<BodyMatchResult> {
   trace!(?expectations, ">>> compare");
-  let actual_fields = populate_default_values(actual_message, message_descriptor, descriptors);
+  let actual_fields = populate_default_values(actual_message, message_descriptor, descriptor_cache);
   if expected_message.is_empty() {
     Ok(BodyMatchResult::Ok)
   } else if actual_fields.is_empty() {
@@ -180,14 +179,14 @@ pub(crate) fn compare(
     }))
   } else {
     compare_message(DocPath::root(), expected_message, actual_fields.as_slice(), matching_context,
-      message_descriptor, descriptors, expectations)
+      message_descriptor, descriptor_cache, expectations)
   }
 }
 
 fn populate_default_values(
   fields: &[ProtobufField],
   message_descriptor: &DescriptorProto,
-  fds: &FileDescriptorSet
+  descriptor_cache: &DescriptorCache
 ) -> Vec<ProtobufField> {
   let mut field_vec = Vec::from(fields);
   for field in &message_descriptor.field {
@@ -195,7 +194,7 @@ fn populate_default_values(
       let entry = field_vec.iter()
         .find(|i| i.field_num == field_num as u32);
       if entry.is_none() && should_use_default(field) {
-        if let Some(def) = ProtobufField::default_field(field, message_descriptor, fds) {
+        if let Some(def) = ProtobufField::default_field(field, message_descriptor, descriptor_cache) {
           field_vec.push(def)
         }
       }
@@ -229,7 +228,7 @@ pub fn compare_message(
   actual_message_fields: &[ProtobufField],
   matching_context: &(dyn MatchingContext + Send + Sync),
   message_descriptor: &DescriptorProto,
-  descriptors: &FileDescriptorSet,
+  descriptor_cache: &DescriptorCache,
   expectations: &HashMap<DocPath, String>,
 ) -> anyhow::Result<BodyMatchResult> {
   trace!(?expectations, ">>> compare_message");
@@ -259,7 +258,7 @@ pub fn compare_message(
     if is_map_field(message_descriptor, field_descriptor) {
       trace!(%field_name, field_no, "field is a map field");
       let map_comparison = compare_map_field(&field_path, field_descriptor, expected,
-        actual, matching_context, descriptors, expectations);
+        actual, matching_context, descriptor_cache, expectations);
       if !map_comparison.is_empty() {
         results.insert(field_path.to_string(), map_comparison);
       }
@@ -268,7 +267,7 @@ pub fn compare_message(
       let e = expected.iter().map(|f| (*f).clone()).collect_vec();
       let a = actual.iter().map(|f| (*f).clone()).collect_vec();
       let repeated_comparison = compare_repeated_field(&field_path, field_descriptor,
-        &e, &a, matching_context, descriptors, expectations);
+        &e, &a, matching_context, descriptor_cache, expectations);
       if !repeated_comparison.is_empty() {
         results.insert(field_path.to_string(), repeated_comparison);
       }
@@ -323,13 +322,13 @@ pub fn compare_message(
           matching_context.clone_with(matching_context.matchers())
         };
         let comparison = compare_field(&field_path, expected_value, field_descriptor,
-          &actual_value, context.as_ref(), descriptors, expectations);
+          &actual_value, context.as_ref(), descriptor_cache, expectations);
         if !comparison.is_empty() {
           results.insert(field_path.to_string(), comparison);
         }
       } else {
         let comparison = compare_field(&field_path, expected_value, field_descriptor,
-          &actual_value, matching_context, descriptors, expectations);
+          &actual_value, matching_context, descriptor_cache, expectations);
         if !comparison.is_empty() {
           results.insert(field_path.to_string(), comparison);
         }
@@ -367,7 +366,7 @@ fn compare_field(
   descriptor: &FieldDescriptorProto,
   actual: &ProtobufField,
   matching_context: &(dyn MatchingContext + Send + Sync),
-  descriptors: &FileDescriptorSet,
+  descriptor_cache: &DescriptorCache,
   expectations: &HashMap<DocPath, String>
 ) -> Vec<Mismatch> {
   trace!(?expectations, ">>> compare_field");
@@ -421,7 +420,7 @@ fn compare_field(
     (ProtobufFieldData::Message(b1, message_descriptor), ProtobufFieldData::Message(b2, _)) => {
       trace!("Comparing embedded messages");
       let mut expected_bytes = BytesMut::from(b1.as_slice());
-      let expected_message = match decode_message(&mut expected_bytes, message_descriptor, descriptors) {
+      let expected_message = match decode_message(&mut expected_bytes, message_descriptor, descriptor_cache) {
         Ok(message) => message,
         Err(err) => {
           return vec![
@@ -435,7 +434,7 @@ fn compare_field(
         }
       };
       let mut actual_bytes = BytesMut::from(b2.as_slice());
-      let actual_message = match decode_message(&mut actual_bytes, message_descriptor, descriptors) {
+      let actual_message = match decode_message(&mut actual_bytes, message_descriptor, descriptor_cache) {
         Ok(message) => message,
         Err(err) => {
           return vec![
@@ -469,7 +468,7 @@ fn compare_field(
           ".google.protobuf.Struct" => {
             debug!("Field is a Protobuf Struct, will compare it as JSON");
             trace!("Parsing expected message");
-            let expected_json = match struct_field_data_to_json(expected_message, message_descriptor, descriptors) {
+            let expected_json = match struct_field_data_to_json(expected_message, message_descriptor, descriptor_cache) {
               Ok(j) => j,
               Err(err) => {
                 return vec![
@@ -483,7 +482,7 @@ fn compare_field(
               }
             };
             trace!("Parsing actual message");
-            let actual_json = match struct_field_data_to_json(actual_message, message_descriptor, descriptors) {
+            let actual_json = match struct_field_data_to_json(actual_message, message_descriptor, descriptor_cache) {
               Ok(j) => j,
               Err(err) => {
                 return vec![
@@ -506,7 +505,7 @@ fn compare_field(
           _ => {
             debug!("Field is a normal message");
             match compare_message(path.clone(), &expected_message, &actual_message, matching_context,
-              message_descriptor, descriptors, expectations) {
+              message_descriptor, descriptor_cache, expectations) {
               Ok(result) => match result {
                 BodyMatchResult::Ok => vec![],
                 BodyMatchResult::BodyTypeMismatch { message, .. } => vec![
@@ -597,7 +596,7 @@ fn compare_repeated_field(
   expected_fields: &[ProtobufField],
   actual_fields: &[ProtobufField],
   matching_context: &(dyn MatchingContext + Send + Sync),
-  descriptors: &FileDescriptorSet,
+  descriptor_cache: &DescriptorCache,
   expectations: &HashMap<DocPath, String>
 ) -> Vec<Mismatch> {
   trace!(?expectations, ">>> compare_repeated_field({}, {:?}, {:?})", path, expected_fields, actual_fields);
@@ -611,7 +610,7 @@ fn compare_repeated_field(
       if let Err(comparison) = compare_lists_with_matchingrule(matcher, path,
         expected_fields, actual_fields, matching_context, rules.cascaded, &mut |field_path, expected, actual, context| {
           let comparison = compare_field(field_path, expected, descriptor, actual,
-            context, descriptors, expectations);
+            context, descriptor_cache, expectations);
           if comparison.is_empty() {
             Ok(())
           } else {
@@ -636,7 +635,7 @@ fn compare_repeated_field(
     } else {
       trace!("Comparing repeated fields as a list");
       result.extend(compare_list_content(path, descriptor, expected_fields, actual_fields,
-        matching_context, descriptors, expectations));
+        matching_context, descriptor_cache, expectations));
       if expected_fields.len() != actual_fields.len() {
         result.push(Mismatch::BodyMismatch {
           path: path.to_string(),
@@ -667,7 +666,7 @@ fn compare_map_field(
   expected_fields: Vec<&ProtobufField>,
   actual_fields: Vec<&ProtobufField>,
   matching_context: &(dyn MatchingContext + Send + Sync),
-  descriptors: &FileDescriptorSet,
+  descriptor_cache: &DescriptorCache,
   expectations: &HashMap<DocPath, String>
 ) -> Vec<Mismatch> {
   trace!(?expectations, ">> compare_map_field('{}', {:?}, {:?})", path, expected_fields, actual_fields);
@@ -677,7 +676,7 @@ fn compare_map_field(
   let expected_map = expected_fields.iter()
     .filter_map(|f| {
       match &f.data {
-        ProtobufFieldData::Message(d, descriptor) => decode_message_map_entry(descriptor, d, descriptors).ok(),
+        ProtobufFieldData::Message(d, descriptor) => decode_message_map_entry(descriptor, d, descriptor_cache).ok(),
         _ => None
       }
     })
@@ -685,7 +684,7 @@ fn compare_map_field(
   let actual_map = actual_fields.iter()
     .filter_map(|f| {
       match &f.data {
-        ProtobufFieldData::Message(d, descriptor) => decode_message_map_entry(descriptor, d, descriptors).ok(),
+        ProtobufFieldData::Message(d, descriptor) => decode_message_map_entry(descriptor, d, descriptor_cache).ok(),
         _ => None
       }
     })
@@ -699,7 +698,7 @@ fn compare_map_field(
       if let Err(comparison) = compare_maps_with_matchingrule(matcher, rules.cascaded, path,
         &expected_map, &actual_map, matching_context, &mut |field_path, expected, actual, context| {
           let field_result = compare_field(field_path, &expected.value,
-            &expected.field_descriptor, &actual.value, context, descriptors, expectations);
+            &expected.field_descriptor, &actual.value, context, descriptor_cache, expectations);
           if field_result.is_empty() {
             Ok(())
           } else {
@@ -733,7 +732,7 @@ fn compare_map_field(
         let entry_path = path.join(key);
         if let Some(actual) = actual_map.get(key.as_str()) {
           result.extend(compare_field(&entry_path, &value.value, &value.field_descriptor, &actual.value,
-            matching_context, descriptors, expectations));
+            matching_context, descriptor_cache, expectations));
         } else {
           result.push(BodyMismatch {
             path: path.to_string(),
@@ -769,9 +768,9 @@ impl Display for MapEntry {
 fn decode_message_map_entry(
   descriptor: &DescriptorProto,
   data: &[u8],
-  descriptors: &FileDescriptorSet
+  descriptor_cache: &DescriptorCache
 ) -> anyhow::Result<(String, MapEntry)> {
-  let message = decode_message(&mut BytesMut::from(data), descriptor, descriptors)?;
+  let message = decode_message(&mut BytesMut::from(data), descriptor, descriptor_cache)?;
   let key = message.iter().find(|field| field.field_num == 1)
     .ok_or_else(|| anyhow!("Did not find the key value when decoding map entry {}", descriptor.name.clone().unwrap_or_else(|| "unknown".to_string())))?;
   let value = message.iter().find(|field| field.field_num == 2)
@@ -793,7 +792,7 @@ fn compare_list_content(
   expected: &[ProtobufField],
   actual: &[ProtobufField],
   matching_context: &(dyn MatchingContext + Send + Sync),
-  descriptors: &FileDescriptorSet,
+  descriptor_cache: &DescriptorCache,
   expectations: &HashMap<DocPath, String>
 ) -> Vec<Mismatch> {
   trace!(?expectations, ">>> compare_list_content");
@@ -804,7 +803,7 @@ fn compare_list_content(
     let p = path.join(ps);
     if index < actual.len() {
       result.extend(compare_field(&p, value, descriptor, actual.get(index).unwrap(),
-        matching_context, descriptors, expectations));
+        matching_context, descriptor_cache, expectations));
     } else if !matching_context.matcher_is_defined(&p) {
       result.push(Mismatch::BodyMismatch {
         path: path.to_string(),
@@ -840,7 +839,7 @@ mod tests {
 
   use crate::matching::tests::WireType::Varint;
   use crate::message_decoder::ProtobufField;
-  use crate::utils::find_enum_by_name;
+  use crate::utils::DescriptorCache;
 
   use super::*;
 
@@ -934,9 +933,10 @@ mod tests {
     let bytes = BASE64.decode(DESCRIPTORS).unwrap();
     let bytes1 = Bytes::copy_from_slice(bytes.as_slice());
     let fds = FileDescriptorSet::decode(bytes1).unwrap();
+    let descriptor_cache = DescriptorCache::new(fds);
 
-    let (message_descriptor, _) = find_message_descriptor_for_type(
-      ".io.pact.plugin.InitPluginResponse", &fds).unwrap();
+    let (message_descriptor, _) = descriptor_cache.find_message_descriptor_for_type(
+      ".io.pact.plugin.InitPluginResponse").unwrap();
     let catalogue_descriptor = message_descriptor.field.iter()
       .find(|field| field.name.clone().unwrap_or_default() == "catalogue")
       .unwrap();
@@ -1109,7 +1109,7 @@ mod tests {
       &actual,
       &context,
       &message_descriptor,
-      &fds,
+      &descriptor_cache,
       &hashmap!{}
     ).unwrap();
 
@@ -1124,9 +1124,10 @@ mod tests {
     91dBIUCgV2YWx1ZRgBIAMoCVIFdmFsdWUyYAoEVGVzdBIkCgdHZXRUZXN0EgouTWVzc2FnZUluGgsuTWVzc2FnZU91dCIA\
     EjIKCUdldFZhbHVlcxIQLlZhbHVlc01lc3NhZ2VJbhoRLlZhbHVlc01lc3NhZ2VPdXQiAGIGcHJvdG8z").unwrap();
     let fds = FileDescriptorSet::decode(descriptors.as_slice()).unwrap();
+    let descriptor_cache = DescriptorCache::new(fds);
 
     // no package in this descriptor
-    let (message_descriptor, _) = find_message_descriptor_for_type(".ValuesMessageIn", &fds).unwrap();
+    let (message_descriptor, _) = descriptor_cache.find_message_descriptor_for_type(".ValuesMessageIn").unwrap();
     let field_descriptor = message_descriptor.field.iter()
       .find(|field| field.name.clone().unwrap_or_default() == "value")
       .unwrap();
@@ -1173,7 +1174,7 @@ mod tests {
       &actual,
       &context,
       &message_descriptor,
-      &fds,
+      &descriptor_cache,
       &hashmap!{}
     ).unwrap();
 
@@ -1192,9 +1193,10 @@ mod tests {
       3RFbnVtEhgKFEVORk9SQ0VfRUZGRUNUX0FMTE9XEAAyLAoEVGVzdBIkCgdHZXRUZXN0EgouTWVzc2FnZUluGgsuTWVzc\
       2FnZU91dCIAYgZwcm90bzM=").unwrap();
     let fds = FileDescriptorSet::decode(descriptors.as_slice()).unwrap();
+    let descriptor_cache = DescriptorCache::new(fds);
 
     // use fully-qualified type name with no package.
-    let (message_descriptor, _) = find_message_descriptor_for_type(".Resource", &fds).unwrap();
+    let (message_descriptor, _) = descriptor_cache.find_message_descriptor_for_type(".Resource").unwrap();
     let field_descriptor = message_descriptor.field.iter()
       .find(|field| field.name.clone().unwrap_or_default() == "groups")
       .unwrap();
@@ -1250,7 +1252,7 @@ mod tests {
       &actual,
       &context,
       &message_descriptor,
-      &fds,
+      &descriptor_cache,
       &hashmap!{}
     ).unwrap();
 
@@ -1274,9 +1276,10 @@ mod tests {
       101, 115, 115, 97, 103, 101, 73, 110, 26, 21, 46, 112, 97, 99, 116, 105, 115, 115, 117, 101,
       46, 77, 101, 115, 115, 97, 103, 101, 79, 117, 116, 34, 0, 98, 6, 112, 114, 111, 116, 111, 51];
     let fds = FileDescriptorSet::decode(descriptors).unwrap();
+    let descriptor_cache = DescriptorCache::new(fds);
 
-    let (message_descriptor, _) = find_message_descriptor_for_type(
-      ".pactissue.MessageIn", &fds).unwrap();
+    let (message_descriptor, _) = descriptor_cache.find_message_descriptor_for_type(
+      ".pactissue.MessageIn").unwrap();
     let field_descriptor1 = message_descriptor.field.iter()
       .find(|field| field.number == Some(1))
       .unwrap();
@@ -1286,7 +1289,7 @@ mod tests {
     let field_descriptor3 = message_descriptor.field.iter()
       .find(|field| field.number == Some(3))
       .unwrap();
-    let enum_descriptor= find_enum_by_name(&fds, "pactissue.TestDefault").unwrap();
+    let enum_descriptor= descriptor_cache.find_enum_by_name(".pactissue.TestDefault").unwrap();
 
     let matching_rules = matchingrules! {
       "body" => {
@@ -1331,7 +1334,7 @@ mod tests {
       &[],
       &context,
       &expected_bytes,
-      &fds,
+      &descriptor_cache,
       &hashmap!{}
     ).unwrap();
     expect!(result).to(be_equal_to(BodyMatchResult::Ok));
@@ -1352,7 +1355,7 @@ mod tests {
       actual,
       &context,
       &expected_bytes,
-      &fds,
+      &descriptor_cache,
       &hashmap!{}
     ).unwrap();
     expect!(result).to(be_equal_to(BodyMatchResult::Ok));
@@ -1375,9 +1378,10 @@ mod tests {
       101, 115, 115, 97, 103, 101, 73, 110, 26, 21, 46, 112, 97, 99, 116, 105, 115, 115, 117, 101,
       46, 77, 101, 115, 115, 97, 103, 101, 79, 117, 116, 34, 0, 98, 6, 112, 114, 111, 116, 111, 51];
     let fds = FileDescriptorSet::decode(descriptors).unwrap();
+    let descriptor_cache = DescriptorCache::new(fds);
 
-    let (message_descriptor, _) = find_message_descriptor_for_type(
-      ".pactissue.MessageIn", &fds).unwrap();
+    let (message_descriptor, _) = descriptor_cache.find_message_descriptor_for_type(
+      ".pactissue.MessageIn").unwrap();
     let field_descriptor1 = message_descriptor.field.iter()
       .find(|field| field.number == Some(1))
       .unwrap();
@@ -1387,7 +1391,7 @@ mod tests {
     let field_descriptor3 = message_descriptor.field.iter()
       .find(|field| field.number == Some(3))
       .unwrap();
-    let enum_descriptor= find_enum_by_name(&fds, "pactissue.TestDefault").unwrap();
+    let enum_descriptor= descriptor_cache.find_enum_by_name(".pactissue.TestDefault").unwrap();
 
     let matching_rules = matchingrules! {
       "body" => {
@@ -1441,7 +1445,7 @@ mod tests {
       actual,
       &context,
       &expected_bytes,
-      &fds,
+      &descriptor_cache,
       &hashmap!{}
     ).unwrap();
     expect!(result).to(be_equal_to(BodyMatchResult::Ok));
@@ -1470,7 +1474,7 @@ mod tests {
       actual,
       &context,
       &expected_bytes,
-      &fds,
+      &descriptor_cache,
       &hashmap!{}
     ).unwrap();
     expect!(result).to_not(be_equal_to(BodyMatchResult::Ok));
@@ -1589,9 +1593,10 @@ mod tests {
     let fds = FileDescriptorSet {
       file: vec![]
     };
+    let descriptor_cache = DescriptorCache::new(fds);
 
     let result = compare_repeated_field(&path, &descriptor, expected_fields.as_slice(),
-      actual_fields.as_slice(), &context, &fds, &hashmap!{});
+      actual_fields.as_slice(), &context, &descriptor_cache, &hashmap!{});
     expect!(result).to(be_equal_to(vec![]));
   }
 }

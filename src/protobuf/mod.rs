@@ -39,7 +39,7 @@ use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValu
 use crate::metadata::{MessageMetadata, process_metadata};
 use crate::protoc::Protoc;
 use crate::utils::{
-  to_fully_qualified_name, find_enum_value_by_name, find_enum_value_by_name_in_message, find_message_descriptor_for_type_in_map, find_nested_type, is_map_field, is_repeated_field, last_name, prost_string, split_service_and_method
+  to_fully_qualified_name, find_enum_value_by_name_in_message, find_enum_value_in_descriptor, find_nested_type, is_map_field, is_repeated_field, last_name, prost_string, split_service_and_method, DescriptorCache
 };
 
 /// Converts user-provided configuration and .proto files into a pact interaction.
@@ -85,13 +85,11 @@ pub(crate) async fn process_proto(
   debug!("Parsed proto file OK, file descriptors = {:?}", descriptors.file.iter().map(|file| file.name.as_ref()).collect_vec());
   trace!("Descriptor bytes {:?}", descriptor_bytes.as_slice());
 
-  let file_descriptors: HashMap<String, &FileDescriptorProto> = descriptors.file
-    .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
-    .collect();
+  let descriptor_cache = DescriptorCache::new(descriptors.clone());
   let file_name = &*proto_file.file_name().unwrap_or_default().to_string_lossy();
-  let descriptor = match file_descriptors.get(file_name) {
+  let descriptor = match descriptor_cache.get_file_descriptor_by_name(file_name) {
+    Some(des) => des,
     None => return Err(anyhow!("Did not find a file proto descriptor for the provided proto file '{}'", file_name)),
-    Some(des) => *des
   };
 
   if LevelFilter::current() >= LevelFilter::TRACE {
@@ -109,14 +107,14 @@ pub(crate) async fn process_proto(
       .ok_or_else(|| anyhow!("Did not get a valid value for 'pact:message-type'. It should be a string"))?;
     debug!("Configuring a Protobuf message {}", message);
     let result = configure_protobuf_message(message.as_str(), config, descriptor,
-      descriptor_hash.as_str(), &file_descriptors)?;
+      descriptor_hash.as_str(), &descriptor_cache)?;
     interactions.push(result);
   } else if let Some(service_name) = config.get("pact:proto-service") {
     let service_name = proto_value_to_string(service_name)
       .ok_or_else(|| anyhow!("Did not get a valid value for 'pact:proto-service'. It should be a string"))?;
     debug!("Configuring a Protobuf service {}", service_name);
     let (request_part, response_part) = configure_protobuf_service(service_name.as_str(), config, descriptor,
-      &file_descriptors, descriptor_hash.as_str())?;
+      &descriptor_cache, descriptor_hash.as_str())?;
     if let Some(request_part) = request_part {
       interactions.push(request_part);
     }
@@ -153,7 +151,7 @@ fn configure_protobuf_service(
   service_with_method: &str,
   config: &BTreeMap<String, prost_types::Value>,
   descriptor: &FileDescriptorProto,
-  all_descriptors: &HashMap<String, &FileDescriptorProto>,
+  descriptor_cache: &DescriptorCache,
   descriptor_hash: &str
 ) -> anyhow::Result<(Option<InteractionResponse>, Vec<InteractionResponse>)> {
   trace!(">> configure_protobuf_service({service_with_method}, {config:?}, {descriptor_hash})");
@@ -168,7 +166,7 @@ fn configure_protobuf_service(
   
   let service_with_method = service_with_method.split_once(':').map(|(s, _)| s).unwrap_or(service_with_method);
   let service_full_name = to_fully_qualified_name(service_with_method, descriptor.package())?;
-  construct_protobuf_interaction_for_service(service_descriptor, config, method_name, all_descriptors)
+  construct_protobuf_interaction_for_service(service_descriptor, config, method_name, descriptor_cache)
     .map(|(request, response)| {
       let plugin_configuration = Some(PluginConfiguration {
         interaction_configuration: Some(Struct {
@@ -205,7 +203,7 @@ fn construct_protobuf_interaction_for_service(
   service_descriptor: &ServiceDescriptorProto,
   config: &BTreeMap<String, prost_types::Value>,
   method_name: &str,
-  all_descriptors: &HashMap<String, &FileDescriptorProto>
+  descriptor_cache: &DescriptorCache
 ) -> anyhow::Result<(Option<InteractionResponse>, Vec<InteractionResponse>)> {
   let service_name = service_descriptor.name.as_deref().expect("Service descriptor name cannot be empty");
   trace!(">> construct_protobuf_interaction_for_service({config:?}, {service_name}, {method_name})");
@@ -226,9 +224,9 @@ fn construct_protobuf_interaction_for_service(
     .ok_or_else(|| anyhow!("Output message name is empty for service {}/{}", service_name, method_name))?;
   
   let (request_descriptor, request_file_descriptor) = 
-    find_message_descriptor_for_type_in_map(input_name, all_descriptors)?;
+    descriptor_cache.find_message_descriptor_for_type(input_name)?;
   let (response_descriptor, response_file_descriptor) = 
-    find_message_descriptor_for_type_in_map(output_name, all_descriptors)?;
+    descriptor_cache.find_message_descriptor_for_type(output_name)?;
   
   trace!(%input_name, ?request_descriptor, ?request_file_descriptor, "Input message descriptor");
   trace!(%output_name, ?response_descriptor, ?response_file_descriptor, "Output message descriptor");
@@ -238,7 +236,7 @@ fn construct_protobuf_interaction_for_service(
   let request_metadata = process_metadata(config.get("requestMetadata"))?;
 
   let interaction = construct_protobuf_interaction_for_message(&request_descriptor,
-    &request_part_config, "", &request_file_descriptor, all_descriptors, request_metadata.as_ref())?;
+    &request_part_config, "", &request_file_descriptor, descriptor_cache, request_metadata.as_ref())?;
   let request_part = Some(InteractionResponse {
     part_name: "request".into(),
     .. interaction
@@ -250,7 +248,7 @@ fn construct_protobuf_interaction_for_service(
   for (config, md_config) in response_part_config {
     let response_metadata = process_metadata(md_config)?;
     let interaction = construct_protobuf_interaction_for_message(
-      &response_descriptor, &config, "", &response_file_descriptor, all_descriptors, response_metadata.as_ref())?;
+      &response_descriptor, &config, "", &response_file_descriptor, descriptor_cache, response_metadata.as_ref())?;
     response_part.push(InteractionResponse { part_name: "response".into(), .. interaction });
   }
 
@@ -320,7 +318,7 @@ fn configure_protobuf_message(
   config: &BTreeMap<String, prost_types::Value>,
   descriptor: &FileDescriptorProto,
   descriptor_hash: &str,
-  all_descriptors: &HashMap<String, &FileDescriptorProto>
+  descriptor_cache: &DescriptorCache
 ) -> anyhow::Result<InteractionResponse> {
   trace!(">> configure_protobuf_message({}, {:?})", message_name, descriptor_hash);
   debug!("Looking for message '{}' in '{}'", message_name, descriptor.name());
@@ -329,7 +327,7 @@ fn configure_protobuf_message(
     .find(|p| p.name() == message_name)
     .ok_or_else(|| anyhow!("Did not find a descriptor for message '{}' in '{}'", message_name, descriptor.name()))?;
   let message_full_name = to_fully_qualified_name(message_name, descriptor.package())?;
-  construct_protobuf_interaction_for_message(message_descriptor, config, "", descriptor, all_descriptors, None)
+  construct_protobuf_interaction_for_message(message_descriptor, config, "", descriptor, descriptor_cache, None)
     .map(|interaction| {
       InteractionResponse {
         plugin_configuration: Some(PluginConfiguration {
@@ -355,19 +353,19 @@ fn configure_protobuf_message(
 /// For message pacts, this is a full configuration object (like in `process_proto` example)
 /// - `message_part` - always empty string for now
 /// - `file_descriptor` - Descriptor of the file containing the message
-/// - `all_descriptors` - All file descriptors provided to the plugin
+/// - `descriptor_cache` - Cached descriptor lookup structure
 /// - `metadata` - Optional metadata for the message; for request and response messages in gRPC interaction
 /// it's the values of `requestMetadata` and `responseMetadata` fields; not currently supported for message pacts.
 /// 
 /// # Returns
 /// - InteractionResponse - the constructed interaction
-#[instrument(ret, skip(message_descriptor, file_descriptor, all_descriptors))]
+#[instrument(ret, skip(message_descriptor, file_descriptor, descriptor_cache))]
 fn construct_protobuf_interaction_for_message(
   message_descriptor: &DescriptorProto,
   config: &BTreeMap<String, prost_types::Value>,
   message_part: &str,
   file_descriptor: &FileDescriptorProto,
-  all_descriptors: &HashMap<String, &FileDescriptorProto>,
+  descriptor_cache: &DescriptorCache,
   metadata: Option<&MessageMetadata>
 ) -> anyhow::Result<InteractionResponse> {
   trace!(">> construct_protobuf_interaction_for_message({}, {:?}, {:?}, {:?})",
@@ -390,7 +388,7 @@ fn construct_protobuf_interaction_for_message(
       let field_path = path.join(key);
       debug!(?field_path, "Building field for key '{}'", key);
       construct_message_field(&mut message_builder, &mut matching_rules, &mut generators,
-        key, &proto_value_to_json(value), &field_path, all_descriptors)?;
+        key, &proto_value_to_json(value), &field_path, descriptor_cache)?;
     }
   }
 
@@ -502,7 +500,7 @@ fn construct_message_field(
   field_name: &str,
   value: &Value,
   path: &DocPath,
-  all_descriptors: &HashMap<String, &FileDescriptorProto>
+  descriptor_cache: &DescriptorCache
 ) -> anyhow::Result<()> {
   if !field_name.starts_with("pact:") {
     if let Some(field) = message_builder.field_by_name(field_name)  {
@@ -512,7 +510,7 @@ fn construct_message_field(
           // Embedded message
           trace!(?field_name, "Field is for an embedded message");
           build_embedded_message_field_value(message_builder, path, &field, field_name,
-            value, matching_rules, generators, all_descriptors)?;
+            value, matching_rules, generators, descriptor_cache)?;
         } else {
           // Non-embedded message field (singular value)
           trace!(?field_name, "Field is not an embedded message");
@@ -522,7 +520,7 @@ fn construct_message_field(
             MessageFieldValueType::Normal
           };
           build_field_value(path, message_builder, field_type, &field, field_name, value,
-                            matching_rules, generators, all_descriptors)?;
+                            matching_rules, generators, descriptor_cache)?;
         }
         None => {
           return Err(anyhow!("Message {} field '{}' is of an unknown type", message_builder.message_name, field_name))
@@ -552,7 +550,7 @@ fn build_embedded_message_field_value(
   value: &Value,
   matching_rules: &mut MatchingRuleCategory,
   generators: &mut HashMap<String, Generator>,
-  all_descriptors: &HashMap<String, &FileDescriptorProto>
+  descriptor_cache: &DescriptorCache
 ) -> anyhow::Result<()> {
   if is_repeated_field(field_descriptor) && !is_map_field(&message_builder.descriptor, field_descriptor) {
     debug!("{} is a repeated field", field);
@@ -565,13 +563,13 @@ fn build_embedded_message_field_value(
           let index_path = path.join("0");
           build_single_embedded_field_value(
             &index_path, message_builder, MessageFieldValueType::Repeated, field_descriptor,
-            field, first, matching_rules, generators, all_descriptors)?;
+            field, first, matching_rules, generators, descriptor_cache)?;
           let mut builder = message_builder.clone();
           for (index, item) in rest.iter().enumerate() {
             let index_path = path.join((index + 1).to_string());
             let constructed = build_single_embedded_field_value(
               &index_path, &mut builder, MessageFieldValueType::Repeated,
-              field_descriptor, field, item, matching_rules, generators, all_descriptors
+              field_descriptor, field, item, matching_rules, generators, descriptor_cache
             )?;
             if let Some(constructed) = constructed {
               message_builder.add_repeated_field_value(field_descriptor, field, constructed);
@@ -609,7 +607,7 @@ fn build_embedded_message_field_value(
                     generators.insert(path.to_string(), generator.clone());
                   }
                   let constructed_value = value_for_type(field, each_value_def.value.as_str(),
-                    field_descriptor, &message_builder.descriptor, all_descriptors)?;
+                    field_descriptor, &message_builder.descriptor, descriptor_cache)?;
                   message_builder.set_field_value(field_descriptor, field, constructed_value);
                   Ok(())
                 }
@@ -618,7 +616,7 @@ fn build_embedded_message_field_value(
                   let array_path = path.join("*");
                   matching_rules.add_rule(array_path.clone(), matchingrules::MatchingRule::Type, RuleLogic::And);
                   build_single_embedded_field_value(&array_path, message_builder, MessageFieldValueType::Repeated,
-                                                    field_descriptor, field, field_value, matching_rules, generators, all_descriptors)
+                                                    field_descriptor, field, field_value, matching_rules, generators, descriptor_cache)
                     .map(|_| ())
                 } else {
                   Err(anyhow!("Expression '{}' refers to non-existent item '{}'", definition, reference.name))
@@ -640,7 +638,7 @@ fn build_embedded_message_field_value(
             }
 
             let constructed = value_for_type(field, mrd.value.as_str(),
-              field_descriptor, &message_builder.descriptor, all_descriptors)?;
+              field_descriptor, &message_builder.descriptor, descriptor_cache)?;
             message_builder.add_repeated_field_value(field_descriptor, field, constructed);
 
             Ok(())
@@ -650,7 +648,7 @@ fn build_embedded_message_field_value(
           // single example.
           trace!("No matching definition, assuming config contains the attributes of a single example");
           build_single_embedded_field_value(&path.join("*"), message_builder, MessageFieldValueType::Repeated, field_descriptor, field, value,
-                                            matching_rules, generators, all_descriptors)
+                                            matching_rules, generators, descriptor_cache)
             .map(|_| ())
         }
       }
@@ -658,14 +656,14 @@ fn build_embedded_message_field_value(
         // Not a map or list structure, so could be a primitive repeated field
         trace!("Not a map or list structure, assuming a single field");
         build_single_embedded_field_value(path, message_builder, MessageFieldValueType::Repeated, field_descriptor, field, value,
-                                          matching_rules, generators, all_descriptors)
+                                          matching_rules, generators, descriptor_cache)
           .map(|_| ())
       }
     }
   } else {
     trace!("processing a standard field");
     build_single_embedded_field_value(path, message_builder, MessageFieldValueType::Normal, field_descriptor, field, value,
-                                      matching_rules, generators, all_descriptors)
+                                      matching_rules, generators, descriptor_cache)
       .map(|_| ())
   }
 }
@@ -684,7 +682,7 @@ fn build_single_embedded_field_value(
   value: &Value,
   matching_rules: &mut MatchingRuleCategory,
   generators: &mut HashMap<String, Generator>,
-  all_descriptors: &HashMap<String, &FileDescriptorProto>
+  descriptor_cache: &DescriptorCache
 ) -> anyhow::Result<Option<MessageFieldValue>> {
   debug!("Configuring message field '{}' (type {:?})", field, field_descriptor.type_name);
   let type_name = field_descriptor.type_name.clone().unwrap_or_default();
@@ -693,7 +691,7 @@ fn build_single_embedded_field_value(
       debug!("Field is a Protobuf BytesValue");
       if let Value::String(_) = value {
         build_field_value(path, message_builder, field_type, field_descriptor, field,
-                          value, matching_rules, generators, all_descriptors)
+                          value, matching_rules, generators, descriptor_cache)
       } else {
         Err(anyhow!("Fields of type google.protobuf.BytesValue must be configured with a single string value"))
       }
@@ -704,12 +702,12 @@ fn build_single_embedded_field_value(
     }
     _ => if is_map_field(&message_builder.descriptor, field_descriptor) {
       debug!("Message field '{}' is a Map field", field);
-      build_map_field(path, message_builder, field_descriptor, field, value, matching_rules, generators, all_descriptors)?;
+      build_map_field(path, message_builder, field_descriptor, field, value, matching_rules, generators, descriptor_cache)?;
       Ok(None)
     } else if let Value::Object(config) = value {
       debug!("Configuring the message from config {:?}", config);
       let embedded_type = find_nested_type(&message_builder.descriptor, field_descriptor)
-        .or_else(|| find_message_descriptor_for_type_in_map(type_name.as_str(), all_descriptors).ok().map(|(m, _)| m))
+        .or_else(|| descriptor_cache.find_message_descriptor_for_type(type_name.as_str()).ok().map(|(m, _)| m))
         .ok_or_else(|| anyhow!("Did not find message '{}' in the current message or in the file descriptors", type_name))?;
       let mut embedded_builder = MessageBuilder::new(
         &embedded_type, last_name(type_name.as_str()), &message_builder.file_descriptor);
@@ -727,7 +725,7 @@ fn build_single_embedded_field_value(
               let array_path = path.join("*");
               matching_rules.add_rule(array_path.clone(), matchingrules::MatchingRule::Type, RuleLogic::And);
               field_value = build_single_embedded_field_value(&array_path, message_builder, MessageFieldValueType::Normal,
-                                                field_descriptor, field, field_def, matching_rules, generators, all_descriptors)?;
+                                                field_descriptor, field, field_def, matching_rules, generators, descriptor_cache)?;
             } else {
               return Err(anyhow!("Expression '{}' refers to non-existent item '{}'", definition, reference.name));
             }
@@ -740,7 +738,7 @@ fn build_single_embedded_field_value(
             if !key.starts_with("pact:") {
               let field_path = path.join(key);
               construct_message_field(&mut embedded_builder, matching_rules, generators,
-                                      key, value, &field_path, all_descriptors)?;
+                                      key, value, &field_path, descriptor_cache)?;
             }
           }
           MessageFieldValue {
@@ -752,7 +750,7 @@ fn build_single_embedded_field_value(
       } else {
         for (key, value) in config {
           let field_path = path.join(key);
-          construct_message_field(&mut embedded_builder, matching_rules, generators, key, value, &field_path, all_descriptors)?;
+          construct_message_field(&mut embedded_builder, matching_rules, generators, key, value, &field_path, descriptor_cache)?;
         }
         MessageFieldValue {
           name: field.to_string(),
@@ -895,7 +893,7 @@ fn build_map_field(
   value: &Value,
   matching_rules: &mut MatchingRuleCategory,
   generators: &mut HashMap<String, Generator>,
-  all_descriptors: &HashMap<String, &FileDescriptorProto>
+  descriptor_cache: &DescriptorCache
 ) -> anyhow::Result<()> {
   trace!(">> build_map_field('{}', {}, {:?}, {:?})", path, field, value, message_builder);
   let field_type = field_descriptor.type_name.clone().unwrap_or_default();
@@ -942,7 +940,7 @@ fn build_map_field(
 
           let key_value = build_field_value(&entry_path, &mut embedded_builder, MessageFieldValueType::Normal,
             key_descriptor, "key", &Value::String(inner_field.clone()),
-            matching_rules, generators, all_descriptors
+            matching_rules, generators, descriptor_cache
           )?
             .ok_or_else(|| anyhow!("Was not able to construct map key value {:?}", key_descriptor.type_name))?;
 
@@ -950,12 +948,12 @@ fn build_map_field(
             // Embedded message
             trace!("Value is an embedded message type");
             build_single_embedded_field_value(&entry_path, &mut embedded_builder, MessageFieldValueType::Normal,
-              value_descriptor, "value", value, matching_rules, generators, all_descriptors)?
+              value_descriptor, "value", value, matching_rules, generators, descriptor_cache)?
           } else {
             // Non-embedded message field (singular value)
             trace!("Value is not an embedded message");
             build_field_value(&entry_path, &mut embedded_builder, MessageFieldValueType::Normal,
-              value_descriptor, "value", value, matching_rules, generators, all_descriptors)?
+              value_descriptor, "value", value, matching_rules, generators, descriptor_cache)?
           }
             .ok_or_else(|| anyhow!("Was not able to construct map value value {:?}", value_descriptor.type_name))?;
 
@@ -986,7 +984,7 @@ fn build_field_value(
   value: &Value,
   matching_rules: &mut MatchingRuleCategory,
   generators: &mut HashMap<String, Generator>,
-  all_descriptors: &HashMap<String, &FileDescriptorProto>
+  descriptor_cache: &DescriptorCache
 ) -> anyhow::Result<Option<MessageFieldValue>> {
   trace!(">> build_field_value({}, {}, {:?})", path, field_name, value);
 
@@ -998,14 +996,14 @@ fn build_field_value(
         MessageFieldValueType::Repeated => {
           let path = path.join("*");
           let constructed_value = construct_value_from_string(&path, message_builder,
-            descriptor, field_name, matching_rules, generators, s, all_descriptors)?;
+            descriptor, field_name, matching_rules, generators, s, descriptor_cache)?;
           debug!("Setting field {:?}:repeated to value {:?}", field_name, constructed_value);
           message_builder.add_repeated_field_value(descriptor, field_name, constructed_value.clone());
           constructed_value
         },
         _ => {
           let constructed_value = construct_value_from_string(path, message_builder,
-            descriptor, field_name, matching_rules, generators, s, all_descriptors)?;
+            descriptor, field_name, matching_rules, generators, s, descriptor_cache)?;
           debug!("Setting field {:?}:{:?} to value {:?}", field_name, field_type, constructed_value);
           message_builder.set_field_value(descriptor, field_name, constructed_value.clone());
           constructed_value
@@ -1026,12 +1024,12 @@ fn build_field_value(
           let index_path = path.join("0");
           let constructed_value = build_field_value(&index_path, message_builder,
             MessageFieldValueType::Repeated, descriptor, field_name, first,
-            matching_rules, generators, all_descriptors
+            matching_rules, generators, descriptor_cache
           )?;
           for (index, value) in rest.iter().enumerate() {
             let index_path = path.join((index + 1).to_string());
             build_field_value(&index_path, message_builder, MessageFieldValueType::Repeated,
-              descriptor, field_name, value, matching_rules, generators, all_descriptors
+              descriptor, field_name, value, matching_rules, generators, descriptor_cache
             )?;
           }
           trace!(?message_builder, "Constructed repeated field from array");
@@ -1188,7 +1186,7 @@ fn construct_value_from_string(
   matching_rules: &mut MatchingRuleCategory,
   generators: &mut HashMap<String, Generator>,
   s: &str,
-  all_descriptors: &HashMap<String, &FileDescriptorProto>
+  descriptor_cache: &DescriptorCache
 ) -> anyhow::Result<MessageFieldValue> {
   trace!(?field_name, string = ?s, "Building value from string");
   if is_matcher_def(s) {
@@ -1217,10 +1215,10 @@ fn construct_value_from_string(
       generators.insert(path.to_string(), generator.clone());
     }
     value_for_type(field_name, &value_for_field(&mrd), descriptor, &message_builder.descriptor,
-                   all_descriptors)
+                   descriptor_cache)
   } else {
     value_for_type(field_name, s, descriptor, &message_builder.descriptor,
-      all_descriptors)
+      descriptor_cache)
   }
 }
 
@@ -1288,7 +1286,7 @@ fn value_for_type(
   field_value: &str,
   descriptor: &FieldDescriptorProto,
   message_descriptor: &DescriptorProto,
-  all_descriptors: &HashMap<String, &FileDescriptorProto>
+  descriptor_cache: &DescriptorCache
 ) -> anyhow::Result<MessageFieldValue> {
   trace!("value_for_type({}, {}, _)", field_name, field_value);
 
@@ -1334,8 +1332,12 @@ fn value_for_type(
     },
 
     Type::Enum => {
+      // First try to find enum in the message's nested enums, then try globally
       let result = find_enum_value_by_name_in_message(&message_descriptor.enum_type, type_name.as_str(), field_value)
-        .or_else(|| find_enum_value_by_name(all_descriptors, type_name.as_str(), field_value));
+        .or_else(|| {
+          // If not found in message, find the enum globally and then look up the value
+          descriptor_cache.find_enum_value_by_name(type_name.as_str(), field_value)
+        });
       if let Some((n, desc)) = result {
         Ok(MessageFieldValue {
           name: field_name.to_string(),

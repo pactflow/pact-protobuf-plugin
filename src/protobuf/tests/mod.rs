@@ -43,7 +43,7 @@ use crate::protobuf::{
   response_part,
   value_for_type
 };
-use crate::utils::find_message_descriptor_for_type;
+use crate::utils::DescriptorCache;
 
 mod build_field_value_tests;
 
@@ -74,7 +74,7 @@ fn value_for_type_test() {
     options: None,
     proto3_optional: None
   };
-  let result = value_for_type("test", "test", &descriptor, &message_descriptor, &hashmap!{}).unwrap();
+  let result = value_for_type("test", "test", &descriptor, &message_descriptor, &DescriptorCache::new(prost_types::FileDescriptorSet { file: vec![] })).unwrap();
   expect!(result.name).to(be_equal_to("test"));
   expect!(result.raw_value).to(be_some().value("test".to_string()));
   expect!(result.rtype).to(be_equal_to(RType::String("test".to_string())));
@@ -92,7 +92,7 @@ fn value_for_type_test() {
     options: None,
     proto3_optional: None
   };
-  let result = value_for_type("test", "100", &descriptor, &message_descriptor, &hashmap!{}).unwrap();
+  let result = value_for_type("test", "100", &descriptor, &message_descriptor, &DescriptorCache::new(prost_types::FileDescriptorSet { file: vec![] })).unwrap();
   expect!(result.name).to(be_equal_to("test"));
   expect!(result.raw_value).to(be_some().value("100".to_string()));
   expect!(result.rtype).to(be_equal_to(RType::UInteger64(100)));
@@ -191,7 +191,7 @@ fn construct_protobuf_interaction_for_message_test() {
     };
 
   let result = construct_protobuf_interaction_for_message(&message_descriptor, &config,
-                                                          "", &file_descriptor, &hashmap!{}, None).unwrap();
+                                                          "", &file_descriptor, &DescriptorCache::new(prost_types::FileDescriptorSet { file: vec![file_descriptor.clone()] }), None).unwrap();
 
   let body = result.contents.as_ref().unwrap();
   expect!(body.content_type.as_str()).to(be_equal_to("application/protobuf;message=.test_package.test_message"));
@@ -255,18 +255,18 @@ const DESCRIPTORS_FOR_EACH_VALUE_TEST: [u8; 267] = [
 fn construct_protobuf_interaction_for_message_with_each_value_matcher() {
   let fds = FileDescriptorSet::decode(DESCRIPTORS_FOR_EACH_VALUE_TEST.as_slice()).unwrap();
   let fs = fds.file.first().unwrap();
-  let all_descriptors = hashmap!{ "simple.proto".to_string() => fs };
+  let descriptor_cache = DescriptorCache::new(fds.clone());
   let config = btreemap! {
       "value".to_string() => prost_types::Value { kind: Some(prost_types::value::Kind::StringValue("eachValue(matching(type, '00000000000000000000000000000000'))".to_string())) }
     };
-  let (message_descriptor, _) = find_message_descriptor_for_type(".ValuesMessageIn", &fds).unwrap();
+  let (message_descriptor, _) = descriptor_cache.find_message_descriptor_for_type(".ValuesMessageIn").unwrap();
 
   let result = construct_protobuf_interaction_for_message(
     &message_descriptor,
     &config,
     "",
     fs,
-    &all_descriptors,
+    &descriptor_cache,
     None
   ).unwrap();
 
@@ -292,18 +292,16 @@ fn construct_protobuf_interaction_for_message_with_each_value_matcher() {
 fn construct_message_field_with_message_with_each_value_matcher() {
   let fds = FileDescriptorSet::decode(DESCRIPTORS_FOR_EACH_VALUE_TEST.as_slice()).unwrap();
   let fs = fds.file.first().unwrap();
-  let (message_descriptor, _) = find_message_descriptor_for_type(".ValuesMessageIn", &fds).unwrap();
+  let descriptor_cache = DescriptorCache::new(fds.clone());
+  let (message_descriptor, _) = descriptor_cache.find_message_descriptor_for_type(".ValuesMessageIn").unwrap();
   let mut message_builder = MessageBuilder::new(&message_descriptor, "ValuesMessageIn", fs);
   let path = DocPath::new("$.value").unwrap();
   let mut matching_rules = MatchingRuleCategory::empty("body");
   let mut generators = hashmap!{};
-  let file_descriptors: HashMap<String, &FileDescriptorProto> = fds.file
-    .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
-    .collect();
 
   let result = construct_message_field(&mut message_builder, &mut matching_rules,
                                        &mut generators, "value", &Value::String("eachValue(matching(type, '00000000000000000000000000000000'))".to_string()),
-                                       &path, &file_descriptors);
+                                       &path, &descriptor_cache);
   expect!(result).to(be_ok());
 
   let field = message_builder.fields.get("value");
@@ -417,7 +415,7 @@ fn construct_protobuf_interaction_for_service_returns_error_on_invalid_request_t
     };
 
   let result = construct_protobuf_interaction_for_service(
-    &service_descriptor, &config, "call", &hashmap!{ "file".to_string() => &file_descriptor });
+    &service_descriptor, &config, "call", &DescriptorCache::new(prost_types::FileDescriptorSet { file: vec![file_descriptor.clone()] }));
   expect!(result.as_ref()).to(be_err());
   expect!(result.unwrap_err().to_string()).to(
     be_equal_to("Request contents is of an un-processable type: BoolValue(true), it should be either a Struct or a StringValue")
@@ -512,7 +510,7 @@ fn construct_protobuf_interaction_for_service_supports_string_value_type() {
     };
 
   let result = construct_protobuf_interaction_for_service(
-    &service_descriptor, &config, "call", &hashmap!{ "file".to_string() => &file_descriptor });
+    &service_descriptor, &config, "call", &DescriptorCache::new(prost_types::FileDescriptorSet { file: vec![file_descriptor.clone()] }));
   expect!(result).to(be_ok());
 }
 
@@ -575,7 +573,7 @@ fn construct_protobuf_interaction_for_service_stores_the_expectations_against_th
     };
 
   let (result, _) = configure_protobuf_service("test_service/call", &config, &file_descriptor,
-                                               &hashmap!{ "test_file.proto".to_string() => &file_descriptor }, "xxx")
+                                               &DescriptorCache::new(prost_types::FileDescriptorSet { file: vec![file_descriptor.clone()] }), "xxx")
     .unwrap();
   let interaction_config = result.unwrap().plugin_configuration.unwrap().interaction_configuration.unwrap();
   expect!(interaction_config.fields.get("expectations").unwrap()).to(be_equal_to(
@@ -878,12 +876,10 @@ fn build_embedded_message_field_value_with_repeated_field_configured_from_map_wi
       "pact:match": "eachValue(matching($'area'))"
     });
 
-  let all_descriptors = hashmap!{
-      "area_calculator.proto".to_string() => &FILE_DESCRIPTOR as &FileDescriptorProto
-    };
+  let descriptor_cache = DescriptorCache::new(prost_types::FileDescriptorSet { file: vec![FILE_DESCRIPTOR.clone()] });
 
   let result = build_embedded_message_field_value(&mut message_builder, &path, &field_descriptor,
-                                                  "value", &config, &mut matching_rules, &mut generators, &all_descriptors
+                                                  "value", &config, &mut matching_rules, &mut generators, &descriptor_cache
   );
 
   let expected_rules = matchingrules! {
@@ -950,11 +946,9 @@ fn build_embedded_message_field_value_with_repeated_field_configured_from_map_te
       "shape": "matching(type, 'rectangle')",
       "value": "matching(number, 12)"
     });
-  let all_descriptors = hashmap!{
-      "area_calculator.proto".to_string() => &FILE_DESCRIPTOR as &FileDescriptorProto
-    };
+  let descriptor_cache = DescriptorCache::new(prost_types::FileDescriptorSet { file: vec![FILE_DESCRIPTOR.clone()] });
   let result = build_embedded_message_field_value(&mut message_builder, &path, &field_descriptor,
-                                                  "value", &config, &mut matching_rules, &mut generators, &all_descriptors
+                                                  "value", &config, &mut matching_rules, &mut generators, &descriptor_cache
   );
 
   let expected_rules = matchingrules! {
@@ -1028,12 +1022,10 @@ fn build_embedded_message_field_value_with_field_from_different_proto_file() {
     });
   let mut matching_rules = MatchingRuleCategory::empty("body");
   let mut generators = hashmap!{};
-  let file_descriptors: HashMap<String, &FileDescriptorProto> = fds.file
-    .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
-    .collect();
+  let descriptor_cache = DescriptorCache::new(fds.clone());
 
   let result = build_embedded_message_field_value(&mut message_builder, &path, field_descriptor,
-                                                  "listener_context", &field_config, &mut matching_rules, &mut generators, &file_descriptors
+                                                  "listener_context", &field_config, &mut matching_rules, &mut generators, &descriptor_cache
   );
   expect!(result).to(be_ok());
 }
@@ -1059,13 +1051,11 @@ fn build_single_embedded_field_value_with_field_from_different_proto_file() {
     });
   let mut matching_rules = MatchingRuleCategory::empty("body");
   let mut generators = hashmap!{};
-  let file_descriptors: HashMap<String, &FileDescriptorProto> = fds.file
-    .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
-    .collect();
+  let descriptor_cache = DescriptorCache::new(fds.clone());
 
   let result = build_single_embedded_field_value(
     &path, &mut message_builder, MessageFieldValueType::Normal, field_descriptor,
-    "listener_context", &field_config, &mut matching_rules, &mut generators, &file_descriptors);
+    "listener_context", &field_config, &mut matching_rules, &mut generators, &descriptor_cache);
   expect!(result).to(be_ok());
 }
 
@@ -1140,13 +1130,11 @@ fn construct_message_field_with_global_enum_test() {
   let path = DocPath::new("$.rectangle.ad_break_type").unwrap();
   let mut matching_rules = MatchingRuleCategory::empty("body");
   let mut generators = hashmap!{};
-  let file_descriptors: HashMap<String, &FileDescriptorProto> = fds.file
-    .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
-    .collect();
+  let descriptor_cache = DescriptorCache::new(fds.clone());
 
   let result = construct_message_field(&mut message_builder, &mut matching_rules,
                                        &mut generators, "ad_break_type", &Value::String("AUDIO_AD_BREAK".to_string()),
-                                       &path, &file_descriptors);
+                                       &path, &descriptor_cache);
   expect!(result).to(be_ok());
 
   let field = message_builder.fields.get("ad_break_type");
@@ -1207,13 +1195,11 @@ fn build_single_embedded_field_value_with_embedded_message() {
     });
   let mut matching_rules = MatchingRuleCategory::empty("body");
   let mut generators = hashmap!{};
-  let file_descriptors: HashMap<String, &FileDescriptorProto> = fds.file
-    .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
-    .collect();
+  let descriptor_cache = DescriptorCache::new(fds.clone());
 
   let result = build_single_embedded_field_value(
     &path, &mut message_builder, MessageFieldValueType::Normal, field_descriptor,
-    "ad_break_type", &field_config, &mut matching_rules, &mut generators, &file_descriptors);
+    "ad_break_type", &field_config, &mut matching_rules, &mut generators, &descriptor_cache);
   expect!(result).to(be_ok());
 }
 
@@ -1454,9 +1440,7 @@ fn configure_message_with_map_with_primitive_fields() {
   let path = DocPath::new("$.param").unwrap();
   let mut matching_rules = MatchingRuleCategory::empty("body");
   let mut generators = hashmap!{};
-  let file_descriptors: HashMap<String, &FileDescriptorProto> = fds.file
-    .iter().map(|des| (des.name.clone().unwrap_or_default(), des))
-    .collect();
+  let descriptor_cache = DescriptorCache::new(fds.clone());
 
   let result = construct_message_field(
     &mut message_builder,
@@ -1465,7 +1449,7 @@ fn configure_message_with_map_with_primitive_fields() {
     "param",
     &json!({"apply":"Skip_holiday"}),
     &path,
-    &file_descriptors
+    &descriptor_cache
   );
 
   expect!(result).to(be_ok());
@@ -1508,7 +1492,7 @@ fn construct_protobuf_interaction_with_provider_state_generator() {
     };
 
   let result = construct_protobuf_interaction_for_message(&message_descriptor, &config,
-                                                          "", &file_descriptor, &hashmap!{}, None).unwrap();
+                                                          "", &file_descriptor, &DescriptorCache::new(prost_types::FileDescriptorSet { file: vec![file_descriptor.clone()] }), None).unwrap();
 
   let body = result.contents.as_ref().unwrap();
   expect!(body.content_type.as_str()).to(be_equal_to("application/protobuf;message=.test_package.test_message"));

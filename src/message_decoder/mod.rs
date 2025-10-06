@@ -8,12 +8,12 @@ use anyhow::anyhow;
 use bytes::{Buf, Bytes, BytesMut};
 use itertools::Itertools;
 use prost::encoding::{decode_key, decode_varint, encode_varint, WireType};
-use prost_types::{DescriptorProto, EnumDescriptorProto, FieldDescriptorProto, FileDescriptorSet};
+use prost_types::{DescriptorProto, EnumDescriptorProto, FieldDescriptorProto};
 use prost_types::field_descriptor_proto::Type;
 use tracing::{debug, error, trace, warn};
 
 use crate::utils::{
-  as_hex, find_enum_by_name, find_enum_by_name_in_message, find_message_descriptor_for_type, is_repeated_field, last_name, should_be_packed_type
+  as_hex, find_enum_by_name_in_message, DescriptorCache, is_repeated_field, last_name, should_be_packed_type
 };
 
 pub mod generators;
@@ -52,9 +52,9 @@ impl ProtobufField {
   pub fn default_field(
     field_descriptor: &FieldDescriptorProto,
     descriptor: &DescriptorProto,
-    fds: &FileDescriptorSet
+    descriptor_cache: &DescriptorCache
   ) -> Option<ProtobufField> {
-    default_field_data(field_descriptor, descriptor, fds).map(|data|
+    default_field_data(field_descriptor, descriptor, descriptor_cache).map(|data|
       ProtobufField {
         field_num: field_descriptor.number.unwrap_or_default() as u32,
         field_name: field_descriptor.name.clone().unwrap_or_default(),
@@ -89,7 +89,7 @@ impl ProtobufField {
 fn default_field_data(
   field_descriptor: &FieldDescriptorProto,
   descriptor: &DescriptorProto,
-  fds: &FileDescriptorSet
+  descriptor_cache: &DescriptorCache
 ) -> Option<ProtobufFieldData> {
   match &field_descriptor.default_value {
     Some(s) => {
@@ -112,7 +112,7 @@ fn default_field_data(
         Type::Enum => {
           let enum_type_name = field_descriptor.type_name.clone().unwrap_or_default();
           find_enum_by_name_in_message(&descriptor.enum_type, enum_type_name.as_str())
-            .or_else(|| find_enum_by_name(fds, enum_type_name.as_str()))
+            .or_else(|| descriptor_cache.find_enum_by_name(enum_type_name.as_str()))
             .map(|enum_proto| ProtobufFieldData::Enum(s.parse().unwrap_or_default(), enum_proto.clone()))
         },
         Type::Sfixed32 => Some(ProtobufFieldData::Integer32(s.parse().unwrap_or_default())),
@@ -144,7 +144,7 @@ fn default_field_data(
         Type::Enum => {
           let enum_type_name = field_descriptor.type_name.clone().unwrap_or_default();
           find_enum_by_name_in_message(&descriptor.enum_type, enum_type_name.as_str())
-            .or_else(|| find_enum_by_name(fds, enum_type_name.as_str()))
+            .or_else(|| descriptor_cache.find_enum_by_name(enum_type_name.as_str()))
             .map(|enum_proto| ProtobufFieldData::Enum(0, enum_proto.clone()))
         },
         Type::Sfixed32 => Some(ProtobufFieldData::Integer32(0)),
@@ -401,11 +401,11 @@ impl Display for ProtobufFieldData {
 pub fn decode_message<B>(
   buffer: &mut B,
   descriptor: &DescriptorProto,
-  descriptors: &FileDescriptorSet
+  descriptor_cache: &DescriptorCache
 ) -> anyhow::Result<Vec<ProtobufField>>
   where B: Buf {
   trace!("Decoding message using descriptor {:?}", descriptor);
-  trace!("all descriptors available for decoding the message: {:?}", descriptors);
+  trace!("all descriptors available for decoding the message: {:?}", descriptor_cache.get_file_descriptors_vec());
   trace!("Incoming buffer has {} bytes", buffer.remaining());
   let mut fields = vec![];
 
@@ -430,7 +430,7 @@ pub fn decode_message<B>(
               Type::Bool => vec![ (ProtobufFieldData::Boolean(varint > 0), wire_type) ],
               Type::Uint32 => vec![ (ProtobufFieldData::UInteger32(varint as u32), wire_type) ],
               Type::Enum => {
-                vec![ (decode_enum(descriptor, descriptors, &field_descriptor, varint)?, wire_type) ]
+                vec![ (decode_enum(descriptor, descriptor_cache, &field_descriptor, varint)?, wire_type) ]
               },
               Type::Sint32 => {
                 let value = varint as u32;
@@ -484,7 +484,7 @@ pub fn decode_message<B>(
                 // This misses the case when the type name refers to a fully-qualified nested type in another message
                 // or package. This also doesn't deal with relative paths, but I don't think descriptors actually
                 // contain those.
-                let message_proto = find_message_descriptor_for_type(full_type_name, descriptors).map(|(d,_)|d)
+                let message_proto = descriptor_cache.find_message_descriptor_for_type(full_type_name).map(|(d,_)|d)
                 .or_else(|_| {
                   descriptor.nested_type.iter().find(
                     |message_descriptor| message_descriptor.name.as_deref() == Some(last_name(full_type_name))
@@ -497,7 +497,7 @@ pub fn decode_message<B>(
 
               _ => if should_be_packed_type(t) && is_repeated_field(&field_descriptor) {
                 debug!("Reading length delimited field as a packed repeated field");
-                decode_packed_field(field_descriptor, descriptor, descriptors, &mut data_buffer)?
+                decode_packed_field(field_descriptor, descriptor, descriptor_cache, &mut data_buffer)?
               } else {
                 error!("Was expecting {:?} but received an unknown length-delimited type", t);
                 let mut buf = BytesMut::with_capacity((data_length + 8) as usize);
@@ -582,13 +582,13 @@ pub fn decode_message<B>(
 
 fn decode_enum(
   descriptor: &DescriptorProto,
-  descriptors: &FileDescriptorSet,
+  descriptor_cache: &DescriptorCache,
   field_descriptor: &FieldDescriptorProto,
   varint: u64
 ) -> anyhow::Result<ProtobufFieldData> {
   let enum_type_name = field_descriptor.type_name.clone().unwrap_or_default();
   let enum_proto = find_enum_by_name_in_message(&descriptor.enum_type, enum_type_name.as_str())
-    .or_else(|| find_enum_by_name(descriptors, enum_type_name.as_str()))
+    .or_else(|| descriptor_cache.find_enum_by_name(enum_type_name.as_str()))
     .ok_or_else(|| anyhow!("Did not find the enum {} for the field in the Protobuf descriptor", enum_type_name))?;
   Ok(ProtobufFieldData::Enum(varint as i32, enum_proto.clone()))
 }
@@ -596,7 +596,7 @@ fn decode_enum(
 fn decode_packed_field(
   field: &FieldDescriptorProto,
   descriptor: &DescriptorProto,
-  descriptors: &FileDescriptorSet,
+  descriptor_cache: &DescriptorCache,
   data: &mut Bytes
 ) -> anyhow::Result<Vec<(ProtobufFieldData, WireType)>> {
   let mut values = vec![];
@@ -633,7 +633,7 @@ fn decode_packed_field(
     Type::Enum => {
       while data.remaining() > 0 {
         let varint = decode_varint(data)?;
-        let enum_value = decode_enum(descriptor, descriptors, &field, varint)?;
+        let enum_value = decode_enum(descriptor, descriptor_cache, &field, varint)?;
         values.push((enum_value, WireType::Varint));
       }
     }
@@ -725,6 +725,7 @@ mod tests {
   use crate::message_decoder::{decode_message, ProtobufFieldData};
   use crate::protobuf::tests::DESCRIPTOR_WITH_ENUM_BYTES;
   use crate::message_builder::tests::REPEATED_ENUM_DESCRIPTORS;
+  use crate::utils::DescriptorCache;
 
   const FIELD_1_MESSAGE: [u8; 2] = [8, 1];
   const FIELD_2_MESSAGE: [u8; 2] = [16, 55];
@@ -746,7 +747,8 @@ mod tests {
       reserved_name: vec![]
     };
 
-    let result = decode_message(&mut buffer, &descriptor, &FileDescriptorSet{ file: vec![] }).unwrap();
+    let descriptor_cache = DescriptorCache::new(FileDescriptorSet{ file: vec![] });
+    let result = decode_message(&mut buffer, &descriptor, &descriptor_cache).unwrap();
     expect!(result.len()).to(be_equal_to(1));
 
     let field_result = result.first().unwrap();
@@ -786,7 +788,8 @@ mod tests {
       reserved_name: vec![]
     };
 
-    let result = decode_message(&mut buffer, &descriptor, &FileDescriptorSet{ file: vec![] }).unwrap();
+    let descriptor_cache = DescriptorCache::new(FileDescriptorSet{ file: vec![] });
+    let result = decode_message(&mut buffer, &descriptor, &descriptor_cache).unwrap();
     expect!(result.len()).to(be_equal_to(1));
 
     let field_result = result.first().unwrap();
@@ -826,7 +829,8 @@ mod tests {
       reserved_name: vec![]
     };
 
-    let result = decode_message(&mut buffer, &descriptor, &FileDescriptorSet{ file: vec![] }).unwrap();
+    let descriptor_cache = DescriptorCache::new(FileDescriptorSet{ file: vec![] });
+    let result = decode_message(&mut buffer, &descriptor, &descriptor_cache).unwrap();
     expect!(result.len()).to(be_equal_to(1));
 
     let field_result = result.first().unwrap();
@@ -889,7 +893,8 @@ mod tests {
       reserved_name: vec![]
     };
 
-    let result = decode_message(&mut buffer, &descriptor, &FileDescriptorSet{ file: vec![] }).unwrap();
+    let descriptor_cache = DescriptorCache::new(FileDescriptorSet{ file: vec![] });
+    let result = decode_message(&mut buffer, &descriptor, &descriptor_cache).unwrap();
     expect!(result.len()).to(be_equal_to(1));
 
     let field_result = result.first().unwrap();
@@ -933,7 +938,8 @@ mod tests {
       reserved_name: vec![]
     };
 
-    let result = decode_message(&mut buffer.freeze(), &descriptor, &FileDescriptorSet{ file: vec![] }).unwrap();
+    let descriptor_cache = DescriptorCache::new(FileDescriptorSet{ file: vec![] });
+    let result = decode_message(&mut buffer.freeze(), &descriptor, &descriptor_cache).unwrap();
     expect!(result.len()).to(be_equal_to(1));
 
     let field_result = result.first().unwrap();
@@ -977,7 +983,8 @@ mod tests {
       reserved_name: vec![]
     };
 
-    let result = decode_message(&mut buffer, &descriptor, &FileDescriptorSet{ file: vec![] }).unwrap();
+    let descriptor_cache = DescriptorCache::new(FileDescriptorSet{ file: vec![] });
+    let result = decode_message(&mut buffer, &descriptor, &descriptor_cache).unwrap();
     expect!(result.len()).to(be_equal_to(1));
 
     let field_result = result.first().unwrap();
@@ -1010,7 +1017,8 @@ mod tests {
       reserved_name: vec![]
     };
 
-    let result = decode_message(&mut buffer, &descriptor, &FileDescriptorSet{ file: vec![] }).unwrap();
+    let descriptor_cache = DescriptorCache::new(FileDescriptorSet{ file: vec![] });
+    let result = decode_message(&mut buffer, &descriptor, &descriptor_cache).unwrap();
     expect!(result.len()).to(be_equal_to(1));
 
     let field_result = result.first().unwrap();
@@ -1068,7 +1076,8 @@ mod tests {
       reserved_name: vec![]
     };
 
-    let result = decode_message(&mut buffer, &descriptor, &FileDescriptorSet{ file: vec![] }).unwrap();
+    let descriptor_cache = DescriptorCache::new(FileDescriptorSet{ file: vec![] });
+    let result = decode_message(&mut buffer, &descriptor, &descriptor_cache).unwrap();
     expect!(result.len()).to(be_equal_to(1));
 
     let field_result = result.first().unwrap();
@@ -1102,7 +1111,8 @@ mod tests {
     };
 
     let mut buffer = BytesMut::from(message.encode_to_vec().as_slice());
-    let result = decode_message(&mut buffer, &message_descriptor, &FileDescriptorSet{ file: vec![] }).unwrap();
+    let descriptor_cache = DescriptorCache::new(FileDescriptorSet{ file: vec![] });
+    let result = decode_message(&mut buffer, &message_descriptor, &descriptor_cache).unwrap();
     expect!(result.len()).to(be_equal_to(2));
 
     let field_result = result.first().unwrap();
@@ -1385,7 +1395,8 @@ mod tests {
       reserved_name: vec![]
     };
 
-    let result = decode_message(&mut buffer, &descriptor, &FileDescriptorSet{ file: vec![] }).unwrap();
+    let descriptor_cache = DescriptorCache::new(FileDescriptorSet{ file: vec![] });
+    let result = decode_message(&mut buffer, &descriptor, &descriptor_cache).unwrap();
     expect!(result.len()).to(be_equal_to(2));
 
     let field_result = result.first().unwrap();
@@ -1400,6 +1411,7 @@ mod tests {
     let bytes: &[u8] = &DESCRIPTOR_WITH_ENUM_BYTES;
     let buffer = Bytes::from(bytes);
     let fds: FileDescriptorSet = FileDescriptorSet::decode(buffer).unwrap();
+    let descriptor_cache = DescriptorCache::new(fds.clone());
     let main_descriptor = fds.file.iter()
       .find(|fd| fd.name.clone().unwrap_or_default() == "area_calculator.proto")
       .unwrap();
@@ -1409,7 +1421,7 @@ mod tests {
 
     let message_bytes: &[u8] = &[13, 0, 0, 64, 64, 21, 0, 0, 128, 64, 40, 1];
     let mut buffer = Bytes::from(message_bytes);
-    let result = decode_message(&mut buffer, &message_descriptor, &fds).unwrap();
+    let result = decode_message(&mut buffer, &message_descriptor, &descriptor_cache).unwrap();
     expect!(result.len()).to(be_equal_to(3));
 
     let field_result = result.last().unwrap();
@@ -1424,6 +1436,7 @@ mod tests {
     let bytes = BASE64.decode(REPEATED_ENUM_DESCRIPTORS).unwrap();
     let buffer = Bytes::from(bytes);
     let fds: FileDescriptorSet = FileDescriptorSet::decode(buffer).unwrap();
+    let descriptor_cache = DescriptorCache::new(fds.clone());
     let main_descriptor = fds.file.iter()
       .find(|fd| fd.name.clone().unwrap_or_default() == "repeated_enum.proto")
       .unwrap();
@@ -1433,7 +1446,7 @@ mod tests {
 
     let message_bytes: &[u8] = &[10, 3, 2, 0, 1];
     let mut buffer = Bytes::from(message_bytes);
-    let result = decode_message(&mut buffer, &message_descriptor, &fds).unwrap();
+    let result = decode_message(&mut buffer, &message_descriptor, &descriptor_cache).unwrap();
     expect!(result.len()).to(be_equal_to(3));
 
     expect!(result[0].field_num).to(be_equal_to(1));
@@ -1459,6 +1472,7 @@ mod tests {
     let bytes = BASE64.decode(descriptors).unwrap();
     let buffer = Bytes::from(bytes);
     let fds: FileDescriptorSet = FileDescriptorSet::decode(buffer).unwrap();
+    let descriptor_cache = DescriptorCache::new(fds.clone());
     let main_descriptor = fds.file.iter()
       .find(|fd| fd.name.clone().unwrap_or_default() == "new_fields.proto")
       .unwrap();
@@ -1471,7 +1485,7 @@ mod tests {
       20, 69, 108, 108, 97, 46, 83, 116, 114, 101, 105, 99, 104, 64, 116, 101, 115, 116, 46, 105,
       111, 72, 1];
     let mut buffer = Bytes::from(message_bytes);
-    let result = decode_message(&mut buffer, &message_descriptor, &fds).unwrap();
+    let result = decode_message(&mut buffer, &message_descriptor, &descriptor_cache).unwrap();
 
     expect!(result.len()).to(be_equal_to(6));
 

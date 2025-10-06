@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::iter::Peekable;
 use std::slice::Iter;
+use std::sync::Arc;
 
 use anyhow::{anyhow, bail};
 use bytes::{Buf, BufMut, Bytes};
@@ -18,7 +19,7 @@ use pact_models::generators::{
 use pact_models::path_exp::{DocPath, PathToken};
 use pact_models::v4::sync_message::SynchronousMessage;
 use prost::encoding::{encode_key, encode_varint, WireType};
-use prost_types::{DescriptorProto, FileDescriptorSet};
+use prost_types::DescriptorProto;
 use serde_json::Value;
 use tonic::codec::{Codec, DecodeBuf, Decoder, EncodeBuf, Encoder};
 use tonic::Status;
@@ -26,23 +27,24 @@ use tracing::{debug, error, instrument, trace, warn};
 
 use crate::message_decoder::{decode_message, ProtobufField, ProtobufFieldData};
 use crate::message_decoder::generators::{data_value_to_proto_value, GeneratorError};
+use crate::utils::DescriptorCache;
 
 #[derive(Debug, Clone)]
 pub struct PactCodec {
   input_message: DescriptorProto,
-  file_descriptor_set: FileDescriptorSet,
+  descriptor_cache: Arc<DescriptorCache>,
 }
 
 impl PactCodec {
   pub fn new(
-    file: &FileDescriptorSet,
+    descriptor_cache: &Arc<DescriptorCache>,
     input_message: &DescriptorProto,
     _output_message: &DescriptorProto,
     _message: &SynchronousMessage
   ) -> Self {
     PactCodec {
-      file_descriptor_set: file.clone(),
-      input_message: input_message.clone()
+      input_message: input_message.clone(),
+      descriptor_cache: descriptor_cache.clone()
     }
   }
 }
@@ -73,14 +75,14 @@ impl Codec for PactCodec {
 #[derive(Debug, Clone)]
 pub struct DynamicMessage {
   fields: HashMap<u32, ProtobufField>,
-  descriptors: FileDescriptorSet
+  descriptors: Arc<DescriptorCache>
 }
 
 impl DynamicMessage {
   /// Create a new message from the slice of fields
   pub fn new(
     field_data: &[ProtobufField],
-    descriptors: &FileDescriptorSet
+    descriptors: &Arc<DescriptorCache>
   ) -> DynamicMessage {
     let fields = field_data.iter()
       .map(|f| (f.field_num, f.clone()))
@@ -414,14 +416,14 @@ impl Encoder for DynamicMessageEncoder {
 #[derive(Debug, Clone)]
 pub struct DynamicMessageDecoder {
   descriptor: DescriptorProto,
-  file_descriptor_set: FileDescriptorSet
+  descriptor_cache: Arc<DescriptorCache>
 }
 
 impl DynamicMessageDecoder {
   pub fn new(codec: &PactCodec) -> Self {
     DynamicMessageDecoder {
       descriptor: codec.input_message.clone(),
-      file_descriptor_set: codec.file_descriptor_set.clone()
+      descriptor_cache: codec.descriptor_cache.clone()
     }
   }
 }
@@ -433,8 +435,8 @@ impl Decoder for DynamicMessageDecoder {
   #[instrument(skip_all, fields(bytes = src.remaining()))]
   fn decode(&mut self, src: &mut DecodeBuf<'_>) -> Result<Option<Self::Item>, Self::Error> {
     trace!("Incoming bytes = {:?}", src);
-    match decode_message(src, &self.descriptor, &self.file_descriptor_set) {
-      Ok(fields) => Ok(Some(DynamicMessage::new(fields.as_slice(), &self.file_descriptor_set))),
+    match decode_message(src, &self.descriptor, &self.descriptor_cache) {
+      Ok(fields) => Ok(Some(DynamicMessage::new(fields.as_slice(), &self.descriptor_cache))),
       Err(err) => {
         error!("Failed to decode the message - {err}");
         Err(Status::invalid_argument(format!("Failed to decode the message - {err}")))
@@ -445,12 +447,14 @@ impl Decoder for DynamicMessageDecoder {
 
 #[cfg(test)]
 mod tests {
+  use std::sync::Arc;
   use bytes::BytesMut;
   use expectest::prelude::*;
   use maplit::hashmap;
   use pact_models::generators::Generator::ProviderStateGenerator;
   use pact_models::generators::GeneratorTestMode;
   use pact_models::path_exp::DocPath;
+  use crate::utils::DescriptorCache;
   use pact_models::prelude::Generator::RandomInt;
   use pretty_assertions::assert_eq;
   use prost::encoding::WireType;
@@ -463,9 +467,10 @@ mod tests {
   #[test]
   fn dynamic_message_fetch_value_with_no_fields() {
     let fields = vec![];
-    let descriptors = FileDescriptorSet {
+    let fds = FileDescriptorSet {
       file: vec![]
     };
+    let descriptors = Arc::new(DescriptorCache::new(fds));
     let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let path = DocPath::new("$.one.two.three").unwrap();
     expect!(message.fetch_field_value(&path)).to(be_none());
@@ -481,9 +486,10 @@ mod tests {
       additional_data: vec![],
       descriptor: Default::default()
     };
-    let descriptors = FileDescriptorSet {
+    let fds = FileDescriptorSet {
       file: vec![]
     };
+    let descriptors = Arc::new(DescriptorCache::new(fds));
     let fields = vec![ field.clone() ];
     let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let path = DocPath::new("one").unwrap();
@@ -500,9 +506,10 @@ mod tests {
       additional_data: vec![],
       descriptor: Default::default()
     };
-    let descriptors = FileDescriptorSet {
+    let fds = FileDescriptorSet {
       file: vec![]
     };
+    let descriptors = Arc::new(DescriptorCache::new(fds));
     let fields = vec![ field.clone() ];
     let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let path = DocPath::new("$.one").unwrap();
@@ -568,9 +575,10 @@ mod tests {
       additional_data: vec![],
       descriptor: child_proto_2.clone()
     };
-    let descriptors = FileDescriptorSet {
+    let fds = FileDescriptorSet {
       file: vec![]
     };
+    let descriptors = Arc::new(DescriptorCache::new(fds));
     let child_message = DynamicMessage::new(&[child_field.clone(), child_field2], &descriptors);
     let mut buffer = BytesMut::new();
     child_message.write_to(&mut buffer).unwrap();
@@ -591,9 +599,10 @@ mod tests {
   #[test]
   fn dynamic_message_generate_value_with_no_fields() {
     let fields = vec![];
-    let descriptors = FileDescriptorSet {
+    let fds = FileDescriptorSet {
       file: vec![]
     };
+    let descriptors = Arc::new(DescriptorCache::new(fds));
     let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let path = DocPath::new_unwrap("$.one.two.three");
     let generators = hashmap!{
@@ -613,9 +622,10 @@ mod tests {
       additional_data: vec![],
       descriptor: Default::default()
     };
-    let descriptors = FileDescriptorSet {
+    let fds = FileDescriptorSet {
       file: vec![]
     };
+    let descriptors = Arc::new(DescriptorCache::new(fds));
     let fields = vec![ field.clone() ];
     let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let generators = hashmap!{
@@ -635,9 +645,10 @@ mod tests {
       additional_data: vec![],
       descriptor: Default::default()
     };
-    let descriptors = FileDescriptorSet {
+    let fds = FileDescriptorSet {
       file: vec![]
     };
+    let descriptors = Arc::new(DescriptorCache::new(fds));
     let fields = vec![ field.clone() ];
     let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let generators = hashmap!{
@@ -686,9 +697,10 @@ mod tests {
       additional_data: vec![],
       descriptor: child_proto_2.clone()
     };
-    let descriptors = FileDescriptorSet {
+    let fds = FileDescriptorSet {
       file: vec![]
     };
+    let descriptors = Arc::new(DescriptorCache::new(fds));
     let child_message = DynamicMessage::new(&[child_field.clone(), child_field2], &descriptors);
     let mut buffer = BytesMut::new();
     child_message.write_to(&mut buffer).unwrap();
@@ -725,9 +737,10 @@ mod tests {
       additional_data: vec![],
       descriptor: field_descriptor.clone()
     };
-    let descriptors = FileDescriptorSet {
+    let fds = FileDescriptorSet {
       file: vec![]
     };
+    let descriptors = Arc::new(DescriptorCache::new(fds));
     let fields = vec![ field.clone() ];
     let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let generators = hashmap!{
@@ -764,9 +777,10 @@ mod tests {
       additional_data: vec![],
       descriptor: field_descriptor.clone()
     };
-    let descriptors = FileDescriptorSet {
+    let fds = FileDescriptorSet {
       file: vec![]
     };
+    let descriptors = Arc::new(DescriptorCache::new(fds));
     let fields = vec![ field.clone() ];
     let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let generators = hashmap!{
@@ -796,9 +810,10 @@ mod tests {
       additional_data: vec![],
       descriptor: field_descriptor.clone()
     };
-    let descriptors = FileDescriptorSet {
+    let fds = FileDescriptorSet {
       file: vec![]
     };
+    let descriptors = Arc::new(DescriptorCache::new(fds));
     let fields = vec![ field.clone() ];
     let mut message = DynamicMessage::new(fields.as_slice(), &descriptors);
     let generators = hashmap!{
@@ -831,9 +846,10 @@ mod tests {
       additional_data: vec![],
       descriptor: field_descriptor.clone()
     };
-    let descriptors = FileDescriptorSet {
+    let fds = FileDescriptorSet {
       file: vec![]
     };
+    let descriptors = Arc::new(DescriptorCache::new(fds));
     let fields = vec![ field.clone() ];
     let descriptor = DescriptorProto {
       field: vec![
@@ -900,9 +916,10 @@ mod tests {
       descriptor: field_descriptor_3.clone()
     };
 
-    let descriptors = FileDescriptorSet {
+    let fds = FileDescriptorSet {
       file: vec![]
     };
+    let descriptors = Arc::new(DescriptorCache::new(fds));
     let fields = vec![ field_1.clone(), field_3.clone(), field_2.clone() ];
     let descriptor = DescriptorProto {
       field: vec![
@@ -985,8 +1002,9 @@ mod tests {
         }
       ]
     };
+    let descriptor_cache = Arc::new(DescriptorCache::new(descriptors.clone()));
 
-    let child_message = DynamicMessage::new(&[child_field.clone(), child_field2], &descriptors);
+    let child_message = DynamicMessage::new(&[child_field.clone(), child_field2], &descriptor_cache);
     let mut child_buffer = BytesMut::new();
     child_message.write_to(&mut child_buffer).unwrap();
 
@@ -999,12 +1017,12 @@ mod tests {
       descriptor: field_descriptor.clone()
     };
     let fields = vec![ field.clone() ];
-    let message = DynamicMessage::new(fields.as_slice(), &descriptors);
+    let message = DynamicMessage::new(fields.as_slice(), &descriptor_cache);
 
     let mut buffer = BytesMut::new();
     message.write_to(&mut buffer).unwrap();
 
-    let result = decode_message(&mut buffer.freeze(), &descriptor, &descriptors).unwrap();
+    let result = decode_message(&mut buffer.freeze(), &descriptor, &descriptor_cache).unwrap();
     assert_eq!(result, vec![ field ]);
   }
 
@@ -1074,9 +1092,10 @@ mod tests {
       descriptor: field_descriptor_3.clone()
     };
 
-    let descriptors = FileDescriptorSet {
+    let fds = FileDescriptorSet {
       file: vec![]
     };
+    let descriptors = Arc::new(DescriptorCache::new(fds));
     let fields = vec![
       field_1_1.clone(),
       field_3.clone(),
@@ -1151,9 +1170,10 @@ mod tests {
       descriptor: field_descriptor_3.clone()
     };
 
-    let descriptors = FileDescriptorSet {
+    let fds = FileDescriptorSet {
       file: vec![]
     };
+    let descriptors = Arc::new(DescriptorCache::new(fds));
     let fields = vec![
       field_1.clone(),
       field_3.clone(),

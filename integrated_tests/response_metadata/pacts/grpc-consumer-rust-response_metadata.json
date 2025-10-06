@@ -13,6 +13,21 @@
       "pluginConfiguration": {
         "protobuf": {
           "descriptorKey": "628d9de1211ee7ee1d167e3e12b170bf",
+          "expectations": {
+            "request": {
+              "s": "matching(type, '')"
+            },
+            "requestMetadata": {
+              "key": "matching(type, 'value')"
+            },
+            "response": {
+              "b": "matching(boolean, true)"
+            },
+            "responseMetadata": {
+              "grpc-message": "matching(type, 'not found')",
+              "grpc-status": "matching(equalTo, 'NOT_FOUND')"
+            }
+          },
           "service": ".pactissue.Test/GetTest"
         }
       },
@@ -101,13 +116,23 @@
   ],
   "metadata": {
     "pactRust": {
-      "consumer": "1.2.3",
-      "models": "1.2.3"
+      "consumer": "1.3.3",
+      "models": "1.2.7"
     },
     "pactSpecification": {
       "version": "4.0"
     },
     "plugins": [
+      {
+        "configuration": {
+          "628d9de1211ee7ee1d167e3e12b170bf": {
+            "protoDescriptors": "CqUBChdyZXNwb25zZV9tZXRhZGF0YS5wcm90bxIJcGFjdGlzc3VlIhkKCU1lc3NhZ2VJbhIMCgFzGAEgASgJUgFzIhoKCk1lc3NhZ2VPdXQSDAoBYhgCIAEoCFIBYjJACgRUZXN0EjgKB0dldFRlc3QSFC5wYWN0aXNzdWUuTWVzc2FnZUluGhUucGFjdGlzc3VlLk1lc3NhZ2VPdXQiAGIGcHJvdG8z",
+            "protoFile": "syntax = \"proto3\";\n\npackage pactissue;\n\nmessage MessageIn {\n  string s = 1;\n}\n\nmessage MessageOut {\n  bool b = 2;\n}\n\nservice Test {\n  rpc GetTest(MessageIn) returns (MessageOut) {}\n}\n"
+          }
+        },
+        "name": "protobuf",
+        "version": "0.6.4"
+      },
       {
         "configuration": {
           "628d9de1211ee7ee1d167e3e12b170bf": {

@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Display, Formatter};
+use std::sync::Arc;
 
 use ansi_term::Colour::{Green, Red};
 use ansi_term::Style;
@@ -18,7 +19,7 @@ use pact_models::v4::sync_message::SynchronousMessage;
 use pact_plugin_driver::proto;
 use pact_plugin_driver::utils::proto_value_to_string;
 use pact_verifier::verification_result::VerificationMismatchResult;
-use prost_types::{DescriptorProto, FileDescriptorSet, MethodDescriptorProto};
+use prost_types::{DescriptorProto, MethodDescriptorProto};
 use serde_json::Value;
 use tonic::{Request, Response, Status};
 use tonic::metadata::{Ascii, Binary, MetadataKey, MetadataMap, MetadataValue};
@@ -31,8 +32,8 @@ use crate::message_decoder::decode_message;
 use crate::metadata::{compare_metadata, grpc_status, MetadataMatchResult};
 use crate::utils::{
   build_expectations,
-  find_message_descriptor_for_type,
-  lookup_service_descriptors_for_interaction
+  lookup_service_descriptors_for_interaction,
+  DescriptorCache
 };
 
 #[derive(Debug)]
@@ -73,22 +74,22 @@ pub async fn verify_interaction(
   debug!("Verifying interaction {}", interaction);
   trace!(?interaction, ?metadata, ?config, ?request_body, ?pact);
 
-  let (all_file_descriptors, service_desc, method_desc, _) = 
+  let (descriptor_cache, service_desc, method_desc, _) = 
     lookup_service_descriptors_for_interaction(interaction, pact)?;
   
   let input_message_name = method_desc.input_type.clone().unwrap_or_default();
-  let (input_message_desc, _) = find_message_descriptor_for_type(
-    input_message_name.as_str(), &all_file_descriptors)?;
+  let (input_message_desc, _) = descriptor_cache.find_message_descriptor_for_type(
+    input_message_name.as_str())?;
   
   let output_message_name = method_desc.output_type.clone().unwrap_or_default();
   // uses type name from method_descriptor, which always contains the doc; 3-way logic is safe here
-  let (output_message_desc, _) = find_message_descriptor_for_type(
-    output_message_name.as_str(), &all_file_descriptors)?;
+  let (output_message_desc, _) = descriptor_cache.find_message_descriptor_for_type(
+    output_message_name.as_str())?;
   let bold = Style::new().bold();
 
-  match build_grpc_request(request_body, metadata, &all_file_descriptors, &input_message_desc) {
+  match build_grpc_request(request_body, metadata, &descriptor_cache, &input_message_desc) {
     Ok(request) => match make_grpc_request(
-      request, config, metadata, &all_file_descriptors, &input_message_desc, &output_message_desc, interaction).await {
+      request, config, metadata, &descriptor_cache, &input_message_desc, &output_message_desc, interaction).await {
       Ok(response) => {
         debug!("Received response from gRPC server - {:?}", response);
         let response_metadata = response.metadata();
@@ -98,7 +99,7 @@ pub async fn verify_interaction(
         let expectations = build_expectations(interaction, "response");
         trace!("consumer expectations: {:?}", expectations);
         let (result, verification_output) = verify_response(body, response_metadata, interaction,
-          &all_file_descriptors, &method_desc, &expectations.unwrap_or_default())?;
+          &descriptor_cache, &method_desc, &expectations.unwrap_or_default())?;
 
         let status_result = if !result.is_empty() {
           Red.paint("FAILED")
@@ -207,7 +208,7 @@ fn verify_response(
   response_body: &DynamicMessage,
   response_metadata: &MetadataMap,
   interaction: &SynchronousMessage,
-  all_file_descriptors: &FileDescriptorSet,
+  descriptor_cache: &DescriptorCache,
   method_descriptor: &MethodDescriptorProto,
   expectations: &HashMap<DocPath, String>
 ) -> anyhow::Result<(Vec<VerificationMismatchResult>, Vec<String>)> {
@@ -227,7 +228,7 @@ fn verify_response(
 
     match match_message(
       method_descriptor.output_type(), 
-      all_file_descriptors,
+      descriptor_cache,
       &mut expected_body,
       &mut actual_body.freeze(),
       &response.matching_rules.rules_for_category("body").unwrap_or_default(),
@@ -300,7 +301,7 @@ async fn make_grpc_request(
   request: Request<DynamicMessage>,
   config: &BTreeMap<String, Value>,
   metadata: &HashMap<String, proto::MetadataValue>,
-  file_desc: &FileDescriptorSet,
+  descriptor_cache: &Arc<DescriptorCache>,
   input_desc: &DescriptorProto,
   output_desc: &DescriptorProto,
   interaction: &SynchronousMessage
@@ -328,7 +329,7 @@ async fn make_grpc_request(
   conn.ready().await?;
 
   debug!("Making gRPC request to {}", path);
-  let codec = PactCodec::new(file_desc, output_desc, input_desc, interaction);
+  let codec = PactCodec::new(descriptor_cache, output_desc, input_desc, interaction);
   let mut grpc = tonic::client::Grpc::new(conn);
   grpc.unary(request, path, codec).await
     .map_err(|err| {
@@ -340,13 +341,13 @@ async fn make_grpc_request(
 fn build_grpc_request(
   body: &OptionalBody,
   metadata: &HashMap<String, proto::MetadataValue>,
-  file_desc: &FileDescriptorSet,
+  descriptor_cache: &Arc<DescriptorCache>,
   input_desc: &DescriptorProto
 ) -> anyhow::Result<Request<DynamicMessage>> {
-  trace!(?body, ?metadata, ?file_desc, ?input_desc, ">> build_grpc_request");
+  trace!(?body, ?metadata, ?descriptor_cache, ?input_desc, ">> build_grpc_request");
   let mut bytes = body.value().unwrap_or_default();
-  let message_fields = decode_message(&mut bytes, input_desc, file_desc)?;
-  let mut request = Request::new(DynamicMessage::new(&message_fields, file_desc));
+  let message_fields = decode_message(&mut bytes, input_desc, descriptor_cache)?;
+  let mut request = Request::new(DynamicMessage::new(&message_fields, descriptor_cache));
   let request_metadata = request.metadata_mut();
   for (key, md) in metadata {
     if key != "request-path" {
