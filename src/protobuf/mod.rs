@@ -632,12 +632,101 @@ fn build_embedded_message_field_value(
               }
               None => Err(anyhow!("Got an EachValue matcher with no associated matching rules to apply"))
             }
+          } else if mrd.rules.iter().all(|r| r.is_right()) && definition.starts_with("arrayContains") {
+            // arrayContains with reference form: arrayContains(matching($'refName'))
+            //
+            // NOTE: We use `definition.starts_with("arrayContains")` because the parser returns
+            // references (Either::Right) for both eachValue($'ref') and arrayContains($'ref') —
+            // there's no structural marker in MatchingRuleDefinition to distinguish them. The
+            // eachValue case is already handled above (line ~590 find_map). This string check is
+            // a workaround; a proper fix would add a `kind` field to MatchingRuleDefinition in
+            // pact_models upstream.
+            //
+            // Each reference points to a sibling key in the JSON map that defines an expected
+            // element (typically a message). We build the example value from each reference,
+            // capture the matching rules generated for that element, and construct proper
+            // ArrayContains variants so the verifier can match elements using the correct rules.
+            debug!("Found arrayContains with reference form");
+
+            let references: Vec<String> = mrd.rules.iter()
+              .filter_map(|r| r.as_ref().right().map(|mr| mr.name.clone()))
+              .collect();
+
+            let mut variants = Vec::new();
+
+            for (index, reference) in references.iter().enumerate() {
+              if let Some(field_value) = map.get(reference.as_str()) {
+                // Snapshot the rules before processing this reference
+                let rules_before: HashSet<DocPath> = matching_rules.rules.keys().cloned().collect();
+
+                let index_path = path.join(index.to_string());
+                let index_prefix = index_path.to_string();
+                // build_single_embedded_field_value calls set_field_value internally, which
+                // replaces the field's values vec — that would overwrite earlier variants
+                // when multiple references are present. Build into a clone so each variant's
+                // example value is preserved, then append via add_repeated_field_value below.
+                let mut local_builder = message_builder.clone();
+                let constructed = build_single_embedded_field_value(
+                  &index_path, &mut local_builder, MessageFieldValueType::Repeated,
+                  field_descriptor, field, field_value, matching_rules, generators, descriptor_cache
+                )?;
+                if let Some(fv) = constructed {
+                  message_builder.add_repeated_field_value(field_descriptor, field, fv);
+                }
+
+                // Extract newly-added rules and remap paths to be relative to the element.
+                // The verifier's ArrayContains callback starts comparison from DocPath::root(),
+                // so variant rules need paths like $.type, $.endpoint (not $.networking[0].type).
+                let mut variant_rules = MatchingRuleCategory::empty("body");
+                let new_paths: Vec<DocPath> = matching_rules.rules.keys()
+                  .filter(|p| !rules_before.contains(*p) && p.to_string().starts_with(&index_prefix))
+                  .cloned()
+                  .collect();
+                debug!("arrayContains ref: index_prefix='{}', new paths={:?}", index_prefix,
+                  new_paths.iter().map(|p| p.to_string()).collect::<Vec<_>>());
+
+                for abs_path in &new_paths {
+                  let abs_str = abs_path.to_string();
+                  // Remap: $.networking[0].type -> $.type
+                  let relative = if abs_str.len() > index_prefix.len() {
+                    format!("${}", &abs_str[index_prefix.len()..])
+                  } else {
+                    "$".to_string()
+                  };
+                  if let Ok(rel_path) = DocPath::new(&relative) {
+                    if let Some(rule_list) = matching_rules.rules.get(abs_path) {
+                      for rule in &rule_list.rules {
+                        variant_rules.add_rule(rel_path.clone(), rule.clone(), rule_list.rule_logic);
+                      }
+                    }
+                  }
+                }
+
+                // Remove absolute-path rules from the shared category; they'd confuse the
+                // verifier at the wrong path level. The ArrayContains variant carries them.
+                for abs_path in &new_paths {
+                  matching_rules.rules.remove(abs_path);
+                }
+
+                debug!("arrayContains ref: variant_rules={:?}", variant_rules);
+                let variant_generators: HashMap<DocPath, Generator> = HashMap::new();
+                variants.push((index, variant_rules, variant_generators));
+              } else {
+                return Err(anyhow!("Expression '{}' refers to non-existent item '{}'", definition, reference));
+              }
+            }
+
+            matching_rules.add_rule(path.clone(),
+              matchingrules::MatchingRule::ArrayContains(variants),
+              RuleLogic::And);
+
+            Ok(())
           } else {
             if !mrd.rules.is_empty() {
               for rule in &mrd.rules {
                 match rule {
                   Either::Left(rule) => matching_rules.add_rule(path.clone(), rule.clone(), RuleLogic::And),
-                  Either::Right(mr) => return Err(anyhow!("References can only be used with an EachValue matcher - {:?}", mr))
+                  Either::Right(mr) => return Err(anyhow!("References can only be used with an EachValue or arrayContains matcher - {:?}", mr))
                 }
               }
             }
