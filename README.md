@@ -16,7 +16,6 @@ payloads and gRPC.
 - [Requirements to use it](#requirements-to-use-it)
 - [Installation](#installation)
   - [Installing the plugin](#installing-the-plugin)
-  - [Installing the Protocol buffer protoc compiler](#installing-the-protocol-buffer-protoc-compiler) 
 - [Supported features](#supported-features)
 - [Unsupported features](#unsupported-features)
 - [Using the plugin](#using-the-plugin)
@@ -37,8 +36,6 @@ Supported Pact framework versions:
 - [Pact-Rust Consumer v0.9.x](https://github.com/pact-foundation/pact-reference/tree/master/rust/pact_consumer)
 - [Pact-Rust Verifier v0.9.x](https://github.com/pact-foundation/pact-reference/tree/master/rust/pact_verifier_cli)
 - [Pact-Go v2.0.0-beta](https://github.com/pact-foundation/pact-go)
-
-To support compiling Protocol Buffer proto files requires a version of the [Protocol Buffer compiler](https://github.com/protocolbuffers/protobuf).
 
 ## Installation
 
@@ -78,28 +75,6 @@ Example installation of Linux version 0.1.5 (replace with the actual version you
 
 The default plugin directory (`$HOME/.pact/plugins`) can be changed by setting the `PACT_PLUGIN_DIR` environment variable.
 
-### Installing the Protocol buffer protoc compiler
-
-The plugin can automatically download the correct version of the Protocol buffer compiler for the current operating system
-and architecture. By default, it will download the compiler from https://github.com/protocolbuffers/protobuf/releases
-and then unpack it into the plugin's installation directory.
-
-The plugin executes the following steps:
-
-1. Look for a valid `protoc/bin/protoc` in the plugin installation directory
-2. If not found, look for a `protoc-{version}-{OS}.zip` in the plugin installation directory and unpack that (i.e. for Linux it will look for `protoc-3.19.1-linux-x86_64.zip`).
-3. If not found, try download protoc using the `downloadUrl` entry in the plugin manifest file
-4. Otherwise, fallback to using the system installed protoc
-
-#### Dealing with network and firewall issues
-
-If the plugin is going to run in an environment that does not allow automatic downloading of files, then you can do any of the following:
-
-1. Download the protoc archive and place it in the plugin installation directory. It will need to be the correct version and operating system/architecture.
-2. Download the protoc archive and unpack it into the plugin installation directory. It will need to be in a `protoc` directory. _Do this if the current version is not supported for your operating system/architecture._
-3. Change the `downloadUrl` entry in the plugin manifest to point to a location that the file can be downloaded from.
-4. Install the correct version of the protoc compiler as an operating system package. It must then be on the executable path when the plugin runs. For instance, for Alpine Linux this will need to be done as the downloaded versions will not work.
-
 ## Logging
 
 _NOTE: Since 0.1.3, the logging was switched to the Rust tracing crate and a log configuration file is no longer supported._ 
@@ -114,22 +89,13 @@ environment variable that is passed into the plugin process (this should be set 
 The Protobuf plugin supports the following configuration options, which can be set in the plugin manifest file under
 `pluginConfig`:
 
-#### `protocVersion` [string]
-
-The Protobuf compiler version to download if required.
-
-#### `downloadUrl` [string]
-
-The URL to download the Protobuf compiler from. By default, this will be the Protocol Buffers GitHub release page.
-
 #### `hostToBindTo` [string]
 
 Host to bind to. Default is the IP4 loopback adapter `127.0.0.1`, to use the IP6 loopback set it to `::1`. 
 
 #### `additionalIncludes` [string or list\<string\>]
 
-Additional directories to include to add to the Protocol buffers compiler to search for proto files. Each value will be
-added verbatim to the protoc command line using `-I`. **THESE ARE DIRECTORIES NOT FILES!**
+Additional directories for the plugin to search when resolving proto file imports. **THESE ARE DIRECTORIES NOT FILES!**
 
 ### Specifying configuration values in the tests
 
@@ -547,8 +513,6 @@ I.e., updated manifest to use 127.0.0.1 as the host to bind to
   "executableType": "exec",
   "entryPoint": "pact-protobuf-plugin",
   "pluginConfig": {
-    "protocVersion": "3.19.1",
-    "downloadUrl": "https://github.com/protocolbuffers/protobuf/releases/download",
     "hostToBindTo": "127.0.0.1"
   }
 }
