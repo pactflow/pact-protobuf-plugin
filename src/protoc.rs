@@ -9,6 +9,8 @@ use tracing::trace;
 /// Parse a proto file into a FileDescriptorSet using the embedded protox compiler.
 ///
 /// Returns the descriptor set, its md5 digest, and the raw encoded bytes.
+/// The descriptor set includes all transitively imported files, equivalent to
+/// protoc's --include_imports flag.
 pub(crate) fn parse_proto_file(
   proto_file: &Path,
   additional_includes: &[String],
@@ -25,12 +27,35 @@ pub(crate) fn parse_proto_file(
     include_dirs.push(PathBuf::from(inc));
   }
 
-  let mut compiler = protox::Compiler::new(include_dirs)?;
-  compiler.open_file(file_name)?;
-
-  let descriptor_set = compiler.file_descriptor_set();
+  // protox::compile includes all transitively imported files in the returned set,
+  // matching the behaviour of `protoc --include_imports`.
+  let descriptor_set = protox::compile([file_name], include_dirs)?;
   let descriptor_bytes = descriptor_set.encode_to_vec();
   let digest = md5::compute(&descriptor_bytes);
 
   Ok((descriptor_set, digest, descriptor_bytes))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use expectest::prelude::*;
+
+  #[test]
+  fn parse_proto_file_includes_transitive_imports() {
+    let proto_file = Path::new("tests/enum.proto").canonicalize().unwrap();
+    let (fds, _, _) = parse_proto_file(&proto_file, &[]).unwrap();
+
+    let file_names: Vec<_> = fds.file.iter()
+      .filter_map(|f| f.name.as_deref())
+      .collect();
+
+    // enum.proto imports enum_imported.proto — both must appear in the set
+    expect!(file_names.iter().any(|n| n.contains("enum_imported"))).to(be_true());
+
+    // Values2, defined in enum_imported.proto, must be resolvable
+    let has_values2 = fds.file.iter()
+      .any(|f| f.enum_type.iter().any(|e| e.name.as_deref() == Some("Values2")));
+    expect!(has_values2).to(be_true());
+  }
 }
