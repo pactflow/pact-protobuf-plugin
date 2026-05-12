@@ -68,7 +68,7 @@ tracing-core = "0.1.32"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "local-time", "tracing-log"] }
 tracing-appender = "0.2.3"
 uuid = { version = "1.17.0", features = ["v4"] }
-zip = "2.4.2"
+zip = "8.6.0"
 
 [dev-dependencies]
 env_logger = "0.11.3"
