@@ -51,7 +51,6 @@ use crate::message_decoder::{decode_message, ProtobufField};
 use crate::metadata::{MessageMetadataValue, MetadataMatchResult};
 use crate::mock_server::{GrpcMockServer, MOCK_SERVER_STATE};
 use crate::protobuf::process_proto;
-use crate::protoc::setup_protoc;
 use crate::utils::{
   build_grpc_route,
   DescriptorCache,
@@ -751,17 +750,8 @@ impl PactPlugin for ProtobufPactPlugin {
       Ok(config) => config,
       Err(err) => return Ok(Self::configure_interaction_error_response(err.to_string()))
     };
-    // Make sure we can execute the protobuf compiler
-    let protoc = match setup_protoc(&plugin_config, &self.additional_includes(&plugin_config)).await {
-      Ok(protoc) => protoc,
-      Err(err) => {
-        error!("Failed to invoke protoc: {}", err);
-        return Ok(Self::configure_interaction_error_response(format!("Failed to invoke protoc: {}", err)))
-      }
-    };
-
     // Process the proto file and configure the interaction
-    match process_proto(proto_file, &protoc, &fields).await {
+    match process_proto(proto_file, &self.additional_includes(&plugin_config), &fields).await {
       Ok((interactions, plugin_config)) => {
         Ok(Response::new(proto::ConfigureInteractionResponse {
           interaction: interactions,
