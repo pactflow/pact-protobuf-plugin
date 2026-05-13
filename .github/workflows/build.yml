@@ -22,7 +22,7 @@ jobs:
           toolchain: ${{ matrix.rust }}
           components: clippy
       - name: Install Protoc
-        uses: arduino/setup-protoc@v1
+        uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install shared mime info DB
@@ -62,10 +62,6 @@ jobs:
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v1
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build plugin
         run: cargo build
       - name: Install plugin
@@ -87,7 +83,7 @@ jobs:
         with:
           toolchain: stable
       - name: Install Protoc
-        uses: arduino/setup-protoc@v1
+        uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Build plugin

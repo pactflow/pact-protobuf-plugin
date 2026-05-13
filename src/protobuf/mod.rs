@@ -37,7 +37,7 @@ use tracing_core::LevelFilter;
 
 use crate::message_builder::{MessageBuilder, MessageFieldValue, MessageFieldValueType, RType};
 use crate::metadata::{MessageMetadata, process_metadata};
-use crate::protoc::Protoc;
+use crate::protoc::parse_proto_file;
 use crate::utils::{
   to_fully_qualified_name,
   find_enum_value_by_name_in_message,
@@ -82,14 +82,14 @@ use crate::utils::{
 /// - Plugin configuration, which can be used to store the protobuf file and descriptors
 pub(crate) async fn process_proto(
   proto_file: String,
-  protoc: &Protoc,
+  additional_includes: &[String],
   config: &BTreeMap<String, prost_types::Value>
 ) -> anyhow::Result<(Vec<InteractionResponse>, PluginConfiguration)> {
   debug!("Parsing proto file '{}'", proto_file);
   trace!(">> process_proto({proto_file}, {config:?})");
 
   let proto_file = Path::new(proto_file.as_str());
-  let (descriptors, digest, descriptor_bytes) = protoc.parse_proto_file(proto_file).await?;
+  let (descriptors, digest, descriptor_bytes) = parse_proto_file(proto_file, additional_includes)?;
   debug!("Parsed proto file OK, file descriptors = {:?}", descriptors.file.iter().map(|file| file.name.as_ref()).collect_vec());
   trace!("Descriptor bytes {:?}", descriptor_bytes.as_slice());
 

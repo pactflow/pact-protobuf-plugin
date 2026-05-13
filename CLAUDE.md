@@ -14,7 +14,7 @@ cargo build --release  # release (for installing as plugin)
 # Unit tests
 cargo test --lib
 
-# Integration tests (need protoc on PATH or via PROTOC env var)
+# Integration tests
 cargo test --test each_value_tests
 cargo test --test basic_values_test
 cargo test --test enum_tests
@@ -24,14 +24,6 @@ cargo test --test '*' -- --skip verify_plugin
 ```
 
 **Default branch is `main`.** Conventional Commits required (`feat:`, `fix:`, `chore:`, etc.). PRs are NOT squash-merged — submit a single, clean commit per PR.
-
-### protoc
-
-Integration tests and the plugin itself need `protoc`. If it's on your PATH (e.g. from `brew install protobuf` or your gRPC toolchain), it works automatically. Otherwise set the `PROTOC` env var — the plugin bundles one in its install directory:
-```bash
-export PROTOC=~/.pact/plugins/protobuf-<version>/protoc/bin/protoc
-```
-CI uses `arduino/setup-protoc` to install it system-wide.
 
 ### Local pact_models patches
 
@@ -83,7 +75,7 @@ CI runs a specific list of integrated tests (see `.github/workflows/build.yml` `
 | `dynamic_message` | `src/dynamic_message.rs` | gRPC codec using Pact interactions (encode/decode for tonic). |
 | `mock_server` | `src/mock_server.rs` | gRPC mock server for consumer tests. |
 | `mock_service` | `src/mock_service.rs` | Service implementation backed by Pact interactions for the mock server. |
-| `protoc` | `src/protoc.rs` | Protoc wrapper — finds/downloads protoc, invokes it to parse .proto files into FileDescriptorSet. |
+| `protoc` | `src/protoc.rs` | Proto compiler wrapper — uses the embedded `protox` crate to parse .proto files into a FileDescriptorSet. |
 | `tcp` | `src/tcp.rs` | `TcpIncoming` — bridges `TcpListener` to tonic's `Stream` for the gRPC server. |
 | `utils` | `src/utils.rs` | Shared helpers: descriptor lookup, name manipulation, route building. |
 
@@ -95,7 +87,7 @@ CI runs a specific list of integrated tests (see `.github/workflows/build.yml` `
 
 **Consumer side (configure_interaction):**
 1. Test provides JSON config with `pact:proto`, `pact:proto-service`, request/response bodies
-2. `server.rs` → `protobuf::process_proto()` parses the .proto file via protoc
+2. `server.rs` → `protobuf::process_proto()` parses the .proto file via the embedded `protox` compiler
 3. For each field in the config, `protobuf/mod.rs` builds:
    - A protobuf wire-format message (example value)
    - Matching rules (how to compare during verification)
