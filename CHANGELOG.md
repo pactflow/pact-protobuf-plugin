@@ -1,3 +1,11 @@
+# 0.8.0 - Feature Release
+
+* 173bf2f - feat: replace protoc binary with embedded protox compiler (#237) (Ronald Holshausen, Wed May 13 11:00:20 2026 +1000)
+* c9da8c1 - chore: Use macos latest in CI (Ronald Holshausen, Tue May 12 11:13:51 2026 +1000)
+* 2f5d3c6 - chore: Update dependencies (Ronald Holshausen, Tue May 12 10:27:43 2026 +1000)
+* 4b7277a - feat: add arrayContains support for repeated fields (#236) (Stanislav Vodetskyi, Thu May 7 20:35:29 2026 -0700)
+* faf0f34 - bump version to 0.7.1 (Ronald Holshausen, Mon Oct 6 12:38:47 2025 +1100)
+
 # 0.7.0 - Fix nested message lookups + proto descriptor caching
 
 * 18e6500 - chore: Cleanup some compiler warnings (Ronald Holshausen, Mon Oct 6 12:08:41 2025 +1100)
