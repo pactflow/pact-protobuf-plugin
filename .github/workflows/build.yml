@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - feat/protox-compiler
   pull_request:
     branches:
       - main
