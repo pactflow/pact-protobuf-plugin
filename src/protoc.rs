@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use md5::Digest;
 use prost::Message;
 use prost_types::FileDescriptorSet;
@@ -29,7 +29,8 @@ pub(crate) fn parse_proto_file(
 
   // protox::compile includes all transitively imported files in the returned set,
   // matching the behaviour of `protoc --include_imports`.
-  let descriptor_set = protox::compile([file_name], include_dirs)?;
+  let descriptor_set = protox::compile([file_name], include_dirs)
+    .with_context(|| format!("Failed to compile proto file {:?}", proto_file))?;
   let descriptor_bytes = descriptor_set.encode_to_vec();
   let digest = md5::compute(&descriptor_bytes);
 
@@ -43,9 +44,13 @@ mod tests {
   use std::io::Write;
   use tempfile::TempDir;
 
+  fn test_proto(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join(name)
+  }
+
   #[test]
   fn parse_proto_file_with_no_imports() {
-    let proto_file = Path::new("tests/basic_values.proto").canonicalize().unwrap();
+    let proto_file = test_proto("basic_values.proto");
     let (fds, _, bytes) = parse_proto_file(&proto_file, &[]).unwrap();
 
     // Single file, no imports
@@ -56,7 +61,7 @@ mod tests {
 
   #[test]
   fn parse_proto_file_includes_transitive_imports() {
-    let proto_file = Path::new("tests/enum.proto").canonicalize().unwrap();
+    let proto_file = test_proto("enum.proto");
     let (fds, _, _) = parse_proto_file(&proto_file, &[]).unwrap();
 
     let file_names: Vec<_> = fds.file.iter()
@@ -81,7 +86,8 @@ mod tests {
     writeln!(f, r#"syntax = "proto3"; package test; import "enum_imported.proto"; message Wrap {{ .example.enum.package.Values2 v = 1; }}"#).unwrap();
     drop(f);
 
-    let tests_dir = Path::new("tests").canonicalize().unwrap().to_string_lossy().to_string();
+    let tests_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests")
+      .to_string_lossy().to_string();
     let proto_file = tmp.path().join("main.proto");
     let (fds, _, _) = parse_proto_file(&proto_file, &[tests_dir]).unwrap();
 
@@ -92,7 +98,7 @@ mod tests {
 
   #[test]
   fn parse_proto_file_digest_is_stable() {
-    let proto_file = Path::new("tests/basic_values.proto").canonicalize().unwrap();
+    let proto_file = test_proto("basic_values.proto");
     let (_, digest1, bytes1) = parse_proto_file(&proto_file, &[]).unwrap();
     let (_, digest2, bytes2) = parse_proto_file(&proto_file, &[]).unwrap();
 
