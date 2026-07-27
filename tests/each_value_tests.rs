@@ -60,11 +60,11 @@ async fn each_value_test() {
       "$.resource_permissions" => [ MatchingRule::Values ],
       "$.resource_permissions.*" => [ MatchingRule::Type ],
       "$.resource_permissions.*.resource.permissions" => [ each_value ],
-      "$.resource_permissions.*.resource.roles" => [ MatchingRule::EachValue(MatchingRuleDefinition::new("admin".to_string(), ValueType::Unknown, MatchingRule::Type, None, "".to_string())) ],
-      "$.resource_permissions.*.resource.roles.*" => [ MatchingRule::MinType(1), MatchingRule::MaxType(5) ],
+      // atLeast/atMost are length constraints on the collection, so they sit alongside
+      // the eachValue rule on the field path itself, not on the element path.
+      "$.resource_permissions.*.resource.roles" => [ MatchingRule::MinType(1), MatchingRule::MaxType(5), MatchingRule::EachValue(MatchingRuleDefinition::new("admin".to_string(), ValueType::Unknown, MatchingRule::Type, None, "".to_string())) ],
       "$.resource_permissions.*.resource.groups" => [ each_value_groups ],
-      "$.resource_permissions.*.resource.tags" => [ MatchingRule::EachValue(MatchingRuleDefinition::new("item".to_string(), ValueType::Unknown, MatchingRule::Type, None, "".to_string())) ],
-      "$.resource_permissions.*.resource.tags.*" => [ MatchingRule::MinType(0), MatchingRule::MaxType(3) ]
+      "$.resource_permissions.*.resource.tags" => [ MatchingRule::EachValue(MatchingRuleDefinition::new("item".to_string(), ValueType::Unknown, MatchingRule::Type, None, "".to_string())), MatchingRule::MinType(0), MatchingRule::MaxType(3) ]
     }
   };
   assert_eq!(&matching_rules, &response.matching_rules);

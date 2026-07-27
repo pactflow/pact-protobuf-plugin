@@ -325,6 +325,65 @@ fn construct_message_field_with_message_with_each_value_matcher() {
     }));
 }
 
+// atLeast(N)/atMost(N) configure the collection, not its elements, so the rules
+// must be attached to `$.value` and not `$.value.*`. If they are left on the
+// element path, `compare_repeated_field` finds no rule at the collection path and
+// falls back to exact list matching, including a strict length check.
+#[test_log::test]
+fn construct_message_field_with_min_type_matcher_on_repeated_field() {
+  let fds = FileDescriptorSet::decode(DESCRIPTORS_FOR_EACH_VALUE_TEST.as_slice()).unwrap();
+  let fs = fds.file.first().unwrap();
+  let descriptor_cache = DescriptorCache::new(fds.clone());
+  let (message_descriptor, _) = descriptor_cache.find_message_descriptor_for_type(".ValuesMessageIn").unwrap();
+  let mut message_builder = MessageBuilder::new(&message_descriptor, "ValuesMessageIn", fs);
+  let path = DocPath::new("$.value").unwrap();
+  let mut matching_rules = MatchingRuleCategory::empty("body");
+  let mut generators = hashmap!{};
+
+  let result = construct_message_field(&mut message_builder, &mut matching_rules,
+                                       &mut generators, "value", &Value::String("atLeast(2)".to_string()),
+                                       &path, &descriptor_cache);
+  expect!(result).to(be_ok());
+
+  expect!(matching_rules).to(be_equal_to(matchingrules_list! {
+      "body";
+      "$.value" => [ pact_models::matchingrules::MatchingRule::MinType(2) ]
+    }));
+}
+
+// Length constraints combined with eachValue must all land on the collection path.
+// Previously eachValue was hoisted to `$.value` while atLeast/atMost stayed on
+// `$.value.*`, so the bounds were silently never enforced.
+#[test_log::test]
+fn construct_message_field_with_min_max_type_and_each_value_on_repeated_field() {
+  let fds = FileDescriptorSet::decode(DESCRIPTORS_FOR_EACH_VALUE_TEST.as_slice()).unwrap();
+  let fs = fds.file.first().unwrap();
+  let descriptor_cache = DescriptorCache::new(fds.clone());
+  let (message_descriptor, _) = descriptor_cache.find_message_descriptor_for_type(".ValuesMessageIn").unwrap();
+  let mut message_builder = MessageBuilder::new(&message_descriptor, "ValuesMessageIn", fs);
+  let path = DocPath::new("$.value").unwrap();
+  let mut matching_rules = MatchingRuleCategory::empty("body");
+  let mut generators = hashmap!{};
+
+  let expression = "atLeast(1), atMost(5), eachValue(matching(type, 'admin'))";
+  let result = construct_message_field(&mut message_builder, &mut matching_rules,
+                                       &mut generators, "value", &Value::String(expression.to_string()),
+                                       &path, &descriptor_cache);
+  expect!(result).to(be_ok());
+
+  expect!(matching_rules).to(be_equal_to(matchingrules_list! {
+      "body";
+      "$.value" => [
+        pact_models::matchingrules::MatchingRule::MinType(1),
+        pact_models::matchingrules::MatchingRule::MaxType(5),
+        pact_models::matchingrules::MatchingRule::EachValue(
+          MatchingRuleDefinition::new("admin".to_string(), ValueType::String,
+            pact_models::matchingrules::MatchingRule::Type, None, expression.to_string())
+        )
+      ]
+    }));
+}
+
 #[test]
 fn construct_protobuf_interaction_for_service_returns_error_on_invalid_request_type() {
   let string_descriptor = DescriptorProto {
