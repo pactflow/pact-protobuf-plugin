@@ -167,7 +167,7 @@ No Makefile. All commands are raw cargo.
 
 ## Known Issues
 
-- **`atLeast(N)` alone on repeated fields**: Without `eachValue`, MinType goes on `$.field.*` but nothing on `$.field`, so `compare_repeated_field` falls to exact matching. Wrap with `eachValue` to work correctly.
+- **Collection vs element rule paths**: repeated fields are built with `*` appended to the path, so a rule that configures the collection has to be hoisted back to `$.field` in `construct_value_from_string`. `Values`, `EachValue`, `ArrayContains` (via `is_values_matcher()`) plus `MinType`/`MaxType` are hoisted; everything else stays on `$.field.*`. If a collection-level rule is left on the element path, `compare_repeated_field` finds nothing at `$.field` and silently falls back to exact list matching.
 - **Plugin version coupling**: Consumer tests in `integrated_tests/` reference specific plugin versions. The installed plugin version must match what tests expect.
 - **Patch dependency**: The `[patch.crates-io]` for `pact_models` requires `../pact-reference` to be checked out. Comment it out if working without local model changes.
 

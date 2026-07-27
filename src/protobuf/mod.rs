@@ -1294,7 +1294,15 @@ fn construct_value_from_string(
       for rule in &mrd.rules {
         match rule {
           Either::Left(rule) => {
-            let path = if rule.is_values_matcher() && path.is_wildcard() {
+            // Repeated fields are built with a `*` appended to the path, so rules that
+            // configure the collection itself (rather than its elements) have to be
+            // hoisted back up to the collection path. `is_values_matcher()` covers
+            // Values/EachValue/ArrayContains; MinType and MaxType (atLeast/atMost) are
+            // length constraints on the collection and belong there too, but pact_models
+            // does not classify them as values matchers.
+            let applies_to_collection = rule.is_values_matcher()
+              || matches!(rule, matchingrules::MatchingRule::MinType(_) | matchingrules::MatchingRule::MaxType(_));
+            let path = if applies_to_collection && path.is_wildcard() {
               // TODO: replace this with "path.parent().unwrap_or(DocPath::root())" when pact_models
               // 1.1.6 is released
               parent(path).unwrap_or(DocPath::root())
