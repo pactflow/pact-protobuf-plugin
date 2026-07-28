@@ -1058,6 +1058,150 @@ pub const DESCRIPTOR_BYTES: &str = "CrYHCgxjb21tb24ucHJvdG8SD2FyZWFfY2FsY3VsYXRv
     V9jYWxjdWxhdG9yLkFyZWFSZXF1ZXN0Gh0uYXJlYV9jYWxjdWxhdG9yLkFyZWFSZXNwb25zZSIAQhxaF2lvLnBhY3QvYXJ\
     lYV9jYWxjdWxhdG9y0AIBYgZwcm90bzM=";
 
+// Descriptors for a `repeated area_calculator.Area` field, shared by the
+// arrayContains reference-form tests below.
+fn repeated_area_descriptors() -> (DescriptorProto, FieldDescriptorProto) {
+  let field = FieldDescriptorProto {
+    name: Some("value".to_string()),
+    number: Some(1),
+    label: Some(Label::Repeated as i32),
+    r#type: Some(Type::Message as i32),
+    type_name: Some(".area_calculator.Area".to_string()),
+    extendee: None,
+    default_value: None,
+    oneof_index: None,
+    json_name: Some("value".to_string()),
+    options: None,
+    proto3_optional: None
+  };
+  let message = DescriptorProto {
+    name: Some("AreaResponse".to_string()),
+    field: vec![FieldDescriptorProto { json_name: None, ..field.clone() }],
+    extension: vec![],
+    nested_type: vec![],
+    enum_type: vec![],
+    extension_range: vec![],
+    oneof_decl: vec![],
+    options: None,
+    reserved_range: vec![],
+    reserved_name: vec![]
+  };
+  (message, field)
+}
+
+// arrayContains(matching($'ref')) with a single reference. The variant must carry
+// the element's rules at element-relative paths ($.id, not $.value.0.id), because
+// the verifier's ArrayContains callback starts comparison from the document root.
+// The absolute-path rules must not be left behind in the shared category.
+#[test_log::test]
+fn build_embedded_message_field_value_with_array_contains_single_variant() {
+  let (message_descriptor, field_descriptor) = repeated_area_descriptors();
+  let mut message_builder = MessageBuilder::new(&message_descriptor, "AreaResponse", &FILE_DESCRIPTOR);
+  let path = DocPath::new("$.value").unwrap();
+  let mut matching_rules = MatchingRuleCategory::empty("body");
+  let mut generators = hashmap!{};
+  let config = json!({
+      "area": {
+        "id": "matching(regex, '\\d+', '1234')",
+        "shape": "matching(type, 'rectangle')",
+        "value": "matching(number, 12)"
+      },
+      "pact:match": "arrayContains(matching($'area'))"
+    });
+  let descriptor_cache = DescriptorCache::new(prost_types::FileDescriptorSet { file: vec![FILE_DESCRIPTOR.clone()] });
+
+  let result = build_embedded_message_field_value(&mut message_builder, &path, &field_descriptor,
+    "value", &config, &mut matching_rules, &mut generators, &descriptor_cache);
+  expect!(result).to(be_ok());
+
+  let variant_rules = matchingrules! {
+      "body" => {
+        "$.id" => [ pact_models::matchingrules::MatchingRule::Regex("\\d+".to_string()) ],
+        "$.shape" => [ pact_models::matchingrules::MatchingRule::Type ],
+        "$.value" => [ pact_models::matchingrules::MatchingRule::Number ]
+      }
+    }.rules_for_category("body").unwrap();
+  let expected = matchingrules! {
+      "body" => {
+        "$.value" => [
+          pact_models::matchingrules::MatchingRule::ArrayContains(
+            vec![(0, variant_rules, hashmap!{})]
+          )
+        ]
+      }
+    }.rules_for_category("body").unwrap();
+  expect!(matching_rules).to(be_equal_to(expected));
+}
+
+// Two references produce two variants, indexed in declaration order.
+//
+// Regression guard: build_single_embedded_field_value calls set_field_value, which
+// replaces the field's values vec. Building each variant into a cloned builder is
+// what keeps the earlier variant's example value alive, so both must survive here.
+#[test_log::test]
+fn build_embedded_message_field_value_with_array_contains_multi_variant() {
+  let (message_descriptor, field_descriptor) = repeated_area_descriptors();
+  let mut message_builder = MessageBuilder::new(&message_descriptor, "AreaResponse", &FILE_DESCRIPTOR);
+  let path = DocPath::new("$.value").unwrap();
+  let mut matching_rules = MatchingRuleCategory::empty("body");
+  let mut generators = hashmap!{};
+  let config = json!({
+      "first": {
+        "shape": "matching(equalTo, 'rectangle')"
+      },
+      "second": {
+        "shape": "matching(equalTo, 'circle')"
+      },
+      "pact:match": "arrayContains(matching($'first'), matching($'second'))"
+    });
+  let descriptor_cache = DescriptorCache::new(prost_types::FileDescriptorSet { file: vec![FILE_DESCRIPTOR.clone()] });
+
+  let result = build_embedded_message_field_value(&mut message_builder, &path, &field_descriptor,
+    "value", &config, &mut matching_rules, &mut generators, &descriptor_cache);
+  expect!(result).to(be_ok());
+
+  let rules = matching_rules.rules.get(&path).unwrap();
+  match rules.rules.first().unwrap() {
+    pact_models::matchingrules::MatchingRule::ArrayContains(variants) => {
+      expect!(variants.len()).to(be_equal_to(2));
+      expect!(variants[0].0).to(be_equal_to(0));
+      expect!(variants[1].0).to(be_equal_to(1));
+      // each variant's rules are element-relative
+      for (_, variant_rules, _) in variants {
+        expect!(variant_rules.rules.contains_key(&DocPath::new("$.shape").unwrap())).to(be_true());
+      }
+    }
+    other => panic!("Expected an ArrayContains rule, got {:?}", other)
+  }
+
+  // Both variants contributed their own example element. Asserting the count alone
+  // is not enough: build_single_embedded_field_value calls set_field_value (which
+  // replaces the vec) and this code then appends, so a lost first variant still
+  // leaves two entries -- they are just duplicates of the second. Compare content.
+  let field = message_builder.fields.get("value").unwrap();
+  expect!(field.values.len()).to(be_equal_to(2));
+  expect!(field.values[0] == field.values[1]).to(be_false());
+}
+
+// A reference with no matching sibling key is a configuration error, not a silent
+// empty variant list.
+#[test_log::test]
+fn build_embedded_message_field_value_with_array_contains_unknown_reference() {
+  let (message_descriptor, field_descriptor) = repeated_area_descriptors();
+  let mut message_builder = MessageBuilder::new(&message_descriptor, "AreaResponse", &FILE_DESCRIPTOR);
+  let path = DocPath::new("$.value").unwrap();
+  let mut matching_rules = MatchingRuleCategory::empty("body");
+  let mut generators = hashmap!{};
+  let config = json!({
+      "pact:match": "arrayContains(matching($'missing'))"
+    });
+  let descriptor_cache = DescriptorCache::new(prost_types::FileDescriptorSet { file: vec![FILE_DESCRIPTOR.clone()] });
+
+  let result = build_embedded_message_field_value(&mut message_builder, &path, &field_descriptor,
+    "value", &config, &mut matching_rules, &mut generators, &descriptor_cache);
+  expect!(result).to(be_err());
+}
+
 #[test_log::test]
 fn build_embedded_message_field_value_with_field_from_different_proto_file() {
   let bytes = BASE64.decode(DESCRIPTOR_BYTES).unwrap();
