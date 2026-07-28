@@ -198,15 +198,17 @@ mod tests {
 
   // ========================================================
   // Test 4: atLeast(1) only — should PASS
-  // Provider returns 3 elements, which is >= 1
-  // KNOWN BUG: atLeast alone puts MinType on $.formats.* but nothing on $.formats,
-  // so compare_repeated_field falls to exact matching. Tracked separately.
+  // Provider returns 3 elements, which is >= 1.
+  // Regression test: MinType used to be attached to $.formats.* with nothing on
+  // $.formats, so compare_repeated_field fell through to exact list matching and
+  // this failed with "Expected repeated field 'formats' to have 1 value but
+  // received 3 values".
   // ========================================================
   #[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-  async fn verify_at_least_only_fails_known_bug() {
+  async fn verify_at_least_only_passes() {
     let _ = env_logger::builder().is_test(true).try_init();
     let result = verify_interaction("get catalog entry - atLeast only").await;
-    assert!(!result, "Known bug: atLeast alone does exact matching (should pass but doesn't)");
+    assert!(result, "Expected verification to PASS (3 elements satisfies atLeast(1))");
   }
 
   // ========================================================

@@ -177,6 +177,10 @@ fn verify_error_response(
         metadata.insert("grpc-message", message);
       }
     }
+    let details = actual_status.details();
+    if !details.is_empty() {
+      metadata.insert_bin("grpc-status-details-bin", MetadataValue::from_bytes(details));
+    }
     match verify_metadata(&metadata, response) {
       Ok((result, md_output)) => {
         if !result.result {
