@@ -103,6 +103,11 @@ jobs:
           pushd integrated_tests/new_fields/old_provider && cargo test && popd
           pushd integrated_tests/new_fields/new_provider && cargo test && popd
           pushd integrated_tests/repeated_enums && cargo test && popd
+          pushd integrated_tests/repeated_field_contains/consumer && cargo test && popd
+          # Provider tests must run serially: verify_provider_async shuts down the
+          # process-global plugin manager when it completes, so parallel tests tear
+          # down the plugin out from under each other.
+          pushd integrated_tests/repeated_field_contains/provider && cargo test -- --test-threads=1 && popd
           pushd integrated_tests/response_metadata && cargo test && popd
         env:
           RUST_LOG: debug
