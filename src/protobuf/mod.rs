@@ -676,7 +676,7 @@ fn build_embedded_message_field_value(
 
                 // Extract newly-added rules and remap paths to be relative to the element.
                 // The verifier's ArrayContains callback starts comparison from DocPath::root(),
-                // so variant rules need paths like $.type, $.endpoint (not $.networking[0].type).
+                // so variant rules need paths like $.type, $.isbn (not $.formats[0].type).
                 let mut variant_rules = MatchingRuleCategory::empty("body");
                 let new_paths: Vec<DocPath> = matching_rules.rules.keys()
                   .filter(|p| !rules_before.contains(*p) && p.to_string().starts_with(&index_prefix))
@@ -687,7 +687,7 @@ fn build_embedded_message_field_value(
 
                 for abs_path in &new_paths {
                   let abs_str = abs_path.to_string();
-                  // Remap: $.networking[0].type -> $.type
+                  // Remap: $.formats[0].type -> $.type
                   let relative = if abs_str.len() > index_prefix.len() {
                     format!("${}", &abs_str[index_prefix.len()..])
                   } else {
