@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package catalog;
+
+// Fixture for repeated-field matching. The scenario: the consumer only cares
+// that "HARDCOVER" is in the formats array, but the provider returns
+// ["HARDCOVER", "PAPERBACK", "AUDIOBOOK"].
+
+service CatalogService {
+  rpc GetCatalogEntry(CatalogRequest) returns (CatalogResponse);
+}
+
+message CatalogRequest {
+  string shelf = 1;
+  string section = 2;
+}
+
+message CatalogResponse {
+  string title = 1;
+  repeated string languages = 2;
+  repeated string formats = 3;
+}
+
+message FormatDetail {
+  string type = 1;
+  string isbn = 2;
+}
+
+message CatalogResponseV2 {
+  string title = 1;
+  repeated FormatDetail formats = 2;
+}
+
+service CatalogServiceV2 {
+  rpc GetCatalogEntryV2(CatalogRequest) returns (CatalogResponseV2);
+}

@@ -127,17 +127,17 @@ To find these, grep for `parse_matcher_def` — there are exactly 6 call sites (
 
 ### String form (primitives)
 ```
-Consumer writes: "networking": "eachValue(matching(type, 'PUBLIC'))"
-→ Value is String → build_field_value dispatches to construct_value_from_string with path $.networking.*
-→ Expression parsed → EachValue rule added to $.networking (path corrected from wildcard)
-→ Pact file written with matching rule on $.networking
-→ Provider verification: compare_repeated_field checks matcher_is_defined($.networking)
+Consumer writes: "formats": "eachValue(matching(type, 'HARDCOVER'))"
+→ Value is String → build_field_value dispatches to construct_value_from_string with path $.formats.*
+→ Expression parsed → EachValue rule added to $.formats (path corrected from wildcard)
+→ Pact file written with matching rule on $.formats
+→ Provider verification: compare_repeated_field checks matcher_is_defined($.formats)
   → delegates to compare_lists_with_matchingrule from pact_matching crate
 ```
 
 ### Object form (embedded messages)
 ```
-Consumer writes: "networking": { "pact:match": "eachValue(...)", "ref": {...} }
+Consumer writes: "formats": { "pact:match": "eachValue(...)", "ref": {...} }
 → Value is Object → build_embedded_message_field_value → call site 1
 ```
 

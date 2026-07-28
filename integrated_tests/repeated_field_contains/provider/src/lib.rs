@@ -1,49 +1,49 @@
 pub mod pb {
-  tonic::include_proto!("envmetadata");
+  tonic::include_proto!("catalog");
 }
 
 pub use pb::*;
 
-/// Provider that returns MORE networking values than the consumer expects.
-/// Consumer says ["PUBLIC"], but we return ["PUBLIC", "PRIVATE_LINK", "TRANSIT_GATEWAY"].
+/// Provider that returns MORE formats values than the consumer expects.
+/// Consumer says ["HARDCOVER"], but we return ["HARDCOVER", "PAPERBACK", "AUDIOBOOK"].
 #[derive(Default)]
-pub struct EnvMetadataServiceImpl {}
+pub struct CatalogServiceImpl {}
 
 #[tonic::async_trait]
-impl pb::env_metadata_service_server::EnvMetadataService for EnvMetadataServiceImpl {
-  async fn get_env_metadata(
+impl pb::catalog_service_server::CatalogService for CatalogServiceImpl {
+  async fn get_catalog_entry(
     &self,
-    _request: tonic::Request<EnvMetadataRequest>,
-  ) -> Result<tonic::Response<EnvMetadataResponse>, tonic::Status> {
-    Ok(tonic::Response::new(EnvMetadataResponse {
-      type_name: "DEDICATED".to_string(),
-      durability: vec!["LOW".to_string()],
-      networking: vec![
-        "PUBLIC".to_string(),
-        "PRIVATE_LINK".to_string(),
-        "TRANSIT_GATEWAY".to_string(),
+    _request: tonic::Request<CatalogRequest>,
+  ) -> Result<tonic::Response<CatalogResponse>, tonic::Status> {
+    Ok(tonic::Response::new(CatalogResponse {
+      title: "REFERENCE".to_string(),
+      languages: vec!["EN".to_string()],
+      formats: vec![
+        "HARDCOVER".to_string(),
+        "PAPERBACK".to_string(),
+        "AUDIOBOOK".to_string(),
       ],
     }))
   }
 }
 
-/// V2 provider with repeated MESSAGE field (NetworkConfig).
-/// Returns multiple NetworkConfig entries — consumer only cares about one.
+/// V2 provider with repeated MESSAGE field (FormatDetail).
+/// Returns multiple FormatDetail entries — consumer only cares about one.
 #[derive(Default)]
-pub struct EnvMetadataServiceV2Impl {}
+pub struct CatalogServiceV2Impl {}
 
 #[tonic::async_trait]
-impl pb::env_metadata_service_v2_server::EnvMetadataServiceV2 for EnvMetadataServiceV2Impl {
-  async fn get_env_metadata_v2(
+impl pb::catalog_service_v2_server::CatalogServiceV2 for CatalogServiceV2Impl {
+  async fn get_catalog_entry_v2(
     &self,
-    _request: tonic::Request<EnvMetadataRequest>,
-  ) -> Result<tonic::Response<EnvMetadataResponseV2>, tonic::Status> {
-    Ok(tonic::Response::new(EnvMetadataResponseV2 {
-      type_name: "DEDICATED".to_string(),
-      networking: vec![
-        NetworkConfig { r#type: "PUBLIC".into(), endpoint: "https://pub.example.com".into() },
-        NetworkConfig { r#type: "PRIVATE_LINK".into(), endpoint: "vpce-abc123".into() },
-        NetworkConfig { r#type: "TRANSIT_GATEWAY".into(), endpoint: "tgw-xyz789".into() },
+    _request: tonic::Request<CatalogRequest>,
+  ) -> Result<tonic::Response<CatalogResponseV2>, tonic::Status> {
+    Ok(tonic::Response::new(CatalogResponseV2 {
+      title: "REFERENCE".to_string(),
+      formats: vec![
+        FormatDetail { r#type: "HARDCOVER".into(), isbn: "978-0000000003".into() },
+        FormatDetail { r#type: "PAPERBACK".into(), isbn: "978-0000000001".into() },
+        FormatDetail { r#type: "AUDIOBOOK".into(), isbn: "978-0000000002".into() },
       ],
     }))
   }
@@ -68,8 +68,8 @@ mod tests {
   use tonic::transport::Server;
 
   use super::*;
-  use super::pb::env_metadata_service_server::EnvMetadataServiceServer;
-  use super::pb::env_metadata_service_v2_server::EnvMetadataServiceV2Server;
+  use super::pb::catalog_service_server::CatalogServiceServer;
+  use super::pb::catalog_service_v2_server::CatalogServiceV2Server;
 
   #[derive(Debug)]
   struct NoopProviderStateExecutor;
@@ -95,8 +95,8 @@ mod tests {
 
     tokio::spawn(async move {
       Server::builder()
-        .add_service(EnvMetadataServiceServer::new(EnvMetadataServiceImpl::default()))
-        .add_service(EnvMetadataServiceV2Server::new(EnvMetadataServiceV2Impl::default()))
+        .add_service(CatalogServiceServer::new(CatalogServiceImpl::default()))
+        .add_service(CatalogServiceV2Server::new(CatalogServiceV2Impl::default()))
         .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
         .await
         .unwrap();
@@ -106,7 +106,7 @@ mod tests {
   }
 
   /// Verify a specific interaction from the consumer pact against the real provider.
-  /// The provider returns ["PUBLIC", "PRIVATE_LINK", "TRANSIT_GATEWAY"] for networking.
+  /// The provider returns ["HARDCOVER", "PAPERBACK", "AUDIOBOOK"] for formats.
   async fn verify_interaction(interaction_desc: &str) -> bool {
     let addr = start_grpc_provider().await;
 
@@ -165,12 +165,12 @@ mod tests {
 
   // ========================================================
   // Test 1: Exact match — should FAIL
-  // Consumer expects ["PUBLIC"], provider returns ["PUBLIC", "PRIVATE_LINK", "TRANSIT_GATEWAY"]
+  // Consumer expects ["HARDCOVER"], provider returns ["HARDCOVER", "PAPERBACK", "AUDIOBOOK"]
   // ========================================================
   #[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
   async fn verify_exact_match_fails() {
     let _ = env_logger::builder().is_test(true).try_init();
-    let result = verify_interaction("get env metadata - exact match").await;
+    let result = verify_interaction("get catalog entry - exact match").await;
     assert!(!result, "Expected verification to FAIL (exact match with different array length)");
   }
 
@@ -181,7 +181,7 @@ mod tests {
   #[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
   async fn verify_each_value_type_passes() {
     let _ = env_logger::builder().is_test(true).try_init();
-    let result = verify_interaction("get env metadata - eachValue type").await;
+    let result = verify_interaction("get catalog entry - eachValue type").await;
     assert!(result, "Expected verification to PASS (eachValue type matching accepts any strings)");
   }
 
@@ -192,57 +192,57 @@ mod tests {
   #[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
   async fn verify_at_least_at_most_passes() {
     let _ = env_logger::builder().is_test(true).try_init();
-    let result = verify_interaction("get env metadata - atLeast atMost").await;
+    let result = verify_interaction("get catalog entry - atLeast atMost").await;
     assert!(result, "Expected verification to PASS (3 elements within atLeast(1) atMost(3))");
   }
 
   // ========================================================
   // Test 4: atLeast(1) only — should PASS
   // Provider returns 3 elements, which is >= 1
-  // KNOWN BUG: atLeast alone puts MinType on $.networking.* but nothing on $.networking,
+  // KNOWN BUG: atLeast alone puts MinType on $.formats.* but nothing on $.formats,
   // so compare_repeated_field falls to exact matching. Tracked separately.
   // ========================================================
   #[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
   async fn verify_at_least_only_fails_known_bug() {
     let _ = env_logger::builder().is_test(true).try_init();
-    let result = verify_interaction("get env metadata - atLeast only").await;
+    let result = verify_interaction("get catalog entry - atLeast only").await;
     assert!(!result, "Known bug: atLeast alone does exact matching (should pass but doesn't)");
   }
 
   // ========================================================
-  // Test 5: arrayContains(matching(equalTo, 'PUBLIC')) — should PASS
-  // Provider returns ["PUBLIC", "PRIVATE_LINK", "TRANSIT_GATEWAY"]
-  // which CONTAINS "PUBLIC", so arrayContains should be satisfied.
+  // Test 5: arrayContains(matching(equalTo, 'HARDCOVER')) — should PASS
+  // Provider returns ["HARDCOVER", "PAPERBACK", "AUDIOBOOK"]
+  // which CONTAINS "HARDCOVER", so arrayContains should be satisfied.
   // ========================================================
   #[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
   async fn verify_array_contains_passes() {
     let _ = env_logger::builder().is_test(true).try_init();
-    let result = verify_interaction("get env metadata - arrayContains equalTo").await;
-    assert!(result, "Expected verification to PASS (array contains PUBLIC)");
+    let result = verify_interaction("get catalog entry - arrayContains equalTo").await;
+    assert!(result, "Expected verification to PASS (array contains HARDCOVER)");
   }
 
   // ========================================================
-  // Test 6: arrayContains(matching(equalTo, 'NONEXISTENT')) — should FAIL
-  // Provider returns ["PUBLIC", "PRIVATE_LINK", "TRANSIT_GATEWAY"]
-  // which does NOT contain "NONEXISTENT".
+  // Test 6: arrayContains(matching(equalTo, 'MISSING_FORMAT')) — should FAIL
+  // Provider returns ["HARDCOVER", "PAPERBACK", "AUDIOBOOK"]
+  // which does NOT contain "MISSING_FORMAT".
   // ========================================================
   #[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
   async fn verify_array_contains_fails_when_missing() {
     let _ = env_logger::builder().is_test(true).try_init();
-    let result = verify_interaction("get env metadata - arrayContains missing").await;
-    assert!(!result, "Expected verification to FAIL (array does not contain NONEXISTENT)");
+    let result = verify_interaction("get catalog entry - arrayContains missing").await;
+    assert!(!result, "Expected verification to FAIL (array does not contain MISSING_FORMAT)");
   }
 
   // ========================================================
   // Test 7: arrayContains with reference form on repeated MESSAGE field — should PASS
-  // Consumer expects networking to contain a NetworkConfig with type="PUBLIC".
-  // Provider returns [PUBLIC, PRIVATE_LINK, TRANSIT_GATEWAY] NetworkConfigs.
-  // The endpoint field uses type matching, so any string value is accepted.
+  // Consumer expects formats to contain a FormatDetail with type="HARDCOVER".
+  // Provider returns [HARDCOVER, PAPERBACK, AUDIOBOOK] FormatDetails.
+  // The isbn field uses type matching, so any string value is accepted.
   // ========================================================
   #[test_log::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
   async fn verify_array_contains_ref_passes() {
     let _ = env_logger::builder().is_test(true).try_init();
-    let result = verify_interaction("get env metadata v2 - arrayContains ref").await;
-    assert!(result, "Expected verification to PASS (networking contains a PUBLIC NetworkConfig)");
+    let result = verify_interaction("get catalog entry v2 - arrayContains ref").await;
+    assert!(result, "Expected verification to PASS (formats contains a HARDCOVER FormatDetail)");
   }
 }

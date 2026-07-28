@@ -2,35 +2,35 @@ use tonic::transport::Server;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 
-use crate::pb::env_metadata_service_server::EnvMetadataServiceServer;
-use crate::pb::{EnvMetadataRequest, EnvMetadataResponse};
+use crate::pb::catalog_service_server::CatalogServiceServer;
+use crate::pb::{CatalogRequest, CatalogResponse};
 
 pub mod pb {
-  tonic::include_proto!("envmetadata");
+  tonic::include_proto!("catalog");
 }
 
 #[derive(Default)]
-pub struct EnvMetadataService {}
+pub struct CatalogService {}
 
 #[tonic::async_trait]
-impl pb::env_metadata_service_server::EnvMetadataService for EnvMetadataService {
-  async fn get_env_metadata(
+impl pb::catalog_service_server::CatalogService for CatalogService {
+  async fn get_catalog_entry(
     &self,
-    request: tonic::Request<EnvMetadataRequest>,
-  ) -> Result<tonic::Response<EnvMetadataResponse>, tonic::Status> {
+    request: tonic::Request<CatalogRequest>,
+  ) -> Result<tonic::Response<CatalogResponse>, tonic::Status> {
     let req = request.get_ref();
-    info!("Request for env metadata: cloud={}, region={}", req.cloud, req.region);
+    info!("Request for catalog entry: shelf={}, section={}", req.shelf, req.section);
 
-    // KEY: Provider returns MORE networking values than consumer expects.
-    // Consumer only cares about "PUBLIC" being present.
+    // KEY: Provider returns MORE formats values than consumer expects.
+    // Consumer only cares about "HARDCOVER" being present.
     // But pact exact matching will fail because the arrays don't match.
-    Ok(tonic::Response::new(EnvMetadataResponse {
-      type_name: "DEDICATED".to_string(),
-      durability: vec!["LOW".to_string()],
-      networking: vec![
-        "PUBLIC".to_string(),
-        "PRIVATE_LINK".to_string(),
-        "TRANSIT_GATEWAY".to_string(),
+    Ok(tonic::Response::new(CatalogResponse {
+      title: "REFERENCE".to_string(),
+      languages: vec!["EN".to_string()],
+      formats: vec![
+        "HARDCOVER".to_string(),
+        "PAPERBACK".to_string(),
+        "AUDIOBOOK".to_string(),
       ],
     }))
   }
@@ -46,12 +46,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   };
 
   let addr = "[::1]:11335".parse().unwrap();
-  let service = EnvMetadataService::default();
+  let service = CatalogService::default();
 
-  info!("EnvMetadataService listening on {}", addr);
+  info!("CatalogService listening on {}", addr);
 
   Server::builder()
-    .add_service(EnvMetadataServiceServer::new(service))
+    .add_service(CatalogServiceServer::new(service))
     .serve(addr)
     .await?;
 
