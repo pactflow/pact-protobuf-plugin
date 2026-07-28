@@ -5,6 +5,9 @@ use std::collections::HashMap;
 use ansi_term::Colour::{Green, Red};
 use ansi_term::Style;
 use anyhow::anyhow;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use bytes::Bytes;
 use itertools::{Either, Itertools};
 use maplit::hashmap;
 use pact_matching::matchingrules::Matches;
@@ -17,7 +20,7 @@ use pact_models::path_exp::DocPath;
 use pact_models::v4::message_parts::MessageContents;
 use pact_plugin_driver::utils::proto_value_to_string;
 use prost_types::Value;
-use tonic::metadata::{Ascii, MetadataMap, MetadataValue};
+use tonic::metadata::{Ascii, Binary, MetadataMap, MetadataValue};
 use tonic::{Code, Status};
 use tracing::instrument;
 use tracing::log::trace;
@@ -149,7 +152,19 @@ pub fn compare_metadata(
     let bold = Style::new().bold();
 
     for (key, expected_value) in expected_metadata {
-      if let Some(actual_value) = actual_metadata.get(key) {
+      if key.ends_with("-bin") {
+        if let Some(actual_value) = actual_metadata.get_bin(key) {
+          let out = match_binary_metadata_value(&mut mismatches, key, expected_value, actual_value, context);
+          output.push(out);
+        } else if !is_special_metadata_key(key.as_str()) {
+          output.push(format!("          key '{}' ({})", bold.paint(key), Red.paint("FAILED")));
+          mismatches.push(Mismatch::MetadataMismatch { key: key.clone(),
+            expected: expected_value.to_string(),
+            actual: "".to_string(),
+            mismatch: format!("Expected binary metadata value with key '{}' but was missing", key) }
+          );
+        }
+      } else if let Some(actual_value) = actual_metadata.get(key) {
         let out = match_metadata_value(&mut mismatches, key, expected_value, actual_value, context);
         output.push(out);
       } else if !is_special_metadata_key(key.as_str()) {
@@ -250,6 +265,63 @@ fn match_metadata_value(
   }
 }
 
+fn match_binary_metadata_value(
+  mismatches: &mut Vec<Mismatch>,
+  key: &String,
+  expected: &serde_json::Value,
+  actual: &MetadataValue<Binary>,
+  context: &CoreMatchingContext
+) -> String {
+  let path = DocPath::root().join(key);
+  let expected_b64 = json_to_string(expected);
+  let bold = Style::new().bold();
+  match actual.to_bytes() {
+    Ok(actual_bytes) => {
+      let actual_b64 = BASE64.encode(&actual_bytes);
+      if context.matcher_is_defined(&path) {
+        let matchers = context.select_best_matcher(&path);
+        let result = if let Err(errors) = matchingrules::match_values(&path, &matchers, &expected_b64, &actual_b64) {
+          for mismatch in errors {
+            mismatches.push(Mismatch::MetadataMismatch {
+              key: key.clone(),
+              expected: expected_b64.clone(),
+              actual: actual_b64.clone(),
+              mismatch: format!("Comparison of binary metadata key '{}' failed: {}", key, mismatch)
+            });
+          }
+          Red.paint("FAILED")
+        } else {
+          Green.paint("OK")
+        };
+        format!("        key '{}' matching with {} [{}]", bold.paint(key),
+          bold.paint(matchers.rules.iter()
+            .map(matching_rule_description)
+            .join(", ")
+          ), result)
+      } else if let Err(err) = Matches::matches_with(&expected_b64, &actual_b64, &MatchingRule::Equality, false) {
+        mismatches.push(Mismatch::MetadataMismatch {
+          key: key.clone(),
+          expected: expected_b64,
+          actual: actual_b64.clone(),
+          mismatch: format!("Comparison of binary metadata key '{}' failed: {}", key, err)
+        });
+        format!("        key '{}' with value '{}' [{}]", bold.paint(key), bold.paint(actual_b64.as_str()), Red.paint("FAILED"))
+      } else {
+        format!("        key '{}' with value '{}' [{}]", bold.paint(key), bold.paint(actual_b64.as_str()), Green.paint("OK"))
+      }
+    }
+    Err(err) => {
+      mismatches.push(Mismatch::MetadataMismatch {
+        key: key.clone(),
+        expected: expected_b64,
+        actual: "".to_string(),
+        mismatch: format!("Could not decode binary metadata value with key '{}' - {}", key, err)
+      });
+      format!("      key '{}' [{}]", bold.paint(key), Red.paint("FAILED"))
+    }
+  }
+}
+
 // TODO: This should move into the Pact-Rust repo
 fn matching_rule_description(rule: &MatchingRule) -> String {
   match rule {
@@ -287,7 +359,23 @@ pub fn grpc_status(response_contents: &MessageContents) -> Option<Status> {
     let message = response_contents.metadata.get("grpc-message")
       .map(json_to_string)
       .unwrap_or("No message set".to_string());
-    string_to_code(status.as_str(), message.as_str())
+    let code = match string_to_code(status.as_str(), "") {
+      Some(s) => s.code(),
+      None => return None,
+    };
+
+    if let Some(details_value) = response_contents.metadata.get("grpc-status-details-bin") {
+      let details_b64 = json_to_string(details_value);
+      match BASE64.decode(details_b64.as_bytes()) {
+        Ok(decoded) => Some(Status::with_details(code, message, Bytes::from(decoded))),
+        Err(err) => {
+          tracing::warn!("Failed to decode base64 value for grpc-status-details-bin: {}", err);
+          Some(Status::new(code, message))
+        }
+      }
+    } else {
+      Some(Status::new(code, message))
+    }
   } else {
     None
   }
@@ -348,6 +436,8 @@ fn code_desc(code: &Code) -> String {
 
 #[cfg(test)]
 mod tests {
+  use base64::Engine;
+  use base64::engine::general_purpose::STANDARD as BASE64;
   use expectest::prelude::*;
   use maplit::{btreemap, hashmap};
   use pact_matching::{CoreMatchingContext, DiffConfig, Mismatch};
@@ -357,7 +447,7 @@ mod tests {
   use pact_models::v4::message_parts::MessageContents;
   use prost_types::{value, Struct, Value};
   use serde_json::json;
-  use tonic::metadata::MetadataMap;
+  use tonic::metadata::{MetadataMap, MetadataValue};
   use tonic::Code;
 
   use crate::metadata::{compare_metadata, grpc_status, process_metadata, MessageMetadataValue};
@@ -575,5 +665,98 @@ mod tests {
 
     let message = setup_message("33", None);
     expect!(grpc_status(&message).unwrap().code()).to(be_equal_to(Code::Unknown));
+  }
+
+  #[test]
+  fn compare_metadata_handles_binary_keys() {
+    let raw_bytes = b"hello binary world";
+    let b64 = BASE64.encode(raw_bytes);
+
+    let expected = hashmap!{
+      "x-details-bin".to_string() => serde_json::Value::String(b64.clone())
+    };
+    let mut actual = MetadataMap::new();
+    actual.insert_bin("x-details-bin", MetadataValue::from_bytes(raw_bytes));
+    let context = CoreMatchingContext::default();
+
+    let (result, _) = compare_metadata(&expected, &actual, &context).unwrap();
+    expect!(result.result).to(be_true());
+    expect!(result.mismatches.is_empty()).to(be_true());
+  }
+
+  #[test]
+  fn compare_metadata_binary_key_mismatch() {
+    let expected_bytes = b"expected data";
+    let actual_bytes = b"different data";
+    let b64 = BASE64.encode(expected_bytes);
+
+    let expected = hashmap!{
+      "x-details-bin".to_string() => serde_json::Value::String(b64)
+    };
+    let mut actual = MetadataMap::new();
+    actual.insert_bin("x-details-bin", MetadataValue::from_bytes(actual_bytes));
+    let context = CoreMatchingContext::default();
+
+    let (result, _) = compare_metadata(&expected, &actual, &context).unwrap();
+    expect!(result.result).to(be_false());
+    expect!(result.mismatches.len()).to(be_equal_to(1));
+  }
+
+  #[test]
+  fn compare_metadata_binary_key_with_matcher() {
+    let raw_bytes = b"\x08\x01\x12\x05hello";
+    let b64 = BASE64.encode(raw_bytes);
+
+    let expected = hashmap!{
+      "grpc-status-details-bin".to_string() => serde_json::Value::String(b64.clone())
+    };
+    let mut actual = MetadataMap::new();
+    actual.insert_bin("grpc-status-details-bin", MetadataValue::from_bytes(raw_bytes));
+    let context = CoreMatchingContext::new(
+      DiffConfig::NoUnexpectedKeys,
+      &matchingrules! {
+        "metadata" => {
+          "grpc-status-details-bin" => [ MatchingRule::Regex("^[A-Za-z0-9+/=]+$".to_string()) ]
+        }
+      }.rules_for_category("metadata").unwrap(),
+      &hashmap!{}
+    );
+
+    let (result, _) = compare_metadata(&expected, &actual, &context).unwrap();
+    expect!(result.result).to(be_true());
+  }
+
+  #[test]
+  fn grpc_status_with_details() {
+    let details_bytes = b"\x08\x05\x12\x0eresource error";
+    let details_b64 = BASE64.encode(details_bytes);
+
+    let message = MessageContents {
+      metadata: hashmap!{
+        "grpc-status".to_string() => json!("NOT_FOUND"),
+        "grpc-message".to_string() => json!("resource not found"),
+        "grpc-status-details-bin".to_string() => json!(details_b64)
+      },
+      .. MessageContents::default()
+    };
+
+    let status = grpc_status(&message).unwrap();
+    expect!(status.code()).to(be_equal_to(Code::NotFound));
+    expect!(status.message()).to(be_equal_to("resource not found"));
+    assert_eq!(status.details(), details_bytes);
+  }
+
+  #[test]
+  fn compare_metadata_missing_binary_key() {
+    let b64 = BASE64.encode(b"some data");
+    let expected = hashmap!{
+      "x-trace-bin".to_string() => serde_json::Value::String(b64)
+    };
+    let actual = MetadataMap::new();
+    let context = CoreMatchingContext::default();
+
+    let (result, _) = compare_metadata(&expected, &actual, &context).unwrap();
+    expect!(result.result).to(be_false());
+    expect!(result.mismatches.len()).to(be_equal_to(1));
   }
 }
